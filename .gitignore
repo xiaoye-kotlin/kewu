@@ -17,3 +17,8 @@ iosApp/*.xcuserstate
 
 # Kotlin 增量编译缓存（非源码，不应提交）
 .kotlin/
+
+# 本地智能体工作数据 / 调试截图（本地产物，勿提交到共享仓库）
+.workbuddy/
+/nav_*.png
+/shot.png
