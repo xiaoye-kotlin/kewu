@@ -14,3 +14,6 @@ iosApp/*.xcuserstate
 *.ipa
 *.dmg
 *.msi
+
+# Kotlin 增量编译缓存（非源码，不应提交）
+.kotlin/
