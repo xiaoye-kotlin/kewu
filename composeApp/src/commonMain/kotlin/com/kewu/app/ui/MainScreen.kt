@@ -2,9 +2,11 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -224,6 +226,7 @@ private fun AppleLiquidGlassNavBar(
     // 泡泡中心：用 Animatable 手动驱动 —— 拖拽时 snapTo 跟手、松手时 animateTo 吸到最近的 tab，
     // 避免 animateFloatAsState 在拖拽中"值过期"导致松手瞬移回旧 tab。
     val centerAnim = remember { Animatable(0f) }
+    val tapPulse = remember { Animatable(0f) }   // 点选泡泡时的 pop 脉冲（0→1→0）
     var centerPositioned by remember { mutableStateOf(false) }
     LaunchedEffect(tabW.value) {
         if (tabW.value > 0f && !centerPositioned) {
@@ -257,6 +260,13 @@ private fun AppleLiquidGlassNavBar(
                         else spring(dampingRatio = 0.58f, stiffness = 360f),
         label = "bubbleHeight",
     )
+    // 长按时导航栏托盘也轻微放大；松手立马回弹（settling 时换快弹簧，无过冲）
+    val trayScale by animateFloatAsState(
+        targetValue = if (expanded.value) 1.035f else 1f,
+        animationSpec = if (settling.value) spring(dampingRatio = 1f, stiffness = 900f)
+                        else spring(dampingRatio = 0.55f, stiffness = 320f),
+        label = "trayScale",
+    )
 
     Box(
         modifier
@@ -270,7 +280,7 @@ private fun AppleLiquidGlassNavBar(
             shape = RoundedCornerShape(33.dp),
             blurRadius = 22.dp,
             tintAlpha = 0.12f,
-            modifier = Modifier.fillMaxWidth().height(barHeight).align(Alignment.Center),
+            modifier = Modifier.fillMaxWidth().height(barHeight).align(Alignment.Center).scale(trayScale),
         ) {}
 
         // 2) 可交互玻璃泡泡：选中指示 + 长按放大 + 拖拽切换；不被托盘裁剪，可「弹出」
@@ -291,13 +301,16 @@ private fun AppleLiquidGlassNavBar(
             contentAlignment = Alignment.Center,
         ) {
 
-            // 玻璃泡泡本体（单独缩放；叠加液体拉伸形变）
+            // 玻璃泡泡本体（单独缩放；叠加液体拉伸形变 + 点选 pop 脉冲）
             Box(
                 Modifier
                     .clip(RoundedCornerShape(50.dp))
                     .width(indicatorWdp)
-                    .height(bubbleHeight)
-                    .scale(bubbleScale * (1f + stretch), bubbleScale * (1f - stretch * 0.5f)),
+                    .height(bubbleHeight + (tapPulse.value * 5f).dp)
+                    .scale(
+                        bubbleScale * (1f + stretch) * (1f + tapPulse.value * 0.18f),
+                        bubbleScale * (1f - stretch * 0.5f) * (1f + tapPulse.value * 0.18f),
+                    ),
                 contentAlignment = Alignment.Center,
             ) {
                 LiquidGlassSurface(
@@ -353,6 +366,7 @@ private fun AppleLiquidGlassNavBar(
                         dragVel = dragVel,
                         bubbleWFactor = bubbleWFactor,
                         centerAnim = centerAnim,
+                        tapPulse = tapPulse,
                         onSelect = onSelect,
                         onPreview = onPreview,
                         onPreviewFloat = onPreviewFloat,
@@ -398,6 +412,7 @@ private suspend fun PointerInputScope.navGestures(
     dragVel: MutableState<Float>,
     bubbleWFactor: Float,
     centerAnim: Animatable<Float, AnimationVector1D>,
+    tapPulse: Animatable<Float, AnimationVector1D>,
     onSelect: (Int) -> Unit,
     onPreview: (Int) -> Unit,
     onPreviewFloat: (Float) -> Unit,
@@ -489,6 +504,16 @@ private suspend fun PointerInputScope.navGestures(
                         targetValue = ti * tabW.value + tabW.value / 2f,
                         animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
                     )
+                }
+                // 点在泡泡上：补一个「变大一下再立马变小」的 pop 脉冲。
+                // （点当前 tab 时泡泡本来不动、没有反馈；点其它 tab 有滑行动画，不再叠加脉冲）
+                val halfW = tabW.value * bubbleWFactor / 2f
+                if (abs(downX - centerAnim.value) <= halfW + 8f) {
+                    scope.launch {
+                        tapPulse.snapTo(0f)
+                        tapPulse.animateTo(1f, tween(durationMillis = 80, easing = FastOutSlowInEasing))
+                        tapPulse.animateTo(0f, spring(dampingRatio = 0.6f, stiffness = 750f))
+                    }
                 }
                 onSelect(ti)
             }
