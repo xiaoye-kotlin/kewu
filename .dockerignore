@@ -1,0 +1,7 @@
+# 构建产物和本地缓存不进镜像，上下文能小一大截
+**/build/
+**/.gradle/
+.gradle/
+.git/
+*.log
+local.properties

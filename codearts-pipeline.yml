@@ -1,0 +1,35 @@
+# kewu 后端一键部署流水线（华为云 CodeArts Pipeline，YAML 编排）
+# 用法：CodeArts Pipeline → 新建流水线 → 编排方式选「YAML」→ 配置文件指向本文件
+# 流程：编译构建（产出镜像推 SWR）→ 部署到容器/主机
+#
+# 准备工作（只需做一次）：
+#   1. CodeArts Repo 建仓库，把本项目推上去（YAML 流水线只支持 CodeArts Repo 源）
+#   2. CodeArts Build 建一个构建任务：构建类型选 Docker 镜像，Dockerfile 路径用根目录的 ./Dockerfile
+#      构建成功后镜像自动推到 SWR（容器镜像服务），记住这个任务的 jobId
+#   3. CodeArts Deploy 建部署任务：拉取 SWR 里的 kewu-server 镜像，部署到 CCE 集群或弹性云主机
+#      记住这个任务的 jobId
+#   4. 把下面两个 jobId 占位符换成真实 ID（任务详情页 URL 末尾那串 32 位字符）
+env:
+  image_version: 1.0.0
+
+jobs:
+  build:
+    name: kewu-server 构建
+    steps:
+      - name: 编译并构建镜像
+        uses: CodeArtsBuild
+        with:
+          jobId: 00000000000000000000000000000000 # TODO: 换成你的构建任务 ID
+          artifactIdentifier: kewu-server
+          version: ${{ env.image_version }}
+  deploy:
+    name: kewu-server 部署
+    needs:
+      - build
+    if: ${{ success() }}
+    steps:
+      - name: 部署上线
+        uses: CodeArtsDeploy
+        with:
+          jobId: 00000000000000000000000000000000 # TODO: 换成你的部署任务 ID
+          version: ${{ env.image_version }}
