@@ -420,13 +420,20 @@ private suspend fun PointerInputScope.navGestures(
     onPreviewFloat: (Float) -> Unit,
 ) {
     val longPressMs = 120L   // 长按判定：稍按一会即进入"拾取/跟手"态
+    // 点选泡泡的放大保持时长：与点选切换的滑行到位时长一致（滑行 spring(0.7, 420) ≈350ms 落定），
+    // 两种"放大"观感统一（之前 500ms 偏长）
+    val tapExpandMs = 350L
     val moveCancelPx = 12f
     var tapExpandJob: Job? = null   // 点选泡泡的放大计时（新手势/松手/再次点选时取消）
+    var releaseJob: Job? = null     // 上一步松手吸合协程（新手势开始时必须取消：它跑完时 finally 会清
+                                   // expanded，若落在新手势长按保持期间，托盘/泡泡会在手指未松时就回弹）
     awaitPointerEventScope {
         while (true) {
             val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: continue
             settling.value = false // 新手势开始：恢复点选路径的原有速度逻辑
             tapExpandJob?.cancel() // 取消可能残留的点选放大计时
+            releaseJob?.cancel() // 取消上一步松手吸合协程，防止其 finally 在本次长按保持期间清 expanded
+                                 // （否则第二次起长按会出现"刚放大就回弹、手指还没松"）
             val downX = down.position.x
             var engaged = false
             var isTap = true
@@ -484,7 +491,7 @@ private suspend fun PointerInputScope.navGestures(
                 // 最后 animateTo 吸合。expanded 放 finally 里清：快速连滑/紧接着点击时，本次吸合会被下一次
                 // animateTo 取消，若不用 finally，expanded 会永远停在 true → 泡泡卡在变大无法变小。
                 val ni = tabIndexFromX(dragCenter.value, tabW.value, itemCount)
-                scope.launch {
+                releaseJob = scope.launch {
                     centerAnim.snapTo(dragCenter.value)
                     dragging.value = false
                     // 松手即刻缩回：settling=true 让 active 不再被"中心未到位"续住 → 泡泡立刻由大变小
@@ -511,15 +518,15 @@ private suspend fun PointerInputScope.navGestures(
                     )
                 }
                 // 点在泡泡上：复刻长按的放大效果（同一套 scale/height/玻璃质感弹簧），
-                // 保持 0.5s 后自动变回原大小。（点当前 tab 时泡泡本来不动、没有反馈；点其它 tab
-                // 有滑行动画，不叠加放大）
+                // 保持 tapExpandMs（与点选切换滑行时长一致）后自动变回原大小。
+                // （点当前 tab 时泡泡本来不动、没有反馈；点其它 tab 有滑行动画，不叠加放大）
                 val halfW = tabW.value * bubbleWFactor / 2f
                 if (abs(downX - centerAnim.value) <= halfW + 8f) {
                     tapExpandJob?.cancel()
                     tapExpandJob = scope.launch {
                         tapExpand.value = true
                         try {
-                            delay(500L)
+                            delay(tapExpandMs)
                         } finally {
                             tapExpand.value = false
                         }
