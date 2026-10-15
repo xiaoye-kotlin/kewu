@@ -60,7 +60,6 @@ import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.blur.highlight.Highlight
 import kotlin.math.abs
-import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.drawscope.withTransform
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
@@ -428,7 +427,7 @@ private suspend fun PointerInputScope.navGestures(
                 dragging.value = true
                 val half = tabW.value * bubbleWFactor / 2f
                 dragCenter.value = downX.coerceIn(half, tabW.value * itemCount - half)
-                onPreview(tabIndexRoundFromX(downX, tabW.value, itemCount))
+                onPreview(tabIndexFromX(downX, tabW.value, itemCount))
                 onPreviewFloat(tabIndexFloatFromX(downX, tabW.value, itemCount))
             }
             while (true) {
@@ -462,7 +461,7 @@ private suspend fun PointerInputScope.navGestures(
                 // 速度低通滤波 → 拖得越快拉得越长（加速度形变由 stretch 弹簧过冲体现）
                 dragVel.value = dragVel.value * 0.6f + dv * 0.4f
                 dragCenter.value = cx
-                onPreview(tabIndexRoundFromX(cx, tabW.value, itemCount))
+                onPreview(tabIndexFromX(cx, tabW.value, itemCount))
                 onPreviewFloat(tabIndexFloatFromX(cx, tabW.value, itemCount))
                 change.consume()
             }
@@ -471,7 +470,7 @@ private suspend fun PointerInputScope.navGestures(
             if (engaged) {
                 // 松手：算离哪边更近 → 被"吸"过去。先 snap 中心到松手点、再切 dragging=false（位置不变，无跳变），
                 // 最后 animateTo 吸合；吸合完成后再退出拾取态（飞行过程中其余 tab 保持淡出）。
-                val ni = tabIndexRoundFromX(dragCenter.value, tabW.value, itemCount)
+                val ni = tabIndexFromX(dragCenter.value, tabW.value, itemCount)
                 scope.launch {
                     centerAnim.snapTo(dragCenter.value)
                     dragging.value = false
@@ -484,7 +483,7 @@ private suspend fun PointerInputScope.navGestures(
                 onSelect(ni)
             } else if (isTap) {
                 // 点击：从当前位置平滑滑到目标 tab 中心
-                val ti = tabIndexRoundFromX(downX, tabW.value, itemCount)
+                val ti = tabIndexFromX(downX, tabW.value, itemCount)
                 scope.launch {
                     centerAnim.animateTo(
                         targetValue = ti * tabW.value + tabW.value / 2f,
@@ -497,9 +496,11 @@ private suspend fun PointerInputScope.navGestures(
     }
 }
 
-private fun tabIndexRoundFromX(x: Float, tabW: Float, itemCount: Int): Int {
+// 就近 tab：tab 中心在 (i+0.5)*tabW，两 tab 边界在 i*tabW，用 floor 即得"离哪边更近"。
+// 拖拽预览高亮 / 松手落定都用它 → "停在哪就落到最近的那个 tab"（含第 0 个课堂，往左也能切到）。
+private fun tabIndexFromX(x: Float, tabW: Float, itemCount: Int): Int {
     if (tabW <= 0f) return 0
-    return (x / tabW).roundToInt().coerceIn(0, itemCount - 1)
+    return (x / tabW).toInt().coerceIn(0, itemCount - 1)
 }
 
 private fun tabIndexFloatFromX(x: Float, tabW: Float, itemCount: Int): Float {
