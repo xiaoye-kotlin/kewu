@@ -2,18 +2,12 @@ package com.kewu.app.permissions
 
 import android.content.pm.PackageManager
 import android.content.pm.PermissionInfo
-import androidx.activity.ComponentActivity
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.kewu.app.MainActivity
 
 // Android 端真正向系统申请权限：危险权限（麦克风、位置、通知）弹窗，普通权限安装即授予
 // 注意：前台服务、唤醒锁这类普通权限不能走 RequestPermission，否则系统会因「非危险权限」直接抛异常
-class AndroidPermissionRequester(private val activity: ComponentActivity) : PermissionRequester {
-    private var pending: ((Boolean) -> Unit)? = null
-
-    private val launcher = activity.registerForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { granted -> pending?.invoke(granted).also { pending = null } }
+class AndroidPermissionRequester(private val activity: MainActivity) : PermissionRequester {
 
     override fun launch(perm: KewuPermission, onResult: (Boolean) -> Unit) {
         val name = perm.key
@@ -36,7 +30,7 @@ class AndroidPermissionRequester(private val activity: ComponentActivity) : Perm
             return
         }
 
-        pending = onResult
-        launcher.launch(name)
+        // 真正的弹窗由 MainActivity 在 onCreate 阶段登记好的通道发起，规避生命周期冲突
+        activity.requestRuntimePermission(name, onResult)
     }
 }
