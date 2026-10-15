@@ -43,7 +43,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.viewmodel.compose)
             implementation(libs.androidx.lifecycle.runtime.compose)
             implementation(libs.kotlinx.coroutines.core)
-            implementation(libs.coui.ui)
+            implementation(libs.coui.blur)
         }
 
         androidMain.dependencies {
@@ -64,7 +64,7 @@ android {
 
     defaultConfig {
         applicationId = "com.kewu.app"
-        minSdk = 26
+        minSdk = 33
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
