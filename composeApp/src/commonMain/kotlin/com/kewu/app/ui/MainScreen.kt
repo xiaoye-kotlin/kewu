@@ -2,11 +2,9 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -66,6 +64,7 @@ import io.github.suqi8.coui.kmp.blur.highlight.Highlight
 import kotlin.math.abs
 import androidx.compose.ui.graphics.drawscope.withTransform
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -226,7 +225,7 @@ private fun AppleLiquidGlassNavBar(
     // 泡泡中心：用 Animatable 手动驱动 —— 拖拽时 snapTo 跟手、松手时 animateTo 吸到最近的 tab，
     // 避免 animateFloatAsState 在拖拽中"值过期"导致松手瞬移回旧 tab。
     val centerAnim = remember { Animatable(0f) }
-    val tapPulse = remember { Animatable(0f) }   // 点选泡泡时的 pop 脉冲（0→1→0）
+    val tapExpand = remember { mutableStateOf(false) }   // 点选泡泡：复刻长按放大效果，0.5s 后自动还原
     var centerPositioned by remember { mutableStateOf(false) }
     LaunchedEffect(tabW.value) {
         if (tabW.value > 0f && !centerPositioned) {
@@ -237,12 +236,12 @@ private fun AppleLiquidGlassNavBar(
     val bubbleCenter = if (dragging.value) dragCenter.value else centerAnim.value
     val bubbleOffsetX = bubbleCenter - indicatorW / 2f
 
-    // 活动态判定：长按拾取 / 拖拽中 / 正在切换（中心尚未到位）。
+    // 活动态判定：长按拾取 / 拖拽中 / 点选泡泡放大（0.5s）/ 正在切换（中心尚未到位）。
     // 静止时 height=barHeight（宽扁胶囊，边界贴栏）；活动时 height>bubbleActiveH（弹高）。
     // settling（松手吸合中）时不再看"中心未到位" → 泡泡立刻由大变小，吸合滑行并行跑完；
-    // 直接点选不走 settling，仍是"滑行中保持变大、滑到再缩回"的原有速度（用户确认合适，不动）。
+    // 直接点选滑行不走 settling，仍是"滑行中保持变大、滑到再缩回"的原有速度（用户确认合适，不动）。
     val targetCenter = selected * tabW.value + tabW.value / 2f
-    val active = expanded.value || dragging.value ||
+    val active = expanded.value || dragging.value || tapExpand.value ||
         (abs(centerAnim.value - targetCenter) > 2f && !settling.value)
     // 活动时轻微整体放大（q 弹过冲）；配合下面的 height 动画 → 长按/切换时"变大变高"。
     // settling（松手吸合中）换更快的弹簧 → 拖拽松手后泡泡由大变小"快点"；点选路径保持原速。
@@ -260,10 +259,16 @@ private fun AppleLiquidGlassNavBar(
                         else spring(dampingRatio = 0.58f, stiffness = 360f),
         label = "bubbleHeight",
     )
-    // 长按时导航栏托盘也轻微放大；松手立马回弹（settling 时换快弹簧，无过冲）
+    // 长按判定触发时导航栏托盘轻微放大；松手（长按消失）立马回弹（带回弹过冲）。
+    // 坑：animateFloatAsState 默认 visibilityThreshold=0.01，而托盘缩放 delta 仅 0.035（3.5 个阈值）——
+    // Compose 的 FloatSpringSpec 按"进入 1 个阈值内"估算时长并截断动画、吸附到目标值，
+    // 估算时长(~106ms)恰好落在弹簧第一次穿过目标时刻，undershoot 还没开始就被吃掉 → 看不到回弹。
+    // 故回弹弹簧显式给 0.0005f 小阈值（70 个阈值单位 → 估算时长 ~384ms），弹簧跑完整轨迹，过冲清晰可见。
+    // 放大弹簧保持原参数/默认阈值（该手感用户已确认，不动）。
     val trayScale by animateFloatAsState(
         targetValue = if (expanded.value) 1.035f else 1f,
-        animationSpec = if (settling.value) spring(dampingRatio = 1f, stiffness = 900f)
+        animationSpec = if (settling.value)
+                            spring(dampingRatio = 0.4f, stiffness = 800f, visibilityThreshold = 0.0005f)
                         else spring(dampingRatio = 0.55f, stiffness = 320f),
         label = "trayScale",
     )
@@ -301,23 +306,20 @@ private fun AppleLiquidGlassNavBar(
             contentAlignment = Alignment.Center,
         ) {
 
-            // 玻璃泡泡本体（单独缩放；叠加液体拉伸形变 + 点选 pop 脉冲）
+            // 玻璃泡泡本体（单独缩放；叠加液体拉伸形变）
             Box(
                 Modifier
                     .clip(RoundedCornerShape(50.dp))
                     .width(indicatorWdp)
-                    .height(bubbleHeight + (tapPulse.value * 5f).dp)
-                    .scale(
-                        bubbleScale * (1f + stretch) * (1f + tapPulse.value * 0.18f),
-                        bubbleScale * (1f - stretch * 0.5f) * (1f + tapPulse.value * 0.18f),
-                    ),
+                    .height(bubbleHeight)
+                    .scale(bubbleScale * (1f + stretch), bubbleScale * (1f - stretch * 0.5f)),
                 contentAlignment = Alignment.Center,
             ) {
                 LiquidGlassSurface(
                     backdrop = backdrop,
                     shape = RoundedCornerShape(50),
-                    blurRadius = if (expanded.value) 22.dp else 18.dp,
-                    tintAlpha = if (expanded.value) 0.14f else 0.10f,
+                    blurRadius = if (expanded.value || tapExpand.value) 22.dp else 18.dp,
+                    tintAlpha = if (expanded.value || tapExpand.value) 0.14f else 0.10f,
                     highlight = Highlight.GlassStrokeMiddleLight,
                 ) {
                     // 真实玻璃反光：左上聚拢镜面点光 + 底部内阴影（体积感），边缘接光交给 coui Highlight
@@ -366,7 +368,7 @@ private fun AppleLiquidGlassNavBar(
                         dragVel = dragVel,
                         bubbleWFactor = bubbleWFactor,
                         centerAnim = centerAnim,
-                        tapPulse = tapPulse,
+                        tapExpand = tapExpand,
                         onSelect = onSelect,
                         onPreview = onPreview,
                         onPreviewFloat = onPreviewFloat,
@@ -412,17 +414,19 @@ private suspend fun PointerInputScope.navGestures(
     dragVel: MutableState<Float>,
     bubbleWFactor: Float,
     centerAnim: Animatable<Float, AnimationVector1D>,
-    tapPulse: Animatable<Float, AnimationVector1D>,
+    tapExpand: MutableState<Boolean>,
     onSelect: (Int) -> Unit,
     onPreview: (Int) -> Unit,
     onPreviewFloat: (Float) -> Unit,
 ) {
     val longPressMs = 120L   // 长按判定：稍按一会即进入"拾取/跟手"态
     val moveCancelPx = 12f
+    var tapExpandJob: Job? = null   // 点选泡泡的放大计时（新手势/松手/再次点选时取消）
     awaitPointerEventScope {
         while (true) {
             val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: continue
             settling.value = false // 新手势开始：恢复点选路径的原有速度逻辑
+            tapExpandJob?.cancel() // 取消可能残留的点选放大计时
             val downX = down.position.x
             var engaged = false
             var isTap = true
@@ -475,6 +479,7 @@ private suspend fun PointerInputScope.navGestures(
             job.cancel()
             dragVel.value = 0f
             if (engaged) {
+                tapExpandJob?.cancel() // 松手：取消可能残留的点选放大计时（否则放大状态会续住）
                 // 松手：算离哪边更近 → 被"吸"过去。先 snap 中心到松手点、再切 dragging=false（位置不变，无跳变），
                 // 最后 animateTo 吸合。expanded 放 finally 里清：快速连滑/紧接着点击时，本次吸合会被下一次
                 // animateTo 取消，若不用 finally，expanded 会永远停在 true → 泡泡卡在变大无法变小。
@@ -505,14 +510,19 @@ private suspend fun PointerInputScope.navGestures(
                         animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
                     )
                 }
-                // 点在泡泡上：补一个「变大一下再立马变小」的 pop 脉冲。
-                // （点当前 tab 时泡泡本来不动、没有反馈；点其它 tab 有滑行动画，不再叠加脉冲）
+                // 点在泡泡上：复刻长按的放大效果（同一套 scale/height/玻璃质感弹簧），
+                // 保持 0.5s 后自动变回原大小。（点当前 tab 时泡泡本来不动、没有反馈；点其它 tab
+                // 有滑行动画，不叠加放大）
                 val halfW = tabW.value * bubbleWFactor / 2f
                 if (abs(downX - centerAnim.value) <= halfW + 8f) {
-                    scope.launch {
-                        tapPulse.snapTo(0f)
-                        tapPulse.animateTo(1f, tween(durationMillis = 80, easing = FastOutSlowInEasing))
-                        tapPulse.animateTo(0f, spring(dampingRatio = 0.6f, stiffness = 750f))
+                    tapExpandJob?.cancel()
+                    tapExpandJob = scope.launch {
+                        tapExpand.value = true
+                        try {
+                            delay(500L)
+                        } finally {
+                            tapExpand.value = false
+                        }
                     }
                 }
                 onSelect(ti)
@@ -530,7 +540,10 @@ private fun tabIndexFromX(x: Float, tabW: Float, itemCount: Int): Int {
 
 private fun tabIndexFloatFromX(x: Float, tabW: Float, itemCount: Int): Float {
     if (tabW <= 0f) return 0f
-    return (x / tabW).coerceIn(0f, (itemCount - 1).toFloat())
+    // 泡泡/手指落在某 tab 中心 (i+0.5)*tabW 时，预览值应恰为 i（纯该 tab，不交叉淡变）；
+    // 落在两 tab 边界 i*tabW 时才是 0.5 混合。故减 0.5 对齐"tab 中心 = 整数索引"，
+    // 否则长按不动时内容会与右侧 tab 半淡变（偏移半格）、拖到目标 tab 中心松手还会跳变。
+    return (x / tabW - 0.5f).coerceIn(0f, (itemCount - 1).toFloat())
 }
 
 @Composable
