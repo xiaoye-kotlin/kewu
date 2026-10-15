@@ -469,16 +469,20 @@ private suspend fun PointerInputScope.navGestures(
             dragVel.value = 0f
             if (engaged) {
                 // 松手：算离哪边更近 → 被"吸"过去。先 snap 中心到松手点、再切 dragging=false（位置不变，无跳变），
-                // 最后 animateTo 吸合；吸合完成后再退出拾取态（飞行过程中其余 tab 保持淡出）。
+                // 最后 animateTo 吸合。expanded 放 finally 里清：快速连滑/紧接着点击时，本次吸合会被下一次
+                // animateTo 取消，若不用 finally，expanded 会永远停在 true → 泡泡卡在变大无法变小。
                 val ni = tabIndexFromX(dragCenter.value, tabW.value, itemCount)
                 scope.launch {
                     centerAnim.snapTo(dragCenter.value)
                     dragging.value = false
-                    centerAnim.animateTo(
-                        targetValue = ni * tabW.value + tabW.value / 2f,
-                        animationSpec = spring(dampingRatio = 0.62f, stiffness = 380f),
-                    )
-                    expanded.value = false
+                    try {
+                        centerAnim.animateTo(
+                            targetValue = ni * tabW.value + tabW.value / 2f,
+                            animationSpec = spring(dampingRatio = 0.62f, stiffness = 380f),
+                        )
+                    } finally {
+                        expanded.value = false
+                    }
                 }
                 onSelect(ni)
             } else if (isTap) {
