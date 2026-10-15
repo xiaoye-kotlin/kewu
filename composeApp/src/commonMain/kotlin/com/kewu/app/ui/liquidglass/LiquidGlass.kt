@@ -43,6 +43,7 @@ fun LiquidGlassSurface(
     val blurPx = blurRadius.value * density.density
     Box(
         modifier = modifier
+            .clip(RoundedCornerShape(33.dp))
             // 桌面端等无 RuntimeShader 的平台：退化为半透明白底，保证可见
             .background(Color.White.copy(alpha = 0.10f))
             .drawBackdrop(

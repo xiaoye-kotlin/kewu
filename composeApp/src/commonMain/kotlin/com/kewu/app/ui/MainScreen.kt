@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -189,6 +191,7 @@ private fun AppleLiquidGlassNavBar(
     val tabW = remember { mutableStateOf(0f) }
     val expanded = remember { mutableStateOf(false) }   // 是否已长按进入「拾取态」
     val dragging = remember { mutableStateOf(false) }   // 拾取态下是否正在滑动
+    val settling = remember { mutableStateOf(false) }   // 松手吸合中：立刻由大变小，不等滑行结束
     val dragCenter = remember { mutableStateOf(0f) }    // 泡泡中心 x（跟随手指）
     val dragVel = remember { mutableStateOf(0f) }       // 拖拽速度（用于液体拉伸形变）
     val barHeight = 66.dp                              // 导航栏（托盘）高度
@@ -233,18 +236,25 @@ private fun AppleLiquidGlassNavBar(
 
     // 活动态判定：长按拾取 / 拖拽中 / 正在切换（中心尚未到位）。
     // 静止时 height=barHeight（宽扁胶囊，边界贴栏）；活动时 height>bubbleActiveH（弹高）。
+    // settling（松手吸合中）时不再看"中心未到位" → 泡泡立刻由大变小，吸合滑行并行跑完；
+    // 直接点选不走 settling，仍是"滑行中保持变大、滑到再缩回"的原有速度（用户确认合适，不动）。
     val targetCenter = selected * tabW.value + tabW.value / 2f
-    val active = expanded.value || dragging.value || abs(centerAnim.value - targetCenter) > 2f
-    // 活动时轻微整体放大（q 弹过冲）；配合下面的 height 动画 → 长按/切换时"变大变高"
+    val active = expanded.value || dragging.value ||
+        (abs(centerAnim.value - targetCenter) > 2f && !settling.value)
+    // 活动时轻微整体放大（q 弹过冲）；配合下面的 height 动画 → 长按/切换时"变大变高"。
+    // settling（松手吸合中）换更快的弹簧 → 拖拽松手后泡泡由大变小"快点"；点选路径保持原速。
     val bubbleScale by animateFloatAsState(
         targetValue = if (active) 1.12f else 1f,
-        animationSpec = spring(dampingRatio = 0.34f, stiffness = 320f),
+        animationSpec = if (settling.value) spring(dampingRatio = 0.8f, stiffness = 650f)
+                        else spring(dampingRatio = 0.34f, stiffness = 320f),
         label = "bubbleScale",
     )
-    // 泡泡高度：静止=栏高，活动=高于栏；低阻尼弹簧带来回弹
+    // 泡泡高度：静止=栏高，活动=高于栏；低阻尼弹簧带来回弹。
+    // settling 时同样换快弹簧（松手即刻缩回栏高）。
     val bubbleHeight by animateDpAsState(
         targetValue = if (active) bubbleActiveH else bubbleRestH,
-        animationSpec = spring(dampingRatio = 0.58f, stiffness = 360f),
+        animationSpec = if (settling.value) spring(dampingRatio = 0.8f, stiffness = 650f)
+                        else spring(dampingRatio = 0.58f, stiffness = 360f),
         label = "bubbleHeight",
     )
 
@@ -280,22 +290,11 @@ private fun AppleLiquidGlassNavBar(
                 .height(bubbleHeight + shadowPadY * 2),
             contentAlignment = Alignment.Center,
         ) {
-            // 柔和阴影：径向渐变自然淡出（替代生硬 Material drop shadow）
-            Canvas(Modifier.fillMaxSize()) {
-                val r = if (size.width > size.height) size.width else size.height
-                drawOval(
-                    brush = Brush.radialGradient(
-                        colors = listOf(Color.Black.copy(alpha = 0.30f), Color.Black.copy(alpha = 0.0f)),
-                        center = Offset(size.width / 2f, size.height * 0.62f),
-                        radius = r * 0.6f,
-                    ),
-                    topLeft = Offset.Zero,
-                    size = size,
-                )
-            }
+
             // 玻璃泡泡本体（单独缩放；叠加液体拉伸形变）
             Box(
                 Modifier
+                    .clip(RoundedCornerShape(50.dp))
                     .width(indicatorWdp)
                     .height(bubbleHeight)
                     .scale(bubbleScale * (1f + stretch), bubbleScale * (1f - stretch * 0.5f)),
@@ -312,16 +311,6 @@ private fun AppleLiquidGlassNavBar(
                     Canvas(Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
-                        drawCircle(
-                            brush = Brush.radialGradient(
-                                colors = listOf(Color.White.copy(alpha = 0.50f), Color.White.copy(alpha = 0.0f)),
-                                center = Offset(w * 0.28f, h * 0.24f),
-                                radius = h * 0.34f,
-                            ),
-                            radius = h * 0.34f,
-                            center = Offset(w * 0.28f, h * 0.24f),
-                            blendMode = BlendMode.Screen,
-                        )
                         drawRect(
                             Brush.verticalGradient(
                                 listOf(Color.Black.copy(alpha = 0.0f), Color.Black.copy(alpha = 0.14f)),
@@ -359,6 +348,7 @@ private fun AppleLiquidGlassNavBar(
                         itemCount = items.size,
                         expanded = expanded,
                         dragging = dragging,
+                        settling = settling,
                         dragCenter = dragCenter,
                         dragVel = dragVel,
                         bubbleWFactor = bubbleWFactor,
@@ -403,6 +393,7 @@ private suspend fun PointerInputScope.navGestures(
     itemCount: Int,
     expanded: MutableState<Boolean>,
     dragging: MutableState<Boolean>,
+    settling: MutableState<Boolean>,
     dragCenter: MutableState<Float>,
     dragVel: MutableState<Float>,
     bubbleWFactor: Float,
@@ -416,6 +407,7 @@ private suspend fun PointerInputScope.navGestures(
     awaitPointerEventScope {
         while (true) {
             val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: continue
+            settling.value = false // 新手势开始：恢复点选路径的原有速度逻辑
             val downX = down.position.x
             var engaged = false
             var isTap = true
@@ -475,6 +467,10 @@ private suspend fun PointerInputScope.navGestures(
                 scope.launch {
                     centerAnim.snapTo(dragCenter.value)
                     dragging.value = false
+                    // 松手即刻缩回：settling=true 让 active 不再被"中心未到位"续住 → 泡泡立刻由大变小
+                    // （吸合滑行与缩小并行跑）；expanded 也立即清，finally 里再兜底防"卡在变大"。
+                    settling.value = true
+                    expanded.value = false
                     try {
                         centerAnim.animateTo(
                             targetValue = ni * tabW.value + tabW.value / 2f,
