@@ -39,10 +39,13 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.Outline
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -196,19 +199,29 @@ private fun AppleLiquidGlassNavBar(
     val settling = remember { mutableStateOf(false) }   // 松手吸合中：立刻由大变小，不等滑行结束
     val dragCenter = remember { mutableStateOf(0f) }    // 泡泡中心 x（跟随手指）
     val dragVel = remember { mutableStateOf(0f) }       // 拖拽速度（用于液体拉伸形变）
+    val tapExpand = remember { mutableStateOf(false) }   // 点选泡泡：复刻长按放大效果，tapExpandMs 后自动还原
     val barHeight = 66.dp                              // 导航栏（托盘）高度
     val bubbleRestH = barHeight                        // 静止：泡泡高度 = 导航栏高度（只保持边界对齐）
     val bubbleActiveH = 90.dp                          // 活动（长按 / 切换中）：泡泡高度 > 导航栏
     val barBottomGap = 24.dp                           // 栏底距屏幕底
     val containerHeight = barHeight + barBottomGap * 2 // 固定容器高：栏固定不动，泡泡绕栏心伸缩
-    val bubbleWFactor = 1.08f                          // 泡泡宽度占单 tab 比例（x 轴做宽）
+    val bubbleWFactor = 1.08f                          // 泡泡宽度占单 tab 比例（x 轴做宽；拖拽 clamp / 点选命中判定都用这个静止宽度）
 
-    // 泡泡宽度 = 单 tab 的 bubbleWFactor
-    val indicatorW by animateFloatAsState(
-        targetValue = tabW.value * bubbleWFactor,
-        animationSpec = spring(dampingRatio = 0.75f, stiffness = 380f),
-        label = "indicatorW",
+    // 长按拾取 / 点选放大时的额外拉宽（0 → 0.42，总宽 1.50×tabW）：
+    // 活动态高度 90dp > 静止 66dp，宽度若不变会成"竖椭圆"；拉宽后宽(≈321px) > 高(≈247px) → 横向椭圆。
+    // settling（松手吸合中）换快弹簧 → 宽度立刻缩回，与高度/缩放同步"快点变小"。
+    // 弹簧必须快：点选放大只保持 350ms，慢一步就"还没变宽就已经变小了"。
+    val bubbleWBoost by animateFloatAsState(
+        targetValue = if (expanded.value || tapExpand.value) 0.42f else 0f,
+        animationSpec = if (settling.value) spring(dampingRatio = 0.8f, stiffness = 650f)
+        else spring(dampingRatio = 0.65f, stiffness = 800f),
+        label = "bubbleWBoost",
     )
+
+    // 泡泡宽度 = 单 tab 的 (bubbleWFactor + bubbleWBoost)。
+    // 不再给宽度叠第二层弹簧：boost 弹簧 + indicatorW 弹簧串联 ~600ms，点选放大 350ms 的窗口里
+    // 根本宽不起来；直接取当前值，染色边界也因此与泡泡视觉边缘严格同步（不再各跑各的）。
+    val indicatorW = tabW.value * (bubbleWFactor + bubbleWBoost)
     val indicatorWdp = (indicatorW / density.density).dp
 
     // 拖拽时的「液体拉伸」：随速度横向拉长、纵向压扁；弹簧低刚度 → 带惯性过冲（加速度变形感）
@@ -226,7 +239,6 @@ private fun AppleLiquidGlassNavBar(
     // 泡泡中心：用 Animatable 手动驱动 —— 拖拽时 snapTo 跟手、松手时 animateTo 吸到最近的 tab，
     // 避免 animateFloatAsState 在拖拽中"值过期"导致松手瞬移回旧 tab。
     val centerAnim = remember { Animatable(0f) }
-    val tapExpand = remember { mutableStateOf(false) }   // 点选泡泡：复刻长按放大效果，0.5s 后自动还原
     var centerPositioned by remember { mutableStateOf(false) }
     LaunchedEffect(tabW.value) {
         if (tabW.value > 0f && !centerPositioned) {
@@ -408,6 +420,7 @@ private fun AppleLiquidGlassNavBar(
                         coverL = ble,
                         coverR = bre,
                         tabCenterX = tx,
+                        tabLeftX = tabW.value * i,
                     )
                 }
             }
@@ -565,6 +578,24 @@ private fun tabIndexFloatFromX(x: Float, tabW: Float, itemCount: Int): Float {
     return (x / tabW - 0.5f).coerceIn(0f, (itemCount - 1).toFloat())
 }
 
+// 把内容裁剪到水平带 [left, right]（tab 局部坐标，px）：用于泡泡经过时只把被框住的那段文字染成主色。
+// 选用自定义 Shape + clip，而非 Modifier.clipRect（本版 Compose 无此 Modifier 重载）。
+private class HorizontalBandShape(
+    private val left: Float,
+    private val right: Float,
+) : Shape {
+    override fun createOutline(
+        size: Size,
+        layoutDirection: androidx.compose.ui.unit.LayoutDirection,
+        density: androidx.compose.ui.unit.Density,
+    ): Outline {
+        val l = left.coerceIn(0f, size.width)
+        val r = right.coerceIn(0f, size.width)
+        val rr = if (l > r) l else r
+        return Outline.Rectangle(Rect(l, 0f, rr, size.height))
+    }
+}
+
 @Composable
 private fun NavTab(
     item: NavItem,
@@ -574,6 +605,7 @@ private fun NavTab(
     coverL: Float = 0f,      // 泡泡左缘（Row 坐标）
     coverR: Float = 0f,      // 泡泡右缘（Row 坐标）
     tabCenterX: Float = 0f,  // 该 tab 中心 x（Row 坐标）
+    tabLeftX: Float = 0f,    // 该 tab 左缘 x（Row 坐标）：文字染色 clipRect 需要把 Row 坐标换算到 tab 局部
 ) {
     val baseColor = if (selected) KewuBlue else Color(0xFF49566F)
     val scale by animateFloatAsState(
@@ -588,6 +620,7 @@ private fun NavTab(
     val w = if (selected) FontWeight.Bold else FontWeight.Medium
     Column(
         modifier = Modifier
+            .fillMaxWidth()
             .alpha(dimAlpha)
             .scale(dimScale),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -623,7 +656,10 @@ private fun NavTab(
             }
         }
         Spacer(Modifier.height(4.dp))
-        Box(contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = Alignment.Center,
+        ) {
             if (r > 0.01f) {
                 // 文字的彩虹描边：沿水平扇形铺开的光谱副本，两侧各露出红/紫镶边
                 val spectral = listOf(
@@ -642,6 +678,19 @@ private fun NavTab(
                 }
             }
             Text(item.label, color = baseColor, fontSize = 13.sp, fontWeight = w)
+            // 泡泡经过：被框住的文字部分染主色（与图标同一边界、同一 KewuBlue，消除"图标蓝、文字灰"的色断层）。
+            // 文字盒 fillMaxWidth → 左缘 = tabLeftX（Row 坐标），故 clipRect 用覆盖边缘减 tabLeftX 换算到 tab 局部。
+            // 文字盒随父 Column 的 dimScale 一同缩放，clip 与内容同步缩放，无需再除缩放。
+            if (!selected && coverR - coverL > 0.5f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(HorizontalBandShape(coverL - tabLeftX, coverR - tabLeftX)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(item.label, color = KewuBlue, fontSize = 13.sp, fontWeight = w)
+                }
+            }
         }
     }
 }
@@ -670,24 +719,39 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyph(
             )
         }
 
-        1 -> { // 助教：学士帽（方冠画成同心圆环 + V 口帽座 + 右侧流苏）
-            drawCircle(color, style = stroke, radius = s * 0.235f, center = Offset(s * 0.50f, s * 0.345f))
-            drawCircle(color, style = stroke, radius = s * 0.145f, center = Offset(s * 0.50f, s * 0.345f))
-            val crown = Path().apply {
-                moveTo(s * 0.13f, s * 0.68f)
-                lineTo(s * 0.50f, s * 0.565f)
-                lineTo(s * 0.87f, s * 0.68f)
-                lineTo(s * 0.87f, s * 0.90f)
-                lineTo(s * 0.13f, s * 0.90f)
-                close()
+        1 -> { // 助教：老师指黑板（黑板框 + 内容线 + 人头圆环 + 肩膀 + 举起指黑板的手臂）
+            // 黑板（右上）：圆角框 + 内部一条内容线
+            drawRoundRect(
+                color,
+                style = stroke,
+                topLeft = Offset(s * 0.36f, s * 0.05f),
+                size = Size(s * 0.59f, s * 0.55f),
+                cornerRadius = CornerRadius(s * 0.05f),
+            )
+            drawLine(
+                color,
+                Offset(s * 0.55f, s * 0.30f),
+                Offset(s * 0.83f, s * 0.30f),
+                strokeWidth = s * 0.075f,
+                cap = StrokeCap.Round,
+            )
+            // 人头：圆环（右缘轻贴黑板左缘，保留原 SVG 头环与黑板穿插的关系）
+            drawCircle(color, style = stroke, radius = s * 0.115f, center = Offset(s * 0.23f, s * 0.44f))
+            // 肩膀：从左下往上拱到脖下、再垂到右肩
+            val shoulders = Path().apply {
+                moveTo(s * 0.02f, s * 0.85f)
+                cubicTo(s * 0.05f, s * 0.70f, s * 0.15f, s * 0.625f, s * 0.24f, s * 0.645f)
+                cubicTo(s * 0.35f, s * 0.67f, s * 0.43f, s * 0.74f, s * 0.48f, s * 0.80f)
             }
-            drawPath(crown, color, style = stroke)
-            val tassel = Path().apply {
-                moveTo(s * 0.735f, s * 0.345f)
-                cubicTo(s * 0.85f, s * 0.40f, s * 0.84f, s * 0.48f, s * 0.82f, s * 0.51f)
-            }
-            drawPath(tassel, color, style = Stroke(width = s * 0.065f, cap = StrokeCap.Round))
-            drawCircle(color, radius = s * 0.045f, center = Offset(s * 0.82f, s * 0.545f))
+            drawPath(shoulders, color, style = stroke)
+            // 手臂：从右肩斜向上指，圆头恰好点到黑板下缘
+            drawLine(
+                color,
+                Offset(s * 0.46f, s * 0.79f),
+                Offset(s * 0.585f, s * 0.565f),
+                strokeWidth = s * 0.085f,
+                cap = StrokeCap.Round,
+            )
         }
 
         2 -> { // 任务：清单（圆角框 + 勾 + 两行条目 + 状态点）
@@ -788,32 +852,39 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
             }
         }
 
-        1 -> { // 助教：学士帽（辉光版比主版笔触细一档，细节多防糊）
-            val glow = Stroke(width = s * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-            val crown = Path().apply {
-                moveTo(s * 0.13f, s * 0.68f)
-                lineTo(s * 0.50f, s * 0.565f)
-                lineTo(s * 0.87f, s * 0.68f)
-                lineTo(s * 0.87f, s * 0.90f)
-                lineTo(s * 0.13f, s * 0.90f)
-                close()
-            }
-            val tassel = Path().apply {
-                moveTo(s * 0.735f, s * 0.345f)
-                cubicTo(s * 0.85f, s * 0.40f, s * 0.84f, s * 0.48f, s * 0.82f, s * 0.51f)
+        1 -> { // 助教：老师指黑板（辉光版笔触细一档，细节多防糊）
+            val glow = Stroke(width = s * 0.11f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val shoulders = Path().apply {
+                moveTo(s * 0.02f, s * 0.85f)
+                cubicTo(s * 0.05f, s * 0.70f, s * 0.15f, s * 0.625f, s * 0.24f, s * 0.645f)
+                cubicTo(s * 0.35f, s * 0.67f, s * 0.43f, s * 0.74f, s * 0.48f, s * 0.80f)
             }
             if (color != null) {
-                drawCircle(color = color, style = glow, radius = s * 0.235f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
-                drawCircle(color = color, style = glow, radius = s * 0.145f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
-                drawPath(crown, color = color, style = glow, blendMode = blendMode)
-                drawPath(tassel, color = color, style = Stroke(width = s * 0.09f, cap = StrokeCap.Round), blendMode = blendMode)
-                drawCircle(color = color, style = glow, radius = s * 0.045f, center = Offset(s * 0.82f, s * 0.545f), blendMode = blendMode)
+                drawRoundRect(
+                    color = color,
+                    style = glow,
+                    topLeft = Offset(s * 0.36f, s * 0.05f),
+                    size = Size(s * 0.59f, s * 0.55f),
+                    cornerRadius = CornerRadius(s * 0.05f),
+                    blendMode = blendMode,
+                )
+                drawLine(color = color, start = Offset(s * 0.55f, s * 0.30f), end = Offset(s * 0.83f, s * 0.30f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawCircle(color = color, style = glow, radius = s * 0.115f, center = Offset(s * 0.23f, s * 0.44f), blendMode = blendMode)
+                drawPath(shoulders, color = color, style = glow, blendMode = blendMode)
+                drawLine(color = color, start = Offset(s * 0.46f, s * 0.79f), end = Offset(s * 0.585f, s * 0.565f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
             } else if (brush != null) {
-                drawCircle(brush = brush, style = glow, radius = s * 0.235f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
-                drawCircle(brush = brush, style = glow, radius = s * 0.145f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
-                drawPath(crown, brush = brush, style = glow, blendMode = blendMode)
-                drawPath(tassel, brush = brush, style = Stroke(width = s * 0.09f, cap = StrokeCap.Round), blendMode = blendMode)
-                drawCircle(brush = brush, style = glow, radius = s * 0.045f, center = Offset(s * 0.82f, s * 0.545f), blendMode = blendMode)
+                drawRoundRect(
+                    brush = brush,
+                    style = glow,
+                    topLeft = Offset(s * 0.36f, s * 0.05f),
+                    size = Size(s * 0.59f, s * 0.55f),
+                    cornerRadius = CornerRadius(s * 0.05f),
+                    blendMode = blendMode,
+                )
+                drawLine(brush = brush, start = Offset(s * 0.55f, s * 0.30f), end = Offset(s * 0.83f, s * 0.30f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawCircle(brush = brush, style = glow, radius = s * 0.115f, center = Offset(s * 0.23f, s * 0.44f), blendMode = blendMode)
+                drawPath(shoulders, brush = brush, style = glow, blendMode = blendMode)
+                drawLine(brush = brush, start = Offset(s * 0.46f, s * 0.79f), end = Offset(s * 0.585f, s * 0.565f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
             }
         }
 
