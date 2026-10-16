@@ -57,9 +57,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.material3.MaterialTheme
 import com.kewu.app.KewuBlue
-import com.kewu.app.KewuDeepBlue
-import com.kewu.app.KewuGreen
 import com.kewu.app.ui.liquidglass.LiquidGlassSurface
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -72,17 +71,22 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+/**
+ * 底部导航栏的一个 tab。
+ *
+ * ★ 配色约定（用户要求）：**页面背景一律走 `MaterialTheme.colorScheme`，不允许自己造背景色**
+ * （原来每个 tab 一套硬编码渐变已全部去掉）。所以这里只留索引和文字。
+ */
 private data class NavItem(
     val index: Int,
     val label: String,
-    val gradient: List<Color>,
 )
 
 private val NAV_ITEMS = listOf(
-    NavItem(0, "课堂", listOf(KewuGreen, Color(0xFF0B3D2E))),
-    NavItem(1, "助教", listOf(Color(0xFF7B5CFF), Color(0xFF2A1A6B))),
-    NavItem(2, "任务", listOf(Color(0xFF00B4A0), Color(0xFF063E3A))),
-    NavItem(3, "我的", listOf(Color(0xFFFF7A59), Color(0xFF5A1E0B))),
+    NavItem(0, "课堂"),
+    NavItem(1, "助教"),
+    NavItem(2, "任务"),
+    NavItem(3, "我的"),
 )
 
 @Composable
@@ -103,7 +107,7 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.White), // 透明状态栏下的顶部底色，与白色 TopBar 连成一体
+            .background(MaterialTheme.colorScheme.background), // 全 app 底色走 M3，不自造色
     ) {
         Column(
             Modifier
@@ -162,22 +166,23 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
 
 @Composable
 private fun TopBar() {
+    val cs = MaterialTheme.colorScheme
     Box(
         Modifier
             .fillMaxWidth()
             .height(64.dp)
-            .background(Color.White),
+            .background(cs.surface),
         contentAlignment = Alignment.CenterStart,
     ) {
         Row(Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(
                 Modifier
                     .size(36.dp)
-                    .background(KewuBlue, RoundedCornerShape(10.dp)),
+                    .background(cs.primary, RoundedCornerShape(10.dp)),
                 contentAlignment = Alignment.Center,
-            ) { Text("课", color = Color.White, fontWeight = FontWeight.Bold) }
+            ) { Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold) }
             Spacer(Modifier.width(12.dp))
-            Text("课悟 · Kewu", color = KewuDeepBlue, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+            Text("课悟 · Kewu", color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -195,24 +200,20 @@ private fun TabContent(
         ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide)
         return
     }
+    val cs = MaterialTheme.colorScheme
     Box(
         Modifier
             .fillMaxSize()
-            // 渐变在 84% 处就到终色、其后保持平坦：底部导航栏所在的这条带内，
-            // 「身后底色」是均匀的，玻璃泡泡/托盘采样后不会出现"上浅下深 + 中间分界线"。
-            .background(
-                Brush.verticalGradient(
-                    0f to item.gradient[0],
-                    0.84f to item.gradient[1],
-                    1f to item.gradient[1],
-                ),
-            ),
+            // ★ 背景一律走 M3 语义色，不再每个 tab 一套硬编码渐变。
+            // 顺带解决了原来的老问题：渐变透过导航栏玻璃会变成"上浅下深 + 中间分界线"，
+            // 纯色背景下「身后底色」天然均匀，玻璃怎么采样都不会有色差。
+            .background(cs.background),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(item.label, color = Color.White, fontSize = 42.sp, fontWeight = FontWeight.Bold)
+            Text(item.label, color = cs.onSurface, fontSize = 42.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
-            Text("内容区域 · 演示页", color = Color.White.copy(alpha = 0.82f), fontSize = 15.sp)
+            Text("内容区域 · 演示页", color = cs.onSurfaceVariant, fontSize = 15.sp)
         }
     }
 }
@@ -240,11 +241,14 @@ private fun AppleLiquidGlassNavBar(
     val dragVel = remember { mutableStateOf(0f) }       // 拖拽速度（用于液体拉伸形变）
     val tapExpand = remember { mutableStateOf(false) }   // 点选泡泡：复刻长按放大效果，tapExpandMs 后自动还原
     val barHeight = 66.dp                              // 导航栏（托盘）高度
-    val bubbleRestH = barHeight                        // 静止：泡泡高度 = 导航栏高度（只保持边界对齐）
-    val bubbleActiveH = 90.dp                          // 活动（长按 / 切换中）：泡泡高度 > 导航栏
+    // ★ 静止态泡泡就比导航栏**高一点、宽一点**：上下各凸出 ~5dp、左右也比单个 tab 明显更宽，
+    //   于是在课堂页（tab 0，最左）泡泡左缘会直接探到托盘外面 —— 一眼就能看到"这里有个泡泡"，
+    //   而不是需要它动起来才看得出。
+    val bubbleRestH = 76.dp                            // 静止：略高于导航栏（原为 = barHeight，完全贴齐看不出）
+    val bubbleActiveH = 100.dp                         // 活动（长按 / 切换中）：再弹高
     val barBottomGap = 24.dp                           // 栏底距屏幕底
     val containerHeight = barHeight + barBottomGap * 2 // 固定容器高：栏固定不动，泡泡绕栏心伸缩
-    val bubbleWFactor = 1.08f                          // 泡泡宽度占单 tab 比例（x 轴做宽；拖拽 clamp / 点选命中判定都用这个静止宽度）
+    val bubbleWFactor = 1.34f                          // 泡泡宽度占单 tab 比例（静止就这么宽：横向胶囊 + 探出托盘）
 
     // 长按拾取 / 点选放大时的额外拉宽（0 → 0.42，总宽 1.50×tabW）：
     // 活动态高度 90dp > 静止 66dp，宽度若不变会成"竖椭圆"；拉宽后宽(≈321px) > 高(≈247px) → 横向椭圆。
@@ -343,7 +347,31 @@ private fun AppleLiquidGlassNavBar(
             blurRadius = 22.dp,
             tintAlpha = 0.12f,
             modifier = Modifier.fillMaxWidth().height(barHeight).align(Alignment.Center).scale(trayScale),
-        ) {}
+        ) {
+            // 托盘也描一圈极淡的棱边：页面背景改成 M3 纯色后，光靠白色 tint 在浅色底上
+            // 拓不出边界，导航栏会"消失"；有了这圈边，泡泡探出去才有参照物。
+            Canvas(Modifier.fillMaxSize()) {
+                val h = size.height
+                val r = h / 2f
+                val edge = h * 0.011f
+                drawRoundRect(
+                    color = Color.Black.copy(alpha = 0.045f),
+                    topLeft = Offset(edge / 2f, edge / 2f),
+                    size = Size(size.width - edge, h - edge),
+                    cornerRadius = CornerRadius(r - edge / 2f),
+                    style = Stroke(width = edge),
+                )
+                val rimW = h * 0.032f
+                drawRoundRect(
+                    color = Color.White.copy(alpha = 0.32f),
+                    topLeft = Offset(rimW, rimW),
+                    size = Size(size.width - rimW * 2f, h - rimW * 2f),
+                    cornerRadius = CornerRadius(r - rimW),
+                    style = Stroke(width = rimW),
+                    blendMode = BlendMode.Screen,
+                )
+            }
+        }
 
         // 2) 可交互玻璃泡泡：选中指示 + 长按放大 + 拖拽切换；不被托盘裁剪，可「弹出」
         //    外层盒留出余量用于柔和阴影外溢；内部玻璃盒单独缩放（阴影不随之膨胀）
@@ -372,27 +400,53 @@ private fun AppleLiquidGlassNavBar(
                     .scale(bubbleScale * (1f + stretch), bubbleScale * (1f - stretch * 0.5f)),
                 contentAlignment = Alignment.Center,
             ) {
+                // ★ 更透 + 透镜放大：tint 更淡、blur 更小，让身后的页面内容真的"透过来"；
+                //   再由 magnify 把透过来的内容在泡泡里放大 —— 这才是液态玻璃的折射感，
+                //   光靠"淡"只会变成一块看不清内容的灰片。
+                val bubbleActive = expanded.value || tapExpand.value
                 LiquidGlassSurface(
                     backdrop = backdrop,
                     shape = RoundedCornerShape(50),
-                    blurRadius = if (expanded.value || tapExpand.value) 22.dp else 18.dp,
-                    tintAlpha = if (expanded.value || tapExpand.value) 0.14f else 0.10f,
+                    blurRadius = if (bubbleActive) 16.dp else 12.dp,
+                    tintAlpha = if (bubbleActive) 0.11f else 0.075f,
+                    magnify = if (bubbleActive) 1.36f else 1.26f,
                 ) {
-                    // 玻璃反光：不再画任何「上浅下深」的竖直渐变或高光——
-                    // 顶部白高光叠加页面自身的竖直渐变透过玻璃，就是"上浅下深 + 中间分界"的来源。
-                    // 现只保留活动态的棱边彩虹镶边（沿胶囊一圈、上下对称，不产生上下色差）。
+                    // 棱边：泡泡"透"了之后，**必须**靠棱边才能读出来是个泡泡 ——
+                    // Apple 液态玻璃的可见性主要来自棱边高光，而不是内部填充。所以这里
+                    // 常态就画一圈对称的棱边（外圈极淡暗轮廓 + 内圈白高光），
+                    // 上下完全对称，不会出现之前那种"上浅下深 + 中间分界线"。
                     Canvas(Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
-                        if (expanded.value || tapExpand.value) {
-                            // 玻璃自身棱边的彩虹镶边（薄膜干涉，真实物理现象）：沿胶囊描一圈光谱
-                            val rimW = size.height * 0.045f
+                        val r = h / 2f
+                        // 外圈：极淡的暗轮廓（浅色背景上给泡泡一个边界）
+                        val edge = h * 0.012f
+                        drawRoundRect(
+                            color = Color.Black.copy(alpha = 0.05f),
+                            topLeft = Offset(edge / 2f, edge / 2f),
+                            size = Size(w - edge, h - edge),
+                            cornerRadius = CornerRadius(r - edge / 2f),
+                            style = Stroke(width = edge),
+                        )
+                        // 内圈：白高光（棱边反光）
+                        val rimW = h * 0.045f
+                        drawRoundRect(
+                            color = Color.White.copy(alpha = if (bubbleActive) 0.60f else 0.42f),
+                            topLeft = Offset(rimW, rimW),
+                            size = Size(w - rimW * 2f, h - rimW * 2f),
+                            cornerRadius = CornerRadius(r - rimW),
+                            style = Stroke(width = rimW),
+                            blendMode = BlendMode.Screen,
+                        )
+                        if (bubbleActive) {
+                            // 活动态再叠一层棱边彩虹镶边（薄膜干涉，真实物理现象）：沿胶囊描一圈光谱
+                            val spec = h * 0.05f
                             drawRoundRect(
-                                brush = spectralBrush(alpha = 0.5f),
-                                topLeft = Offset(rimW, rimW),
-                                size = Size(w - rimW * 2f, h - rimW * 2f),
-                                cornerRadius = CornerRadius(h / 2f - rimW),
-                                style = Stroke(width = rimW),
+                                brush = spectralBrush(alpha = 0.34f),
+                                topLeft = Offset(spec, spec),
+                                size = Size(w - spec * 2f, h - spec * 2f),
+                                cornerRadius = CornerRadius(r - spec),
+                                style = Stroke(width = spec),
                                 blendMode = BlendMode.Screen,
                             )
                         }
@@ -646,7 +700,8 @@ private fun NavTab(
     tabCenterX: Float = 0f,  // 该 tab 中心 x（Row 坐标）
     tabLeftX: Float = 0f,    // 该 tab 左缘 x（Row 坐标）：文字染色 clipRect 需要把 Row 坐标换算到 tab 局部
 ) {
-    val baseColor = if (selected) KewuBlue else Color(0xFF49566F)
+    // 未选中 = M3 的 onSurfaceVariant；选中 = KewuBlue（品牌强调色，不是背景色）
+    val baseColor = if (selected) KewuBlue else MaterialTheme.colorScheme.onSurfaceVariant
     val scale by animateFloatAsState(
         targetValue = if (selected) 1.12f else 1f,
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
