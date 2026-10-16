@@ -63,6 +63,7 @@ import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.blur.highlight.Highlight
 import kotlin.math.abs
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.drawscope.clipRect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -242,13 +243,13 @@ private fun AppleLiquidGlassNavBar(
     // 直接点选滑行不走 settling，仍是"滑行中保持变大、滑到再缩回"的原有速度（用户确认合适，不动）。
     val targetCenter = selected * tabW.value + tabW.value / 2f
     val active = expanded.value || dragging.value || tapExpand.value ||
-        (abs(centerAnim.value - targetCenter) > 2f && !settling.value)
+            (abs(centerAnim.value - targetCenter) > 2f && !settling.value)
     // 活动时轻微整体放大（q 弹过冲）；配合下面的 height 动画 → 长按/切换时"变大变高"。
     // settling（松手吸合中）换更快的弹簧 → 拖拽松手后泡泡由大变小"快点"；点选路径保持原速。
     val bubbleScale by animateFloatAsState(
         targetValue = if (active) 1.12f else 1f,
         animationSpec = if (settling.value) spring(dampingRatio = 0.8f, stiffness = 650f)
-                        else spring(dampingRatio = 0.34f, stiffness = 320f),
+        else spring(dampingRatio = 0.34f, stiffness = 320f),
         label = "bubbleScale",
     )
     // 泡泡高度：静止=栏高，活动=高于栏；低阻尼弹簧带来回弹。
@@ -256,7 +257,7 @@ private fun AppleLiquidGlassNavBar(
     val bubbleHeight by animateDpAsState(
         targetValue = if (active) bubbleActiveH else bubbleRestH,
         animationSpec = if (settling.value) spring(dampingRatio = 0.8f, stiffness = 650f)
-                        else spring(dampingRatio = 0.58f, stiffness = 360f),
+        else spring(dampingRatio = 0.58f, stiffness = 360f),
         label = "bubbleHeight",
     )
     // 长按判定触发时导航栏托盘轻微放大；松手（长按消失）立马回弹（带回弹过冲）。
@@ -268,15 +269,15 @@ private fun AppleLiquidGlassNavBar(
     val trayScale by animateFloatAsState(
         targetValue = if (expanded.value) 1.035f else 1f,
         animationSpec = if (settling.value)
-                            spring(dampingRatio = 0.4f, stiffness = 800f, visibilityThreshold = 0.0005f)
-                        else spring(dampingRatio = 0.55f, stiffness = 320f),
+            spring(dampingRatio = 0.4f, stiffness = 800f, visibilityThreshold = 0.0005f)
+        else spring(dampingRatio = 0.55f, stiffness = 320f),
         label = "trayScale",
     )
 
     Box(
         modifier
             .fillMaxWidth()
-            .padding(horizontal = 18.dp)
+            .padding(horizontal = 58.dp)
             .height(containerHeight),
     ) {
         // 1) 底部玻璃胶囊托盘（淡，提供 bar 质感；全圆角无直边）
@@ -334,16 +335,18 @@ private fun AppleLiquidGlassNavBar(
                             size = Size(w, h * 0.45f),
                             blendMode = BlendMode.Multiply,
                         )
-                        // 玻璃自身棱边的彩虹镶边（薄膜干涉，真实物理现象）：沿胶囊描一圈光谱
-                        val rimW = size.height * 0.045f
-                        drawRoundRect(
-                            brush = spectralBrush(alpha = 0.5f),
-                            topLeft = Offset(rimW, rimW),
-                            size = Size(w - rimW * 2f, h - rimW * 2f),
-                            cornerRadius = CornerRadius(h / 2f - rimW),
-                            style = Stroke(width = rimW),
-                            blendMode = BlendMode.Screen,
-                        )
+                        if (expanded.value || tapExpand.value) {
+                            // 玻璃自身棱边的彩虹镶边（薄膜干涉，真实物理现象）：沿胶囊描一圈光谱
+                            val rimW = size.height * 0.045f
+                            drawRoundRect(
+                                brush = spectralBrush(alpha = 0.5f),
+                                topLeft = Offset(rimW, rimW),
+                                size = Size(w - rimW * 2f, h - rimW * 2f),
+                                cornerRadius = CornerRadius(h / 2f - rimW),
+                                style = Stroke(width = rimW),
+                                blendMode = BlendMode.Screen,
+                            )
+                        }
                     }
                 }
             }
@@ -377,28 +380,37 @@ private fun AppleLiquidGlassNavBar(
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-    items.forEachIndexed { i, item ->
-        // 泡泡真实边缘离该 tab 中心越近 → rim 越大（玻璃棱边色散/薄膜干涉只发生在棱边，中心无彩虹）
-        val tx = tabW.value * (i + 0.5f)
-        val scaleH = bubbleScale * (1f + stretch)
-        val half = (indicatorW / 2f) * scaleH
-        val ble = bubbleCenter - half
-        val bre = bubbleCenter + half
-        val rim = if (tabW.value > 1f) {
-            val dL = abs(tx - ble)
-            val dR = abs(tx - bre)
-            val dEdge = if (dL < dR) dL else dR
-            (1f - dEdge / (tabW.value * 0.6f)).coerceIn(0f, 1f)
-        } else 0f
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            NavTab(item, i == preview, dimT = if (i == preview) 0f else focusT, rim = rim)
-        }
-    }
+            items.forEachIndexed { i, item ->
+                // 泡泡真实边缘离该 tab 中心越近 → rim 越大（玻璃棱边色散/薄膜干涉只发生在棱边，中心无彩虹）
+                val tx = tabW.value * (i + 0.5f)
+                val scaleH = bubbleScale * (1f + stretch)
+                val half = (indicatorW / 2f) * scaleH
+                val ble = bubbleCenter - half
+                val bre = bubbleCenter + half
+                val rim = if (tabW.value > 1f) {
+                    val dL = abs(tx - ble)
+                    val dR = abs(tx - bre)
+                    val dEdge = if (dL < dR) dL else dR
+                    (1f - dEdge / (tabW.value * 0.6f)).coerceIn(0f, 1f)
+                } else 0f
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    // ble/bre/tx：泡泡左右缘与该 tab 中心（Row 坐标）→ NavTab 里算"泡泡框住了图标多少"
+                    NavTab(
+                        item,
+                        selected = i == preview,
+                        dimT = if (i == preview) 0f else focusT,
+                        rim = rim,
+                        coverL = ble,
+                        coverR = bre,
+                        tabCenterX = tx,
+                    )
+                }
+            }
         }
     }
 }
@@ -426,14 +438,14 @@ private suspend fun PointerInputScope.navGestures(
     val moveCancelPx = 12f
     var tapExpandJob: Job? = null   // 点选泡泡的放大计时（新手势/松手/再次点选时取消）
     var releaseJob: Job? = null     // 上一步松手吸合协程（新手势开始时必须取消：它跑完时 finally 会清
-                                   // expanded，若落在新手势长按保持期间，托盘/泡泡会在手指未松时就回弹）
+    // expanded，若落在新手势长按保持期间，托盘/泡泡会在手指未松时就回弹）
     awaitPointerEventScope {
         while (true) {
             val down = awaitPointerEvent().changes.firstOrNull { it.pressed } ?: continue
             settling.value = false // 新手势开始：恢复点选路径的原有速度逻辑
             tapExpandJob?.cancel() // 取消可能残留的点选放大计时
             releaseJob?.cancel() // 取消上一步松手吸合协程，防止其 finally 在本次长按保持期间清 expanded
-                                 // （否则第二次起长按会出现"刚放大就回弹、手指还没松"）
+            // （否则第二次起长按会出现"刚放大就回弹、手指还没松"）
             val downX = down.position.x
             var engaged = false
             var isTap = true
@@ -554,7 +566,15 @@ private fun tabIndexFloatFromX(x: Float, tabW: Float, itemCount: Int): Float {
 }
 
 @Composable
-private fun NavTab(item: NavItem, selected: Boolean, dimT: Float = 0f, rim: Float = 0f) {
+private fun NavTab(
+    item: NavItem,
+    selected: Boolean,
+    dimT: Float = 0f,
+    rim: Float = 0f,
+    coverL: Float = 0f,      // 泡泡左缘（Row 坐标）
+    coverR: Float = 0f,      // 泡泡右缘（Row 坐标）
+    tabCenterX: Float = 0f,  // 该 tab 中心 x（Row 坐标）
+) {
     val baseColor = if (selected) KewuBlue else Color(0xFF49566F)
     val scale by animateFloatAsState(
         targetValue = if (selected) 1.12f else 1f,
@@ -573,9 +593,22 @@ private fun NavTab(item: NavItem, selected: Boolean, dimT: Float = 0f, rim: Floa
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Canvas(Modifier.size(24.dp).scale(scale)) {
+        Canvas(Modifier.size(28.dp).scale(scale)) {
             val sz = size
             drawGlyph(item.index, baseColor, sz)
+            // 泡泡经过：被泡泡框住的部分染上主色（经过多少染多少，其余保持原色）。
+            // 换算到 canvas 坐标要除掉视觉缩放（selected 1.12 / 变暗 0.92），否则缩放后边缘对不齐。
+            val visScale = scale * dimScale
+            val cx = sz.minDimension / 2f
+            if (visScale > 0.01f) {
+                val cl = ((coverL - tabCenterX + cx * visScale) / visScale).coerceIn(0f, sz.width)
+                val cr = ((coverR - tabCenterX + cx * visScale) / visScale).coerceIn(0f, sz.width)
+                if (cr - cl > 0.5f) {
+                    clipRect(left = cl, right = cr) {
+                        drawGlyph(item.index, KewuBlue, sz)
+                    }
+                }
+            }
             if (r > 0.01f) {
                 // 真实色散：红/青沿相反方向错位（玻璃棱边把不同波长折射到不同位置）
                 val off = r * sz.minDimension * 0.10f
@@ -589,7 +622,7 @@ private fun NavTab(item: NavItem, selected: Boolean, dimT: Float = 0f, rim: Floa
                 drawGlyphStroke(item.index, size = sz, brush = spectralBrush(alpha = r))
             }
         }
-        Spacer(Modifier.height(3.dp))
+        Spacer(Modifier.height(4.dp))
         Box(contentAlignment = Alignment.Center) {
             if (r > 0.01f) {
                 // 文字的彩虹描边：沿水平扇形铺开的光谱副本，两侧各露出红/紫镶边
@@ -602,13 +635,13 @@ private fun NavTab(item: NavItem, selected: Boolean, dimT: Float = 0f, rim: Floa
                     Text(
                         item.label,
                         color = c.copy(alpha = r * 0.55f),
-                        fontSize = 11.sp,
+                        fontSize = 13.sp,
                         fontWeight = w,
                         modifier = Modifier.offset(x = dx, y = 0.dp),
                     )
                 }
             }
-            Text(item.label, color = baseColor, fontSize = 11.sp, fontWeight = w)
+            Text(item.label, color = baseColor, fontSize = 13.sp, fontWeight = w)
         }
     }
 }
@@ -636,29 +669,62 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyph(
                 style = stroke,
             )
         }
-        1 -> { // 助教：放大镜
-            drawCircle(color, style = stroke, radius = s * 0.30f, center = Offset(s * 0.40f, s * 0.40f))
-            drawLine(
-                color,
-                Offset(s * 0.61f, s * 0.61f),
-                Offset(s * 0.90f, s * 0.90f),
-                strokeWidth = s * 0.085f,
-                cap = StrokeCap.Round,
-            )
+
+        1 -> { // 助教：学士帽（方冠画成同心圆环 + V 口帽座 + 右侧流苏）
+            drawCircle(color, style = stroke, radius = s * 0.235f, center = Offset(s * 0.50f, s * 0.345f))
+            drawCircle(color, style = stroke, radius = s * 0.145f, center = Offset(s * 0.50f, s * 0.345f))
+            val crown = Path().apply {
+                moveTo(s * 0.13f, s * 0.68f)
+                lineTo(s * 0.50f, s * 0.565f)
+                lineTo(s * 0.87f, s * 0.68f)
+                lineTo(s * 0.87f, s * 0.90f)
+                lineTo(s * 0.13f, s * 0.90f)
+                close()
+            }
+            drawPath(crown, color, style = stroke)
+            val tassel = Path().apply {
+                moveTo(s * 0.735f, s * 0.345f)
+                cubicTo(s * 0.85f, s * 0.40f, s * 0.84f, s * 0.48f, s * 0.82f, s * 0.51f)
+            }
+            drawPath(tassel, color, style = Stroke(width = s * 0.065f, cap = StrokeCap.Round))
+            drawCircle(color, radius = s * 0.045f, center = Offset(s * 0.82f, s * 0.545f))
         }
-        2 -> { // 任务：勾选圆圈
-            drawCircle(color, style = stroke, radius = s * 0.38f, center = Offset(s * 0.5f, s * 0.5f))
+
+        2 -> { // 任务：清单（圆角框 + 勾 + 两行条目 + 状态点）
+            drawRoundRect(
+                color,
+                style = stroke,
+                topLeft = Offset(s * 0.10f, s * 0.10f),
+                size = Size(s * 0.80f, s * 0.80f),
+                cornerRadius = CornerRadius(s * 0.17f),
+            )
             val check = Path().apply {
-                moveTo(s * 0.34f, s * 0.52f)
-                lineTo(s * 0.46f, s * 0.64f)
-                lineTo(s * 0.68f, s * 0.36f)
+                moveTo(s * 0.25f, s * 0.375f)
+                lineTo(s * 0.335f, s * 0.46f)
+                lineTo(s * 0.50f, s * 0.30f)
             }
             drawPath(
                 check,
                 color,
-                style = Stroke(width = s * 0.085f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                style = Stroke(width = s * 0.08f, cap = StrokeCap.Round, join = StrokeJoin.Round),
             )
+            drawLine(
+                color,
+                Offset(s * 0.585f, s * 0.36f),
+                Offset(s * 0.755f, s * 0.36f),
+                strokeWidth = s * 0.075f,
+                cap = StrokeCap.Round,
+            )
+            drawLine(
+                color,
+                Offset(s * 0.585f, s * 0.60f),
+                Offset(s * 0.755f, s * 0.60f),
+                strokeWidth = s * 0.075f,
+                cap = StrokeCap.Round,
+            )
+            drawCircle(color, style = stroke, radius = s * 0.075f, center = Offset(s * 0.335f, s * 0.655f))
         }
+
         3 -> { // 我的：人形
             drawCircle(color, radius = s * 0.17f, center = Offset(s * 0.5f, s * 0.36f))
             drawArc(
@@ -721,36 +787,109 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
                 )
             }
         }
-        1 -> { // 助教：放大镜
+
+        1 -> { // 助教：学士帽（辉光版比主版笔触细一档，细节多防糊）
+            val glow = Stroke(width = s * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+            val crown = Path().apply {
+                moveTo(s * 0.13f, s * 0.68f)
+                lineTo(s * 0.50f, s * 0.565f)
+                lineTo(s * 0.87f, s * 0.68f)
+                lineTo(s * 0.87f, s * 0.90f)
+                lineTo(s * 0.13f, s * 0.90f)
+                close()
+            }
+            val tassel = Path().apply {
+                moveTo(s * 0.735f, s * 0.345f)
+                cubicTo(s * 0.85f, s * 0.40f, s * 0.84f, s * 0.48f, s * 0.82f, s * 0.51f)
+            }
             if (color != null) {
-                drawCircle(color = color, style = stroke, radius = s * 0.30f, center = Offset(s * 0.40f, s * 0.40f), blendMode = blendMode)
-                drawLine(color = color, start = Offset(s * 0.61f, s * 0.61f), end = Offset(s * 0.90f, s * 0.90f), strokeWidth = s * 0.085f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawCircle(color = color, style = glow, radius = s * 0.235f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
+                drawCircle(color = color, style = glow, radius = s * 0.145f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
+                drawPath(crown, color = color, style = glow, blendMode = blendMode)
+                drawPath(tassel, color = color, style = Stroke(width = s * 0.09f, cap = StrokeCap.Round), blendMode = blendMode)
+                drawCircle(color = color, style = glow, radius = s * 0.045f, center = Offset(s * 0.82f, s * 0.545f), blendMode = blendMode)
             } else if (brush != null) {
-                drawCircle(brush = brush, style = stroke, radius = s * 0.30f, center = Offset(s * 0.40f, s * 0.40f), blendMode = blendMode)
-                drawLine(brush = brush, start = Offset(s * 0.61f, s * 0.61f), end = Offset(s * 0.90f, s * 0.90f), strokeWidth = s * 0.085f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawCircle(brush = brush, style = glow, radius = s * 0.235f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
+                drawCircle(brush = brush, style = glow, radius = s * 0.145f, center = Offset(s * 0.50f, s * 0.345f), blendMode = blendMode)
+                drawPath(crown, brush = brush, style = glow, blendMode = blendMode)
+                drawPath(tassel, brush = brush, style = Stroke(width = s * 0.09f, cap = StrokeCap.Round), blendMode = blendMode)
+                drawCircle(brush = brush, style = glow, radius = s * 0.045f, center = Offset(s * 0.82f, s * 0.545f), blendMode = blendMode)
             }
         }
-        2 -> { // 任务：勾选圆圈
+
+        2 -> { // 任务：清单（辉光版）
+            val glow = Stroke(width = s * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round)
             val check = Path().apply {
-                moveTo(s * 0.34f, s * 0.52f)
-                lineTo(s * 0.46f, s * 0.64f)
-                lineTo(s * 0.68f, s * 0.36f)
+                moveTo(s * 0.25f, s * 0.375f)
+                lineTo(s * 0.335f, s * 0.46f)
+                lineTo(s * 0.50f, s * 0.30f)
             }
             if (color != null) {
-                drawCircle(color = color, style = stroke, radius = s * 0.38f, center = Offset(s * 0.5f, s * 0.5f), blendMode = blendMode)
-                drawPath(check, color = color, style = Stroke(width = s * 0.085f, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blendMode)
+                drawRoundRect(
+                    color = color,
+                    style = glow,
+                    topLeft = Offset(s * 0.10f, s * 0.10f),
+                    size = Size(s * 0.80f, s * 0.80f),
+                    cornerRadius = CornerRadius(s * 0.17f),
+                    blendMode = blendMode,
+                )
+                drawPath(check, color = color, style = glow, blendMode = blendMode)
+                drawLine(color = color, start = Offset(s * 0.585f, s * 0.36f), end = Offset(s * 0.755f, s * 0.36f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawLine(color = color, start = Offset(s * 0.585f, s * 0.60f), end = Offset(s * 0.755f, s * 0.60f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawCircle(color = color, style = glow, radius = s * 0.075f, center = Offset(s * 0.335f, s * 0.655f), blendMode = blendMode)
             } else if (brush != null) {
-                drawCircle(brush = brush, style = stroke, radius = s * 0.38f, center = Offset(s * 0.5f, s * 0.5f), blendMode = blendMode)
-                drawPath(check, brush = brush, style = Stroke(width = s * 0.085f, cap = StrokeCap.Round, join = StrokeJoin.Round), blendMode = blendMode)
+                drawRoundRect(
+                    brush = brush,
+                    style = glow,
+                    topLeft = Offset(s * 0.10f, s * 0.10f),
+                    size = Size(s * 0.80f, s * 0.80f),
+                    cornerRadius = CornerRadius(s * 0.17f),
+                    blendMode = blendMode,
+                )
+                drawPath(check, brush = brush, style = glow, blendMode = blendMode)
+                drawLine(brush = brush, start = Offset(s * 0.585f, s * 0.36f), end = Offset(s * 0.755f, s * 0.36f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawLine(brush = brush, start = Offset(s * 0.585f, s * 0.60f), end = Offset(s * 0.755f, s * 0.60f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawCircle(brush = brush, style = glow, radius = s * 0.075f, center = Offset(s * 0.335f, s * 0.655f), blendMode = blendMode)
             }
         }
+
         3 -> { // 我的：人形
             if (color != null) {
-                drawCircle(color = color, radius = s * 0.17f, center = Offset(s * 0.5f, s * 0.36f), style = stroke, blendMode = blendMode)
-                drawArc(color = color, startAngle = 180f, sweepAngle = 180f, useCenter = false, topLeft = Offset(s * 0.22f, s * 0.50f), size = Size(s * 0.56f, s * 0.52f), style = stroke, blendMode = blendMode)
+                drawCircle(
+                    color = color,
+                    radius = s * 0.17f,
+                    center = Offset(s * 0.5f, s * 0.36f),
+                    style = stroke,
+                    blendMode = blendMode
+                )
+                drawArc(
+                    color = color,
+                    startAngle = 180f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = Offset(s * 0.22f, s * 0.50f),
+                    size = Size(s * 0.56f, s * 0.52f),
+                    style = stroke,
+                    blendMode = blendMode
+                )
             } else if (brush != null) {
-                drawCircle(brush = brush, radius = s * 0.17f, center = Offset(s * 0.5f, s * 0.36f), style = stroke, blendMode = blendMode)
-                drawArc(brush = brush, startAngle = 180f, sweepAngle = 180f, useCenter = false, topLeft = Offset(s * 0.22f, s * 0.50f), size = Size(s * 0.56f, s * 0.52f), style = stroke, blendMode = blendMode)
+                drawCircle(
+                    brush = brush,
+                    radius = s * 0.17f,
+                    center = Offset(s * 0.5f, s * 0.36f),
+                    style = stroke,
+                    blendMode = blendMode
+                )
+                drawArc(
+                    brush = brush,
+                    startAngle = 180f,
+                    sweepAngle = 180f,
+                    useCenter = false,
+                    topLeft = Offset(s * 0.22f, s * 0.50f),
+                    size = Size(s * 0.56f, s * 0.52f),
+                    style = stroke,
+                    blendMode = blendMode
+                )
             }
         }
     }
