@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuDeepBlue
+import com.kewu.app.KewuGreen
 import com.kewu.app.ui.liquidglass.LiquidGlassSurface
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -78,14 +79,14 @@ private data class NavItem(
 )
 
 private val NAV_ITEMS = listOf(
-    NavItem(0, "课堂", listOf(Color(0xFF1B6EF3), Color(0xFF0B1E4B))),
+    NavItem(0, "课堂", listOf(KewuGreen, Color(0xFF0B3D2E))),
     NavItem(1, "助教", listOf(Color(0xFF7B5CFF), Color(0xFF2A1A6B))),
     NavItem(2, "任务", listOf(Color(0xFF00B4A0), Color(0xFF063E3A))),
     NavItem(3, "我的", listOf(Color(0xFFFF7A59), Color(0xFF5A1E0B))),
 )
 
 @Composable
-fun MainScreen() {
+fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
     var selected by remember { mutableStateOf(0) }
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
@@ -115,10 +116,10 @@ fun MainScreen() {
                     .layerBackdrop(backdrop),
             ) {
                 if (f < 0.001f) {
-                    TabContent(NAV_ITEMS[from])
+                    TabContent(NAV_ITEMS[from], onGoToTab)
                 } else {
-                    Box(Modifier.fillMaxSize().alpha(1f - f)) { TabContent(NAV_ITEMS[from]) }
-                    Box(Modifier.fillMaxSize().alpha(f)) { TabContent(NAV_ITEMS[to]) }
+                    Box(Modifier.fillMaxSize().alpha(1f - f)) { TabContent(NAV_ITEMS[from], onGoToTab) }
+                    Box(Modifier.fillMaxSize().alpha(f)) { TabContent(NAV_ITEMS[to], onGoToTab) }
                 }
             }
         }
@@ -163,7 +164,14 @@ private fun TopBar() {
 }
 
 @Composable
-private fun TabContent(item: NavItem) {
+private fun TabContent(item: NavItem, onGoToTab: (Int) -> Unit) {
+    if (item.index == 0) {
+        // 课堂主页：时间轴 + 卡片流（绿色勾勾主题）。
+        // 注意：Coui 玻璃的采样者必须在被采样层**之外**，所以 ClassroomPage 内部自己开了一个
+        // pageBackdrop（背景层）并让玻璃内容与它平级；这里不需要把导航栏的 backdrop 传进去。
+        ClassroomPage(onGoToTab = onGoToTab)
+        return
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -231,12 +239,7 @@ private fun AppleLiquidGlassNavBar(
     val indicatorW = tabW.value * (bubbleWFactor + bubbleWBoost)
     val indicatorWdp = (indicatorW / density.density).dp
 
-    // 拖拽时的「液体拉伸」：随速度横向拉长、纵向压扁；弹簧低刚度 → 带惯性过冲（加速度变形感）
-    val stretch by animateFloatAsState(
-        targetValue = (abs(dragVel.value) * 0.045f).coerceIn(0f, 0.5f),
-        animationSpec = spring(dampingRatio = 0.6f, stiffness = 240f),
-        label = "stretch",
-    )
+    // 横向「液体拉伸」见下方：拖拽时按手指速度、点选滑行时按 centerAnim 速度，二者取较大者。
     // 长按拾取时，非聚焦 tab 淡出，聚焦 tab 强调（对齐 iOS 手感）
     val focusT by animateFloatAsState(
         targetValue = if (expanded.value) 1f else 0f,
@@ -253,6 +256,16 @@ private fun AppleLiquidGlassNavBar(
             centerAnim.snapTo(selected * tabW.value + tabW.value / 2f)
         }
     }
+    // 液体拉伸：横向拉长、纵向压扁。拖拽时随手指速度；点选切换滑行时随「泡泡中心的运动速度」——否则在
+    // 「课堂点任务」这类纯点选切换里，centerAnim 直接 animateTo 滑行、dragVel 恒为 0，泡泡只会平移、不拉伸，
+    // 观感断了。两种来源取较大者，保证「只要泡泡在动就有横向延伸」。
+    // （centerAnim.velocity 在它动画时实时给出 px/s；点选上限按滑行观感调小，避免一下拉满。）
+    val stretch by animateFloatAsState(
+        targetValue = (if (dragging.value) (abs(dragVel.value) * 0.045f).coerceIn(0f, 0.5f) else 0f)
+            .coerceAtLeast(if (!dragging.value) (abs(centerAnim.velocity) * 0.0006f).coerceIn(0f, 0.32f) else 0f),
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 240f),
+        label = "stretch",
+    )
     val bubbleCenter = if (dragging.value) dragCenter.value else centerAnim.value
     val bubbleOffsetX = bubbleCenter - indicatorW / 2f
 
