@@ -1,16 +1,17 @@
 [versions]
-agp = "8.5.2"
-androidToolsSdk = "34.0.0"
-kotlin = "2.0.20"
-composeMultiplatform = "1.7.1"
-kotlinxCoroutines = "1.9.0"
+agp = "8.10.1"
+androidToolsSdk = "35.0.0"
+kotlin = "2.4.10"
+composeMultiplatform = "1.11.1"
+kotlinxCoroutines = "1.10.2"
+coui = "1.1.0"
 ktor = "2.3.12"
 kotlinxSerialization = "1.7.3"
 lettuce = "6.4.0.RELEASE"
 obs = "3.25.10"
 
 androidxLifecycle = "2.8.4"
-androidxActivityCompose = "1.9.2"
+androidxActivityCompose = "1.10.1"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
@@ -18,6 +19,7 @@ kotlinx-coroutines-swing = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-
 androidx-lifecycle-viewmodel-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidxLifecycle" }
 androidx-lifecycle-runtime-compose = { module = "org.jetbrains.androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidxLifecycle" }
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
+coui-blur = { module = "io.github.suqi8.coui.kmp:coui-blur", version.ref = "coui" }
 
 [plugins]
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

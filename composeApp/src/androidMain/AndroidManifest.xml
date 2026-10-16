@@ -7,6 +7,7 @@
         android:label="课悟"
         android:supportsRtl="true"
         android:theme="@style/Theme.Kewu">
+
         <activity
             android:exported="true"
             android:name=".MainActivity">
