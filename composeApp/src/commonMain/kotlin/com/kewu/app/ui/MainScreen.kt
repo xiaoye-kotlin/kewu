@@ -2,9 +2,12 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector1D
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -320,6 +323,19 @@ private fun AppleLiquidGlassNavBar(
         else spring(dampingRatio = 0.58f, stiffness = 360f),
         label = "bubbleHeight",
     )
+    // 彩虹渐隐时序（用户要求）：松手时 active 立刻变 false，但泡泡高度/缩放弹簧还要
+    // ~400ms 才缩回静止尺寸——若直接用 active 当开关，彩虹会在泡泡还大着时瞬间消失。
+    // 所以分两级：只要 bubbleHeight 还没回到静止高度就保持全亮；真正回位之后再 tween 渐隐。
+    // （松手回弹有 settling 快弹簧 / 点选慢弹簧两套速度，用「实际高度」当条件比写死延时更稳。）
+    val rainbowDone = !active && bubbleHeight <= bubbleRestH
+    val rainbowFade by animateFloatAsState(
+        targetValue = if (rainbowDone) 0f else 1f,
+        animationSpec = tween(
+            durationMillis = if (rainbowDone) 260 else 150,
+            easing = if (rainbowDone) LinearOutSlowInEasing else FastOutSlowInEasing,
+        ),
+        label = "rainbowFade",
+    )
     // 长按判定触发时导航栏托盘轻微放大；松手（长按消失）立马回弹（带回弹过冲）。
     // 坑：animateFloatAsState 默认 visibilityThreshold=0.01，而托盘缩放 delta 仅 0.035（3.5 个阈值）——
     // Compose 的 FloatSpringSpec 按"进入 1 个阈值内"估算时长并截断动画、吸附到目标值，
@@ -438,16 +454,37 @@ private fun AppleLiquidGlassNavBar(
                             style = Stroke(width = rimW),
                             blendMode = BlendMode.Screen,
                         )
-                        if (bubbleActive) {
-                            // 活动态再叠一层棱边彩虹镶边（薄膜干涉，真实物理现象）：沿胶囊描一圈光谱
-                            val spec = h * 0.05f
+                        // 非默认态（active：长按拾取 / 拖拽中 / 点选放大 / 切换滑行中——
+                        // 正是泡泡「放大」的时候）再叠两层彩虹描边。真实液态玻璃的彩虹来自
+                        // 薄膜干涉（前/后表面两次反射的光程差），观感是「一带颜色」而不是
+                        // 「一根描边」：主带贴白高光内侧、细而亮；次带稍靠内、宽而柔。
+                        // 两层错开分布，物理上才像一层膜，而不是同一条边描了两遍。
+                        // 彩虹描边（非默认态）。两带都往棱边收、变细——之前铺到 [0.07h,0.17h]
+                        // 太占面积，像给泡泡描了条粗边；现在主带 [0.058h,0.084h]、次带
+                        // [0.095h,0.125h]，紧贴白高光内侧，远看是棱边泛光、近看才分出两级条纹。
+                        // ★ 混合模式必须用默认 SrcOver，不能 Screen：Screen 是「相加提亮」，
+                        //   在 M3 浅色背景上会把彩色直接洗成白色（实测 sat≈0，肉眼完全看不见）；
+                        //   SrcOver 才能让光谱真正透出来。（图标那圈色散用 Screen 没事——图标本身是深色。）
+                        // ★ 透明度乘 rainbowFade：松手后先等泡泡缩回静止高度，再渐隐 260ms，
+                        //   不会出现「泡泡还大着彩虹先没」的断电感（rainbowDone 见上方）。
+                        if (rainbowFade > 0.01f) {
+                            val mainInset = h * 0.058f   // 白高光占 [0.023h, 0.068h]，主带紧贴其内
+                            val mainW = h * 0.026f
                             drawRoundRect(
-                                brush = spectralBrush(alpha = 0.34f),
-                                topLeft = Offset(spec, spec),
-                                size = Size(w - spec * 2f, h - spec * 2f),
-                                cornerRadius = CornerRadius(r - spec),
-                                style = Stroke(width = spec),
-                                blendMode = BlendMode.Screen,
+                                brush = spectralBrush(alpha = 0.55f * rainbowFade),
+                                topLeft = Offset(mainInset, mainInset),
+                                size = Size(w - mainInset * 2f, h - mainInset * 2f),
+                                cornerRadius = CornerRadius(r - mainInset),
+                                style = Stroke(width = mainW),
+                            )
+                            val softInset = h * 0.095f
+                            val softW = h * 0.030f
+                            drawRoundRect(
+                                brush = spectralBrush(alpha = 0.26f * rainbowFade),
+                                topLeft = Offset(softInset, softInset),
+                                size = Size(w - softInset * 2f, h - softInset * 2f),
+                                cornerRadius = CornerRadius(r - softInset),
+                                style = Stroke(width = softW),
                             )
                         }
                     }
