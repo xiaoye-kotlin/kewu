@@ -10,14 +10,12 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,6 +28,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -37,15 +37,20 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
@@ -58,10 +63,11 @@ import kotlin.math.abs
 import kotlin.math.sin
 import kotlin.time.Clock
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 
 // ───────────────────────── 数据模型（mock） ─────────────────────────
 
-/** 课程卡片状态：待上课 / 正在上课 / 已结束已总结 / 总结生成中 / 上传或总结失败 */
+/** 课程卡片状态：待上课 / 正在上课 / 已总结 / 总结生成中 / 上传或总结失败 */
 private enum class CourseStatus { PENDING, LIVE, DONE, SUMMARIZING, FAILED }
 
 private data class Course(
@@ -82,57 +88,43 @@ private data class RecordingDevice(val name: String, val state: String)
 
 /** 今日课程（倒序：最新的在最上）+ 一批历史课程，用于「查看全部」展开。 */
 private fun mockToday(): List<Course> = listOf(
-    Course("高等数学", room = "主楼 305", teacher = "王老师", time = "14:00 - 15:40", status = CourseStatus.LIVE),
+    Course("高等数学", room = "主楼 305", teacher = "王老师", time = "14:00", status = CourseStatus.LIVE),
     Course(
-        "大学英语", room = "外语楼 202", teacher = "李老师", time = "10:00 - 11:40",
-        status = CourseStatus.DONE, summary = "讲了定语从句与虚拟语气的嵌套用法，以及长难句拆解思路",
+        "大学英语", room = "外语楼 202", teacher = "李老师", time = "10:00",
+        status = CourseStatus.DONE, summary = "定语从句与虚拟语气的嵌套用法、长难句拆解",
         homework = true, devices = 3, aiReady = true, highlights = 2,
     ),
     Course(
-        "线性代数", room = "主楼 401", teacher = "张老师", time = "08:00 - 09:40",
-        status = CourseStatus.DONE, summary = "特征值与特征向量的几何意义，以及相似对角化条件",
+        "线性代数", room = "主楼 401", teacher = "张老师", time = "08:00",
+        status = CourseStatus.DONE, summary = "特征值与特征向量的几何意义、相似对角化条件",
         devices = 3, aiReady = true, highlights = 3,
     ),
-    Course("大学物理", room = "实验楼 110", teacher = "陈老师", time = "明天 08:00", status = CourseStatus.PENDING),
-    Course(
-        "程序设计", room = "机房 B205", teacher = "刘老师", time = "昨天 15:00",
-        status = CourseStatus.SUMMARIZING, estWait = "约 2 分钟",
-    ),
-    Course("马克思主义原理", room = "主楼 210", teacher = "赵老师", time = "前天 14:00",
+    Course("大学物理", room = "实验楼 110", teacher = "陈老师", time = "明天", status = CourseStatus.PENDING),
+    Course("程序设计", room = "机房 B205", teacher = "刘老师", time = "昨天",
+        status = CourseStatus.SUMMARIZING, estWait = "约 2 分钟"),
+    Course("马克思主义原理", room = "主楼 210", teacher = "赵老师", time = "前天",
         status = CourseStatus.FAILED),
 )
 
 private fun mockHistory(): List<Course> = listOf(
-    Course("高等数学", room = "主楼 305", teacher = "王老师", time = "上周一 14:00",
+    Course("高等数学", room = "主楼 305", teacher = "王老师", time = "上周一",
         status = CourseStatus.DONE, summary = "多元函数偏导数的计算与链式法则",
         devices = 2, aiReady = true, highlights = 2),
-    Course("大学英语", room = "外语楼 202", teacher = "李老师", time = "上周一 10:00",
-        status = CourseStatus.DONE, summary = "英语议论文结构与论点展开练习", devices = 3, aiReady = true, highlights = 1),
-)
-
-// ───────────────────────── 主题色 ─────────────────────────
-
-private val StatusPending = Color(0xFF8A93A6)
-private val StatusLive = Color(0xFFFFB300)
-private val StatusDone = Color(0xFF2BD17A)
-private val StatusSummarizing = Color(0xFF3FA9F5)
-private val StatusFailed = Color(0xFFFF5A5F)
-
-private val TxtPrimary = Color(0xFFFFFFFF)
-private val TxtSecondary = Color(0xFFC9D2DD)
-private val TxtTertiary = Color(0xFF92A0AE)
-
-// 课堂主页背景：深绿到墨绿的竖直渐变，玻璃卡片采样后透出淡淡绿调，衬出「绿色勾勾」主题。
-private val PageBg = Brush.verticalGradient(
-    0f to Color(0xFF12382C),
-    0.55f to Color(0xFF0B241C),
-    1f to Color(0xFF06120E),
+    Course("大学英语", room = "外语楼 202", teacher = "李老师", time = "上周一",
+        status = CourseStatus.DONE, summary = "英语议论文结构与论点展开", devices = 3, aiReady = true, highlights = 1),
 )
 
 // ───────────────────────── 课堂主页 ─────────────────────────
 
+/**
+ * 课堂主页：仿 KernelSU 主页信息架构（大状态卡 + 统计条 + 列表卡流），
+ * 配色全部走 [MaterialTheme] 的默认 colorScheme / typography，不自定义背景色。
+ *
+ * @param onGoToTab 跳转到主界面某个 tab（头像 → 「我的」= 3）
+ * @param onNavHide 滚动方向回调：true = 向下浏览（收起底部导航栏），false = 回顶（展开）
+ */
 @Composable
-fun ClassroomPage(onGoToTab: (Int) -> Unit) {
+fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var showAll by remember { mutableStateOf(false) }
     val today = remember { mockToday() }
     val history = remember { mockHistory() }
@@ -147,64 +139,72 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit) {
         )
     }
 
-    // ★ coui 玻璃的硬约束：**采样者必须在被采样层之外**。
-    // 底部导航栏能正常工作，正是因为它是「内容层（挂 layerBackdrop）」的兄弟节点。
-    // 而课程卡片若直接放在内容层**里面**、去采样包含自己的层，实测会让 RenderThread 在
-    // hwui 的 DamageAccumulator::dirty 里 SIGSEGV（整个进程秒崩，且是 native 崩溃、无 Java 异常）。
-    // 所以这里单独开一个 pageBackdrop：背景层只画渐变，玻璃内容与它**平级**，采样背景。
+    // ★ coui 玻璃的硬约束：采样者必须在被采样层**之外**，否则首帧 RenderThread SIGSEGV。
+    // 所以背景单独成层（挂 layerBackdrop），玻璃内容与之**平级** —— 与底部导航栏同一套结构。
     val pageBackdrop = rememberGlassBackdrop()
+    val scrollState = rememberScrollState()
+
+    // 滚动方向 → 收起/展开底部导航栏（向下浏览内容时收起，回到顶部时展开）
+    LaunchedEffect(scrollState) {
+        var last = 0
+        snapshotFlow { scrollState.value }.collect { cur ->
+            if (cur <= 0) {
+                onNavHide(false)
+            } else {
+                val delta = cur - last
+                if (delta > 6) onNavHide(true) else if (delta < -6) onNavHide(false)
+            }
+            last = cur
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
-        // 背景层：只画渐变，是玻璃的采样源；固定不随内容滚动
+        // 背景层：M3 默认背景色，是玻璃的采样源
         Box(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(PageBg),
+                .background(MaterialTheme.colorScheme.background),
         )
         Column(
             Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scrollState)
+                .padding(horizontal = 16.dp)
                 .padding(bottom = 96.dp),
         ) {
-            GreetingBar(name = "田冀雪") { onGoToTab(3) }
-            TodayOverview(courses)
-            if (recording) RecordingOverlay(devices, pageBackdrop)
-            Spacer(Modifier.height(2.dp))
-            courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 14.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(KewuGreen.copy(alpha = 0.12f))
-                    .clickable { showAll = !showAll },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (showAll) "收起历史课程" else "查看全部课程",
-                    color = KewuGreen, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                    modifier = Modifier.padding(12.dp),
-                )
+            Spacer(Modifier.height(8.dp))
+            GreetingBar(name = "刘宇豪") { onGoToTab(3) }
+            Spacer(Modifier.height(10.dp))
+            StatusCard(courses)
+            Spacer(Modifier.height(13.dp))
+            OverviewStrip(courses)
+            if (recording) {
+                Spacer(Modifier.height(13.dp))
+                RecordingOverlay(devices, pageBackdrop)
             }
+            Spacer(Modifier.height(6.dp))
+            courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
+            Spacer(Modifier.height(6.dp))
+            MoreBar(showAll) { showAll = !showAll }
         }
     }
 }
 
+// ───────────────────────── 顶部：问候栏 ─────────────────────────
+
 @Composable
 private fun GreetingBar(name: String, onAvatar: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
     Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 6.dp),
+        Modifier.fillMaxWidth().padding(horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(rememberGreeting(), color = TxtSecondary, fontSize = 15.sp)
+            Text(rememberGreeting(), color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
             Text(
-                name, color = TxtPrimary, fontSize = 22.sp, fontWeight = FontWeight.Bold,
-                modifier = androidx.compose.ui.Modifier.padding(top = 2.dp),
+                name, color = cs.onSurface, style = MaterialTheme.typography.headlineSmall,
+                fontWeight = FontWeight.SemiBold, maxLines = 1,
             )
         }
         Avatar(onAvatar)
@@ -225,73 +225,222 @@ private fun rememberGreeting(): String {
 
 @Composable
 private fun Avatar(onAvatar: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
     Box(
         Modifier
-            .size(44.dp)
+            .size(42.dp)
             .clip(CircleShape)
-            .background(KewuGreen.copy(alpha = 0.25f))
-            .border(1.5.dp, KewuGreen, CircleShape)
+            .background(cs.secondaryContainer)
             .clickable { onAvatar() },
         contentAlignment = Alignment.Center,
     ) {
-        Text("田", color = TxtPrimary, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+        Text("刘", color = cs.onSecondaryContainer, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+    }
+}
+
+// ───────────────────────── 大状态卡（KernelSU StatusCard 结构） ─────────────────────────
+
+/**
+ * 仿 KernelSU 的 StatusCard：`Surface(shapes.large)` 容器 + leading 状态徽章
+ * + 标题/副标题两行 + trailing 环形进度。标志性的「绿色勾勾」放在 leading。
+ */
+@Composable
+private fun StatusCard(courses: List<Course>) {
+    val cs = MaterialTheme.colorScheme
+    val live = courses.firstOrNull { it.status == CourseStatus.LIVE }
+    val done = courses.count { it.status == CourseStatus.DONE }
+    val percent = if (courses.isNotEmpty()) done.toFloat() / courses.size else 0f
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = cs.secondaryContainer,
+        contentColor = cs.onSecondaryContainer,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CheckBadge(size = 46.dp)
+            Spacer(Modifier.width(14.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    if (live != null) "正在上课" else "今日课堂已就绪",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1,
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    if (live != null) "${live.name} · ${live.room}" else "全部课程已生成 AI 纪要",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSecondaryContainer.copy(alpha = 0.75f), maxLines = 1,
+                )
+            }
+            Spacer(Modifier.width(10.dp))
+            CircularProgress(percent)
+        }
+    }
+}
+
+/** 标志性「绿色勾勾」徽章：绿色实心圆 + 白色对勾（KernelSU CheckCircle 的放大加粗版）。 */
+@Composable
+private fun CheckBadge(size: androidx.compose.ui.unit.Dp, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(size)) {
+        val s = this.size.width
+        drawCircle(color = KewuGreen)
+        val path = Path().apply {
+            moveTo(s * 0.27f, s * 0.51f)
+            lineTo(s * 0.43f, s * 0.67f)
+            lineTo(s * 0.73f, s * 0.34f)
+        }
+        drawPath(
+            path = path,
+            color = Color.White,
+            style = Stroke(width = s * 0.095f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+    }
+}
+
+/** 课程状态徽章：已总结=绿色勾勾，其余按状态画不同图形。 */
+@Composable
+private fun StatusBadge(status: CourseStatus) {
+    val cs = MaterialTheme.colorScheme
+    when (status) {
+        CourseStatus.DONE -> CheckBadge(size = 28.dp)
+        CourseStatus.LIVE -> {
+            val pulse by rememberInfiniteTransition().animateFloat(
+                0.65f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse),
+            )
+            Canvas(Modifier.size(28.dp)) {
+                drawCircle(color = cs.tertiary.copy(alpha = 0.22f * pulse + 0.1f))
+                drawCircle(color = cs.tertiary, radius = size.width * 0.17f * pulse)
+            }
+        }
+        CourseStatus.SUMMARIZING -> {
+            Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = cs.primary, strokeWidth = 2.5.dp, strokeCap = StrokeCap.Round,
+                )
+            }
+        }
+        CourseStatus.FAILED -> {
+            Canvas(Modifier.size(28.dp)) {
+                drawCircle(color = cs.error)
+                drawCircle(
+                    color = Color.White, radius = size.width * 0.055f,
+                    center = Offset(size.width / 2f, size.height * 0.71f),
+                )
+                drawRect(
+                    color = Color.White,
+                    topLeft = Offset(size.width * 0.455f, size.height * 0.28f),
+                    size = Size(size.width * 0.09f, size.height * 0.28f),
+                )
+            }
+        }
+        CourseStatus.PENDING -> {
+            Canvas(Modifier.size(28.dp)) {
+                drawCircle(
+                    color = cs.onSurfaceVariant.copy(alpha = 0.45f),
+                    style = Stroke(width = size.width * 0.09f),
+                )
+            }
+        }
+    }
+}
+
+// ───────────────────────── 今日概览（三格统计，永不换行） ─────────────────────────
+
+/**
+ * 今日概览：改成三等分「数字 + 短标签」格子。
+ * 之前是一长串文字（「今天 6 节课 · 2 节已总结 · 1 个作业待交」）在窄屏会折到第二行，
+ * 这里每格内容都很短并显式 maxLines = 1，保证任何宽度都单行。
+ */
+@Composable
+private fun OverviewStrip(courses: List<Course>) {
+    val cs = MaterialTheme.colorScheme
+    val hw = courses.count { it.status == CourseStatus.DONE && it.homework }
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = MaterialTheme.shapes.large,
+        color = cs.surfaceVariant,
+        contentColor = cs.onSurfaceVariant,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StatCell("${courses.size}", "节课", Modifier.weight(1f))
+            VDivider()
+            StatCell("${courses.count { it.status == CourseStatus.DONE }}", "已总结", Modifier.weight(1f))
+            VDivider()
+            StatCell("$hw", "作业待交", Modifier.weight(1f))
+        }
     }
 }
 
 @Composable
-private fun TodayOverview(courses: List<Course>) {
-    val total = courses.size
-    val done = courses.count { it.status == CourseStatus.DONE }
-    val hw = courses.count { it.status == CourseStatus.DONE && it.homework }
-    val percent = if (total > 0) done.toFloat() / total else 0f
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text("今日概览", color = TxtSecondary, fontSize = 13.sp)
-            Text(
-                "今天 $total 节课 · $done 节已总结 · $hw 个作业待交",
-                color = TxtPrimary, fontSize = 17.sp, fontWeight = FontWeight.Medium,
-                modifier = Modifier.padding(top = 6.dp),
-            )
-        }
-        CircularProgress(percent)
+private fun StatCell(number: String, label: String, modifier: Modifier = Modifier) {
+    val cs = MaterialTheme.colorScheme
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(
+            number, color = cs.onSurface, style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold, maxLines = 1,
+        )
+        Spacer(Modifier.height(2.dp))
+        Text(
+            label, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium,
+            maxLines = 1, textAlign = TextAlign.Center,
+        )
     }
+}
+
+@Composable
+private fun VDivider() {
+    Box(
+        Modifier
+            .height(26.dp)
+            .width(1.dp)
+            .background(MaterialTheme.colorScheme.outlineVariant),
+    )
 }
 
 @Composable
 private fun CircularProgress(percent: Float) {
+    val cs = MaterialTheme.colorScheme
     val animated by animateFloatAsState(
         targetValue = percent,
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 380f),
     )
-    Box(Modifier.size(66.dp), contentAlignment = Alignment.Center) {
+    Box(Modifier.size(52.dp), contentAlignment = Alignment.Center) {
         CircularProgressIndicator(
             progress = { animated },
-            modifier = Modifier.size(66.dp),
-            color = KewuGreen,
-            strokeWidth = 7.dp,
-            trackColor = Color.White.copy(alpha = 0.16f),
+            modifier = Modifier.size(52.dp),
+            color = cs.primary,
+            strokeWidth = 5.dp,
+            trackColor = cs.onSecondaryContainer.copy(alpha = 0.14f),
             strokeCap = StrokeCap.Round,
         )
-        Text("${(percent * 100).toInt()}%", color = TxtPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text(
+            "${(percent * 100).toInt()}%", color = cs.onSecondaryContainer,
+            style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold,
+        )
     }
 }
 
+// ───────────────────────── 录音浮层（coui 毛玻璃） ─────────────────────────
+
 @Composable
 private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBackdrop) {
+    val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
     LiquidGlassSurface(
         backdrop = backdrop,
         shape = RoundedCornerShape(18.dp),
         blurRadius = 20.dp,
-        tintAlpha = 0.24f,
+        tintAlpha = 0.3f,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
             .clip(RoundedCornerShape(18.dp))
             .clickable { expanded = !expanded },
     ) {
@@ -300,17 +449,21 @@ private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBack
                 Waveform()
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
-                    Text("高等数学 · 正在录音 00:23:45", color = TxtPrimary, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                    Text("3 台设备采集中", color = TxtSecondary, fontSize = 12.sp, modifier = Modifier.padding(top = 3.dp))
+                    Text(
+                        "高等数学 · 正在录音", color = cs.onSurface,
+                        style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "00:23:45 · 3 台设备采集中", color = cs.onSurfaceVariant,
+                        style = MaterialTheme.typography.labelMedium, maxLines = 1,
+                    )
                 }
                 Box(
-                    Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.14f)),
+                    Modifier.size(32.dp).clip(CircleShape).background(cs.surfaceVariant),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text("3", color = TxtPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("3", color = cs.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
             if (expanded) {
@@ -320,10 +473,13 @@ private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBack
                         Modifier.fillMaxWidth().padding(vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Box(Modifier.size(7.dp).background(KewuGreen, CircleShape))
+                        Box(Modifier.size(7.dp).background(cs.primary, CircleShape))
                         Spacer(Modifier.width(10.dp))
-                        Text(it.name, color = TxtPrimary, fontSize = 13.sp, modifier = Modifier.weight(1f))
-                        Text(it.state, color = TxtSecondary, fontSize = 12.sp)
+                        Text(
+                            it.name, color = cs.onSurface, style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.weight(1f), maxLines = 1,
+                        )
+                        Text(it.state, color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }
@@ -336,7 +492,8 @@ private fun Waveform() {
     val t by rememberInfiniteTransition().animateFloat(
         0f, 1f, infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     )
-    Canvas(Modifier.size(42.dp, 30.dp)) {
+    val color = MaterialTheme.colorScheme.primary
+    Canvas(Modifier.size(38.dp, 28.dp)) {
         val n = 5
         val bw = size.width / (n * 2f)
         val pi = 3.1415927f
@@ -344,16 +501,16 @@ private fun Waveform() {
             val phase = t * 2f * pi + i * 0.8f
             val h = (0.28f + 0.72f * abs(sin(phase))).coerceAtMost(1f) * size.height
             drawRoundRect(
-                color = KewuGreen,
-                topLeft = androidx.compose.ui.geometry.Offset(i * 2f * bw + bw * 0.25f, (size.height - h) / 2f),
-                size = androidx.compose.ui.geometry.Size(bw * 0.5f, h),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(bw * 0.25f),
+                color = color,
+                topLeft = Offset(i * 2f * bw + bw * 0.25f, (size.height - h) / 2f),
+                size = Size(bw * 0.5f, h),
+                cornerRadius = CornerRadius(bw * 0.25f),
             )
         }
     }
 }
 
-// ───────────────────────── 课程卡片 ─────────────────────────
+// ───────────────────────── 课程卡片流 ─────────────────────────
 
 @Composable
 private fun CourseCard(course: Course, backdrop: LayerBackdrop, index: Int) {
@@ -361,64 +518,38 @@ private fun CourseCard(course: Course, backdrop: LayerBackdrop, index: Int) {
         backdrop = backdrop,
         shape = RoundedCornerShape(20.dp),
         blurRadius = 20.dp,
-        tintAlpha = 0.18f,
+        tintAlpha = 0.34f,
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 7.dp)
+            .padding(vertical = 6.dp)
             .cardEnter(index),
     ) {
         Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(14.dp),
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            StatusBar(course.status)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.fillMaxWidth()) { CourseContent(course) }
+            StatusBadge(course.status)
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) { CourseContent(course) }
         }
     }
 }
 
 @Composable
-private fun StatusBar(status: CourseStatus) {
-    val color = when (status) {
-        CourseStatus.PENDING -> StatusPending
-        CourseStatus.LIVE -> StatusLive
-        CourseStatus.DONE -> StatusDone
-        CourseStatus.SUMMARIZING -> StatusSummarizing
-        CourseStatus.FAILED -> StatusFailed
-    }
-    if (status == CourseStatus.LIVE) {
-        val pulse by rememberInfiniteTransition().animateFloat(
-            0.55f, 1f, infiniteRepeatable(tween(1100), RepeatMode.Reverse),
-        )
-        Box(
-            Modifier
-                .width(6.dp)
-                .fillMaxHeight()
-                .alpha(pulse)
-                .background(color, RoundedCornerShape(3.dp)),
-        )
-    } else {
-        Box(
-            Modifier
-                .width(6.dp)
-                .fillMaxHeight()
-                .background(color, RoundedCornerShape(3.dp)),
-        )
-    }
-}
-
-@Composable
 private fun CourseContent(course: Course) {
-    // 标题行：课程名 + 时间
-    Row(
-        Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(course.name, color = TxtPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+    val cs = MaterialTheme.colorScheme
+    // 标题行：课程名 + 时间（单行）
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            course.name, color = cs.onSurface, style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1,
+        )
         if (course.time.isNotEmpty()) {
-            Text(course.time, color = TxtSecondary, fontSize = 13.sp)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                course.time, color = cs.onSurfaceVariant,
+                style = MaterialTheme.typography.labelMedium, maxLines = 1,
+            )
         }
     }
 
@@ -433,148 +564,110 @@ private fun CourseContent(course: Course) {
 
 @Composable
 private fun PendingBody(course: Course) {
-    if (course.room.isNotEmpty() || course.teacher.isNotEmpty()) {
-        MetaText("${course.room} · ${course.teacher}")
-    }
-    Spacer(Modifier.height(10.dp))
-    PillButton("签到未开始", color = Color.White, enabled = false)
+    val cs = MaterialTheme.colorScheme
+    Spacer(Modifier.height(3.dp))
+    MetaText("${course.room} · ${course.teacher}")
+    Spacer(Modifier.height(8.dp))
+    StatusTag("未开始", cs.surfaceVariant, cs.onSurfaceVariant)
 }
 
 @Composable
 private fun LiveBody(course: Course) {
-    if (course.room.isNotEmpty()) MetaText(course.room)
+    val cs = MaterialTheme.colorScheme
+    Spacer(Modifier.height(3.dp))
+    MetaText(course.room)
     Spacer(Modifier.height(8.dp))
-    // 录音中标签 + 跳动小圆点
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        LiveDot()
-        Spacer(Modifier.width(6.dp))
-        Text("录音中", color = StatusLive, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        StatusTag("录音中", cs.tertiaryContainer, cs.onTertiaryContainer)
+        if (course.homework) StatusTag("随堂作业", cs.tertiaryContainer, cs.onTertiaryContainer)
     }
-    if (course.homework) {
-        Spacer(Modifier.height(8.dp))
-        Box(
-            Modifier
-                .clip(RoundedCornerShape(10.dp))
-                .background(StatusLive.copy(alpha = 0.18f))
-                .padding(horizontal = 10.dp, vertical = 6.dp),
-        ) {
-            Text("有新的随堂作业", color = StatusLive, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-        }
-    }
-    Spacer(Modifier.height(10.dp))
-    PillButton("签到", color = StatusLive, enabled = true)
 }
 
 @Composable
 private fun DoneBody(course: Course) {
-    Spacer(Modifier.height(6.dp))
+    val cs = MaterialTheme.colorScheme
+    Spacer(Modifier.height(3.dp))
     Text(
         course.summary.ifEmpty { "本节课暂无摘要" },
-        color = TxtPrimary, fontSize = 14.sp, lineHeight = 20.sp,
+        color = cs.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, maxLines = 2,
     )
-    Spacer(Modifier.height(8.dp))
-    if (course.devices > 0 || course.aiReady || course.highlights > 0) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (course.devices > 0) CheckTag("已融合 ${course.devices} 台设备录音")
-            if (course.aiReady) CheckTag("AI 助教已就绪")
-            if (course.highlights > 0) CheckTag("老师强调了 ${course.highlights} 个重点")
+    if (course.devices > 0 || course.aiReady) {
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (course.devices > 0) StatusTag("${course.devices} 台设备", cs.primaryContainer, cs.onPrimaryContainer)
+            if (course.aiReady) StatusTag("AI 已就绪", cs.primaryContainer, cs.onPrimaryContainer)
         }
-    }
-    Spacer(Modifier.height(10.dp))
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        PillButton("看总结", color = KewuGreen, modifier = Modifier.weight(1f))
-        PillButton("问助教", color = KewuGreen, modifier = Modifier.weight(1f))
-        PillButton(
-            "交作业", color = StatusFailed, modifier = Modifier.weight(1f),
-            enabled = course.homework, badge = course.homework,
-        )
     }
 }
 
 @Composable
 private fun SummarizingBody(course: Course) {
-    Spacer(Modifier.height(8.dp))
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        CircularProgressIndicator(
-            modifier = Modifier.size(18.dp),
-            color = StatusSummarizing, strokeWidth = 3.dp, strokeCap = StrokeCap.Round,
-        )
-        Spacer(Modifier.width(8.dp))
-        Text("AI 正在整理课堂纪要…", color = TxtSecondary, fontSize = 14.sp)
-    }
-    Spacer(Modifier.height(6.dp))
-    Text(course.estWait, color = TxtTertiary, fontSize = 12.sp)
+    val cs = MaterialTheme.colorScheme
+    Spacer(Modifier.height(3.dp))
+    Text(
+        "AI 正在整理课堂纪要…", color = cs.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall, maxLines = 1,
+    )
+    Spacer(Modifier.height(3.dp))
+    Text(
+        course.estWait, color = cs.onSurfaceVariant.copy(alpha = 0.7f),
+        style = MaterialTheme.typography.labelSmall, maxLines = 1,
+    )
 }
 
 @Composable
 private fun FailedBody(course: Course) {
+    val cs = MaterialTheme.colorScheme
+    Spacer(Modifier.height(3.dp))
+    Text("录音上传不完整", color = cs.error, style = MaterialTheme.typography.bodySmall, maxLines = 1)
     Spacer(Modifier.height(8.dp))
-    Text("录音上传不完整，点击重试", color = StatusFailed, fontSize = 14.sp)
-    Spacer(Modifier.height(10.dp))
-    PillButton("重试", color = StatusFailed, enabled = true)
+    StatusTag("点击重试", cs.errorContainer, cs.onErrorContainer)
 }
 
 @Composable
 private fun MetaText(text: String) {
-    Text(text, color = TxtSecondary, fontSize = 13.sp, modifier = Modifier.padding(top = 4.dp))
-}
-
-@Composable
-private fun LiveDot() {
-    val t by rememberInfiniteTransition().animateFloat(
-        0.6f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse),
+    Text(
+        text, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = MaterialTheme.typography.bodySmall, maxLines = 1,
     )
-    Box(Modifier.size(9.dp).scale(t).background(StatusLive, CircleShape))
 }
 
+/** KernelSU 风格的小标签（StatusTag）：胶囊底 + 对应 on 色文字。 */
 @Composable
-private fun CheckTag(text: String) {
+private fun StatusTag(label: String, background: Color, content: Color) {
     Box(
         Modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(KewuGreen.copy(alpha = 0.16f))
-            .padding(horizontal = 9.dp, vertical = 5.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .background(background)
+            .padding(horizontal = 9.dp, vertical = 4.dp),
     ) {
-        Text("✓ $text", color = KewuGreen, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Text(label, color = content, style = MaterialTheme.typography.labelSmall, maxLines = 1)
     }
 }
 
 @Composable
-private fun PillButton(
-    text: String,
-    color: Color,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    badge: Boolean = false,
-    onClick: () -> Unit = {},
-) {
+private fun MoreBar(showAll: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
     Box(
-        modifier
-            .height(38.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (enabled) color.copy(alpha = 0.22f) else Color.White.copy(alpha = 0.08f))
-            .clickable(enabled) { onClick() },
+        Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.large)
+            .background(cs.surfaceVariant)
+            .clickable { onClick() }
+            .padding(vertical = 13.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text,
-                color = if (enabled) color else Color.White.copy(alpha = 0.4f),
-                fontSize = 13.sp, fontWeight = FontWeight.Medium,
-            )
-            if (badge) {
-                Spacer(Modifier.width(5.dp))
-                Box(Modifier.size(7.dp).background(StatusFailed, CircleShape))
-            }
-        }
+        Text(
+            if (showAll) "收起历史课程" else "查看全部课程",
+            color = cs.onSurfaceVariant, style = MaterialTheme.typography.labelLarge, maxLines = 1,
+        )
     }
 }
 
-// 卡片入场：从下往上浮动，按 index 错峰，营造列表浮现感（这是 Composable 扩展，内部持有动画状态）。
-// 注意：这里**不能**用 alpha() 包裹玻璃卡片 —— alpha 会为子树创建离屏 RenderNode layer，
-// 而 coui 的 drawBackdrop 要把 backdrop 层内容映射到这棵子树内，首帧 alpha≈0 时极易算出非法尺寸，
-// 实测会让 RenderThread 在 hwui 的 DamageAccumulator::dirty 里 SIGSEGV（整个进程直接崩）。
-// 所以入场只做位移，透明度变化放到卡片**内部**的普通内容上去做。
+// 卡片入场：从下往上浮动，按 index 错峰。
+// 注意：这里**不能**用 alpha() 包裹玻璃卡片 —— 会为子树创建离屏 layer，
+// 而 coui 的 drawBackdrop 要把 backdrop 层映射到子树内，首帧极易算出非法尺寸导致
+// RenderThread SIGSEGV。所以入场只做位移。
 @Composable
 private fun Modifier.cardEnter(index: Int): Modifier {
     var target by remember { mutableStateOf(0f) }

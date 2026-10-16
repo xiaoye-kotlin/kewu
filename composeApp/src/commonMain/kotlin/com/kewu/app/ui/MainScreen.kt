@@ -90,6 +90,15 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
     var selected by remember { mutableStateOf(0) }
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
+    // 向下浏览内容时收起底部导航栏（课堂页滚动时回调），回到顶部自动展开
+    var navHidden by remember { mutableStateOf(false) }
+    // 收起动画：从大到小 + 淡出 + 轻微下沉。低阻尼弹簧（damping 0.42）让它「弹性」消失
+    // —— 缩过头再回弹一下，不是线性淡出。
+    val navVisible by animateFloatAsState(
+        targetValue = if (navHidden) 0f else 1f,
+        animationSpec = spring(dampingRatio = 0.42f, stiffness = 300f),
+        label = "navVisible",
+    )
     val backdrop = rememberGlassBackdrop()
     Box(
         Modifier
@@ -116,10 +125,14 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
                     .layerBackdrop(backdrop),
             ) {
                 if (f < 0.001f) {
-                    TabContent(NAV_ITEMS[from], onGoToTab)
+                    TabContent(NAV_ITEMS[from], onGoToTab) { navHidden = it }
                 } else {
-                    Box(Modifier.fillMaxSize().alpha(1f - f)) { TabContent(NAV_ITEMS[from], onGoToTab) }
-                    Box(Modifier.fillMaxSize().alpha(f)) { TabContent(NAV_ITEMS[to], onGoToTab) }
+                    Box(Modifier.fillMaxSize().alpha(1f - f)) {
+                        TabContent(NAV_ITEMS[from], onGoToTab) { navHidden = it }
+                    }
+                    Box(Modifier.fillMaxSize().alpha(f)) {
+                        TabContent(NAV_ITEMS[to], onGoToTab) { navHidden = it }
+                    }
                 }
             }
         }
@@ -130,13 +143,19 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
                 selected = it
                 preview = it
                 previewFloat = it.toFloat()
+                navHidden = false // 切 tab 时一律把导航栏放出来
             },
             preview = preview,
             onPreview = { preview = it },
             previewFloat = previewFloat,
             onPreviewFloat = { previewFloat = it },
             backdrop = backdrop,
-            modifier = Modifier.align(Alignment.BottomCenter),
+            hidden = navHidden,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .scale((0.35f + 0.65f * navVisible).coerceAtLeast(0f))
+                .alpha(navVisible.coerceIn(0f, 1f))
+                .offset(y = ((1f - navVisible) * 14f).dp),
         )
     }
 }
@@ -164,12 +183,16 @@ private fun TopBar() {
 }
 
 @Composable
-private fun TabContent(item: NavItem, onGoToTab: (Int) -> Unit) {
+private fun TabContent(
+    item: NavItem,
+    onGoToTab: (Int) -> Unit,
+    onNavHide: (Boolean) -> Unit,
+) {
     if (item.index == 0) {
-        // 课堂主页：时间轴 + 卡片流（绿色勾勾主题）。
+        // 课堂主页：大状态卡 + 统计条 + 课程卡片流（仿 KernelSU 主页信息架构）。
         // 注意：Coui 玻璃的采样者必须在被采样层**之外**，所以 ClassroomPage 内部自己开了一个
         // pageBackdrop（背景层）并让玻璃内容与它平级；这里不需要把导航栏的 backdrop 传进去。
-        ClassroomPage(onGoToTab = onGoToTab)
+        ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide)
         return
     }
     Box(
@@ -204,6 +227,7 @@ private fun AppleLiquidGlassNavBar(
     previewFloat: Float,
     onPreviewFloat: (Float) -> Unit,
     backdrop: LayerBackdrop,
+    hidden: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -384,7 +408,9 @@ private fun AppleLiquidGlassNavBar(
                 .height(barHeight)
                 .align(Alignment.Center)
                 .onSizeChanged { tabW.value = it.width.toFloat() / items.size }
-                .pointerInput(Unit) {
+                // 收起态（下滑隐藏）时不挂手势：scale/alpha 只影响绘制、不影响点击区域，
+                // 若不摘掉手势，导航栏看不见却仍能误触。
+                .then(if (hidden) Modifier else Modifier.pointerInput(Unit) {
                     navGestures(
                         scope = scope,
                         tabW = tabW,
@@ -401,7 +427,7 @@ private fun AppleLiquidGlassNavBar(
                         onPreview = onPreview,
                         onPreviewFloat = onPreviewFloat,
                     )
-                },
+                }),
             horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically,
         ) {
