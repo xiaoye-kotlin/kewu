@@ -35,7 +35,7 @@ fun LiquidGlassSurface(
     shape: RoundedCornerShape = RoundedCornerShape(26.dp),
     blurRadius: Dp = 26.dp,
     tintAlpha: Float = 0.16f,
-    highlight: Highlight = Highlight.GlassStrokeMiddleLight,
+    highlight: Highlight? = null,
     onClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
@@ -59,7 +59,7 @@ fun LiquidGlassSurface(
                         ),
                     )
                 },
-                highlight = { highlight },
+                highlight = highlight?.let { { it } },
             )
             .clip(shape)
             .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier),

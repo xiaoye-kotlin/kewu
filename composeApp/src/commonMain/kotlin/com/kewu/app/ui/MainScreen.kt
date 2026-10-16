@@ -63,7 +63,6 @@ import com.kewu.app.ui.liquidglass.LiquidGlassSurface
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
-import io.github.suqi8.coui.kmp.blur.highlight.Highlight
 import kotlin.math.abs
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -168,7 +167,15 @@ private fun TabContent(item: NavItem) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(item.gradient)),
+            // 渐变在 84% 处就到终色、其后保持平坦：底部导航栏所在的这条带内，
+            // 「身后底色」是均匀的，玻璃泡泡/托盘采样后不会出现"上浅下深 + 中间分界线"。
+            .background(
+                Brush.verticalGradient(
+                    0f to item.gradient[0],
+                    0.84f to item.gradient[1],
+                    1f to item.gradient[1],
+                ),
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -333,20 +340,13 @@ private fun AppleLiquidGlassNavBar(
                     shape = RoundedCornerShape(50),
                     blurRadius = if (expanded.value || tapExpand.value) 22.dp else 18.dp,
                     tintAlpha = if (expanded.value || tapExpand.value) 0.14f else 0.10f,
-                    highlight = Highlight.GlassStrokeMiddleLight,
                 ) {
-                    // 真实玻璃反光：左上聚拢镜面点光 + 底部内阴影（体积感），边缘接光交给 coui Highlight
+                    // 玻璃反光：不再画任何「上浅下深」的竖直渐变或高光——
+                    // 顶部白高光叠加页面自身的竖直渐变透过玻璃，就是"上浅下深 + 中间分界"的来源。
+                    // 现只保留活动态的棱边彩虹镶边（沿胶囊一圈、上下对称，不产生上下色差）。
                     Canvas(Modifier.fillMaxSize()) {
                         val w = size.width
                         val h = size.height
-                        drawRect(
-                            Brush.verticalGradient(
-                                listOf(Color.Black.copy(alpha = 0.0f), Color.Black.copy(alpha = 0.14f)),
-                            ),
-                            topLeft = Offset(0f, h * 0.55f),
-                            size = Size(w, h * 0.45f),
-                            blendMode = BlendMode.Multiply,
-                        )
                         if (expanded.value || tapExpand.value) {
                             // 玻璃自身棱边的彩虹镶边（薄膜干涉，真实物理现象）：沿胶囊描一圈光谱
                             val rimW = size.height * 0.045f
