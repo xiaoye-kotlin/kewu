@@ -178,12 +178,21 @@ private fun Modifier.squircleCard(radius: Dp, color: Color): Modifier =
         drawPath(squirclePath(size.width, size.height, radius.toPx().coerceAtMost(half)), color)
     }.clipToBounds()
 
-// ───────────────────────── ★ 标志性组件：四分之三圆 + 勾 ─────────────────────────
+// ───────────────────────── ★ 标志性组件：大半圆 + 勾／叉 ─────────────────────────
 
 /**
- * 课悟的标志性图形：**四分之三圆（270° 圆弧，缺口朝右上）+ 中间一个勾**。
- * 用法两处：① 状态卡里当作 170dp 的**超大水印**（Mishka 的手法：图标远大于卡片、
- * 用 offset(38,45) 塞到右下角、被卡片裁掉大半，只露出一道弧）；② 课程卡的状态徽章。
+ * 课悟的标志性图形：**大半圆包着中间的勾／叉**。
+ *
+ * `startAngle = 135f, sweepAngle = 270f`（Compose 里 0° = 3 点钟、角度顺时针增大），
+ * 即从「左下」顺时针绕一整圈到「右下」—— 缺口落在**正下方**（45°..135°）。
+ *
+ * 同一个外壳、同一套笔画，只换中间符号与颜色，就是全 app 的「状态语言」：
+ * - 绿勾 = 已完成／就绪（品牌色 [KewuGreen]）
+ * - 红叉 = 失败（`colorScheme.error`），**不用感叹号**
+ *
+ * 三处用法：① 状态大卡里当作 170dp 的**超大水印**（Mishka 的手法：图标远大于卡片、
+ * 塞到右下角、被卡片裁掉大半；缺口正好落在卡片外，所以看起来是一整圈）；
+ * ② 课程卡「已总结」徽章；③ 课程卡「失败」徽章（`cross = true`）。
  */
 @Composable
 private fun ThreeQuarterCheck(
@@ -191,12 +200,13 @@ private fun ThreeQuarterCheck(
     color: Color,
     modifier: Modifier = Modifier,
     alpha: Float = 1f,
+    cross: Boolean = false,
 ) {
     Canvas(modifier.size(size)) {
         val s = this.size.width
         val sw = s * 0.072f
         val inset = sw / 2f
-        // 270° 圆弧：从 135° 起、扫 270°，缺口留在右上 —— 即"四分之三圆"
+        // 大半圆：从 135° 起顺时针扫 270°，缺口在正下方
         drawArc(
             color = color.copy(alpha = alpha),
             startAngle = 135f,
@@ -206,14 +216,21 @@ private fun ThreeQuarterCheck(
             size = Size(s - sw, s - sw),
             style = Stroke(width = sw, cap = StrokeCap.Round),
         )
-        // 中间的勾
-        val check = Path().apply {
-            moveTo(s * 0.31f, s * 0.50f)
-            lineTo(s * 0.44f, s * 0.63f)
-            lineTo(s * 0.69f, s * 0.37f)
+        // 中间的符号：勾 = 两段折线；叉 = 两条交叉直线
+        val mark = Path().apply {
+            if (cross) {
+                moveTo(s * 0.35f, s * 0.35f)
+                lineTo(s * 0.65f, s * 0.65f)
+                moveTo(s * 0.65f, s * 0.35f)
+                lineTo(s * 0.35f, s * 0.65f)
+            } else {
+                moveTo(s * 0.31f, s * 0.50f)
+                lineTo(s * 0.44f, s * 0.63f)
+                lineTo(s * 0.69f, s * 0.37f)
+            }
         }
         drawPath(
-            path = check,
+            path = mark,
             color = color.copy(alpha = alpha),
             style = Stroke(width = sw * 1.25f, cap = StrokeCap.Round, join = StrokeJoin.Round),
         )
@@ -340,7 +357,7 @@ private fun Avatar(onAvatar: () -> Unit) {
 // ───────────────────────── 状态区（Mishka Home 版式） ─────────────────────────
 
 /**
- * 左：大状态卡（超大水印「四分之三圆+勾」+ 状态标题 + 两行副文本）
+ * 左：大状态卡（超大水印「大半圆+绿勾」+ 状态标题 + 两行副文本）
  * 右：两张堆叠小卡（标签 13.sp + 数值 20.sp Bold）—— 对齐 Mishka 的 statusSection。
  */
 @Composable
@@ -368,7 +385,7 @@ private fun StatusSection(courses: List<Course>) {
                 .fillMaxHeight()
                 .squircleCard(16.dp, statusContainer),
         ) {
-            // 超大水印：170dp 的四分之三圆+勾，offset 到右下角、被卡片裁掉大半。
+            // 超大水印：170dp 的大半圆+勾（品牌绿），offset 到右下角、被卡片裁掉大半。
             // 注意用 **lambda 版 offset**（px，纯视觉平移）：Dp 版 `offset(x, y)` 会把
             // x/y 加进 min intrinsic 尺寸，导致 `Row(height = IntrinsicSize.Min)` 被撑高 45dp。
             Box(
@@ -377,10 +394,11 @@ private fun StatusSection(courses: List<Course>) {
                     .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
                 contentAlignment = Alignment.BottomEnd,
             ) {
+                // 标志性图形恒用品牌绿（不跟着状态变紫）——它是"课悟"的符号，不是状态色
                 ThreeQuarterCheck(
                     size = 170.dp,
-                    color = statusTint,
-                    alpha = 0.16f, // 水印淡一点，不与文字抢
+                    color = KewuGreen,
+                    alpha = 0.30f,
                 )
             }
             Column(Modifier.fillMaxSize().padding(16.dp)) {
@@ -566,20 +584,8 @@ private fun StatusBadge(status: CourseStatus) {
                 )
             }
         }
-        CourseStatus.FAILED -> {
-            Canvas(Modifier.size(28.dp)) {
-                drawCircle(color = cs.error)
-                drawCircle(
-                    color = Color.White, radius = size.width * 0.055f,
-                    center = Offset(size.width / 2f, size.height * 0.71f),
-                )
-                drawRect(
-                    color = Color.White,
-                    topLeft = Offset(size.width * 0.455f, size.height * 0.28f),
-                    size = Size(size.width * 0.09f, size.height * 0.28f),
-                )
-            }
-        }
+        // 失败：同样的「大半圆外壳」，里面改成红色的叉（不用感叹号）
+        CourseStatus.FAILED -> ThreeQuarterCheck(size = 28.dp, color = cs.error, cross = true)
         CourseStatus.PENDING -> {
             Canvas(Modifier.size(28.dp)) {
                 drawCircle(
