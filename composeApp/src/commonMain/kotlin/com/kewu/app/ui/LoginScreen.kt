@@ -42,6 +42,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -61,6 +62,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -80,6 +82,9 @@ import androidx.compose.ui.util.lerp
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.KewuSky
+import com.kewu.app.ui.liquidglass.defaultKewuHighlight
+import com.kewu.app.ui.liquidglass.isLight
+import com.kewu.app.ui.liquidglass.refractionLens
 import io.github.suqi8.coui.kmp.blur.blur
 import io.github.suqi8.coui.kmp.blur.colorControls
 import io.github.suqi8.coui.kmp.blur.drawBackdrop
@@ -148,29 +153,8 @@ fun LoginScreen(onLogin: () -> Unit) {
     val refract = lerp(0f, 26f, condense)
     val cornerDp = lerp(0f, 30f, condense).dp
 
-    // 玻璃镜面高光（深浅自适应）：主光偏上、次光偏下，双峰 Bloom 边缘水光
-    val glassHighlight = remember(isDark) {
-        val tint = if (isDark) Color.White else Color.White
-        Highlight(
-            width = 1.dp,
-            alpha = if (isDark) 0.9f else 0.75f,
-            style = BloomStroke(
-                color = tint,
-                innerBlurRadius = 2.dp,
-                primaryLight = LightSource(
-                    position = LightPosition(0.5f, -0.3f, -0.05f),
-                    color = Color.White,
-                    intensity = if (isDark) 0.7f else 1f,
-                ),
-                secondaryLight = LightSource(
-                    position = LightPosition(0.5f, 0.8f, -0.5f),
-                    color = Color.White,
-                    intensity = 0.35f,
-                ),
-                dualPeak = true,
-            ),
-        )
-    }
+    // 玻璃镜面高光（深浅自适应）：官方同款双峰 Bloom 边缘水光
+    val glassHighlight = remember(isDark) { defaultKewuHighlight(isDark) }
     val tintAlpha = 0.22f * condense
 
     Box(Modifier.fillMaxSize()) {
@@ -297,20 +281,29 @@ fun LoginScreen(onLogin: () -> Unit) {
                                 label = "loginFields",
                             ) { m ->
                                 Column(Modifier.fillMaxWidth()) {
-                                    if (m == 1) {
-                                        LoginField("姓名", name, KeyboardType.Text) { name = it }
-                                        Spacer(Modifier.height(12.dp))
-                                    }
-                                    LoginField(if (m == 0) "学号 / 账号" else "学号", account, KeyboardType.Number) { account = it }
+                                    // 登录态：仅「学号 + 密码」两字段（用户要求精简）
+                                    MiuixField(
+                                        title = "学号",
+                                        value = account,
+                                        keyboardType = KeyboardType.Number,
+                                        onValueChange = { account = it },
+                                    )
                                     Spacer(Modifier.height(12.dp))
+                                    MiuixField(
+                                        title = "密码",
+                                        value = pwd,
+                                        keyboardType = KeyboardType.Password,
+                                        password = true,
+                                        onValueChange = { pwd = it },
+                                    )
+                                    // 注册态：展开其余字段
                                     if (m == 1) {
-                                        LoginField("学校", school, KeyboardType.Text) { school = it }
                                         Spacer(Modifier.height(12.dp))
-                                    }
-                                    LoginField("密码", pwd, KeyboardType.Password, true) { pwd = it }
-                                    if (m == 1) {
+                                        MiuixField("姓名", name, KeyboardType.Text) { name = it }
                                         Spacer(Modifier.height(12.dp))
-                                        LoginField("确认密码", pwd2, KeyboardType.Password, true) { pwd2 = it }
+                                        MiuixField("学校", school, KeyboardType.Text) { school = it }
+                                        Spacer(Modifier.height(12.dp))
+                                        MiuixField("确认密码", pwd2, KeyboardType.Password, password = true) { pwd2 = it }
                                     }
                                 }
                             }
@@ -545,190 +538,98 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
     }
 }
 
-/** 表单输入行：标签 + 圆角输入框（M3 surfaceVariant 底，置于玻璃卡内）。focus 时三路联动动画。 */
+/**
+ * 仿 MIUI / ColorOS（coui 基于 ColorOS 16）的卡片式输入框 InputView：
+ * 白底（亮色纯白 / 暗色 surface 浅色）、圆角 14dp、左侧竖排小标题 + 右侧输入、
+ * 末尾「清除」按钮（有内容时）与密码「可见/隐藏」切换（Lock 图标，core 无 Visibility）。
+ * focus 时左标题与边框转为品牌蓝，复刻 MIUI 输入聚焦反馈。
+ */
 @Composable
-private fun LoginField(
-    label: String,
+private fun MiuixField(
+    title: String,
     value: String,
-    type: KeyboardType,
+    keyboardType: KeyboardType = KeyboardType.Text,
     password: Boolean = false,
     onValueChange: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     var focused by remember { mutableStateOf(false) }
-    val lifted = focused || value.isNotEmpty()
+    var pwdVisible by remember { mutableStateOf(false) }
+
+    val titleColor by animateColorAsState(
+        targetValue = if (focused) KewuBlue else cs.onSurfaceVariant,
+        animationSpec = tween(200),
+        label = "miuixTitle",
+    )
+    val cardColor = if (cs.background.isLight()) Color.White else cs.surface
+    // MIUI 输入框：蓝色线条（常驻淡蓝、聚焦实蓝），白底、极大圆角、框较长
     val borderColor by animateColorAsState(
-        targetValue = if (focused) cs.primary else cs.surfaceVariant,
-        animationSpec = tween(240),
-        label = "fieldBorder",
+        targetValue = if (focused) KewuBlue else KewuBlue.copy(alpha = 0.35f),
+        animationSpec = tween(200),
+        label = "miuixBorder",
     )
-    val bgColor by animateColorAsState(
-        targetValue = if (focused) cs.primary.copy(alpha = 0.10f) else cs.surfaceVariant.copy(alpha = 0.9f),
-        animationSpec = tween(240),
-        label = "fieldBg",
-    )
-    val labelColor by animateColorAsState(
-        targetValue = if (focused) cs.primary else cs.onSurfaceVariant,
-        animationSpec = tween(240),
-        label = "fieldLabel",
-    )
-    val lift by animateFloatAsState(
-        targetValue = if (lifted) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.7f, stiffness = 500f),
-        label = "fieldLift",
-    )
-    Column(Modifier.fillMaxWidth()) {
-        Text(
-            label, color = labelColor,
-            fontSize = lerp(12.5f, 11f, lift).sp,
-            fontWeight = if (lifted) FontWeight.Medium else FontWeight.Normal,
-            modifier = Modifier
-                .padding(bottom = 6.dp)
-                .offset { IntOffset(0, (-2f).dp.roundToPx()) },
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(bgColor)
-                .border(if (lift > 0.01f) (1f + 0.5f * lift).dp else 1.dp, borderColor, RoundedCornerShape(12.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
+
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(cardColor)
+            .border(1.4.dp, borderColor, RoundedCornerShape(18.dp))
+            .padding(horizontal = 18.dp, vertical = 15.dp),
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
+            Text(
+                title,
+                color = titleColor,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier.width(52.dp),
+            )
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = type),
-                visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                visualTransformation = if (password && !pwdVisible) PasswordVisualTransformation() else VisualTransformation.None,
                 textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp),
                 modifier = Modifier
-                    .fillMaxWidth()
+                    .weight(1f)
                     .onFocusChanged { focused = it.isFocused },
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth()) {
                         if (value.isEmpty()) {
-                            Text(label, color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 15.sp)
+                            Text("请输入$title", color = cs.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 15.sp)
                         }
                         inner()
                     }
                 },
             )
+            if (value.isNotEmpty()) {
+                if (password) {
+                    FieldIcon(AppIcons.Lock, cs.onSurfaceVariant) { pwdVisible = !pwdVisible }
+                } else {
+                    FieldIcon(AppIcons.Clear, cs.onSurfaceVariant) { onValueChange("") }
+                }
+            } else if (password) {
+                FieldIcon(AppIcons.Lock, cs.onSurfaceVariant) { pwdVisible = !pwdVisible }
+            }
         }
     }
 }
 
-/** 扩展：判断一个 [Color] 是否更偏亮（用于深浅主题近似判定）。 */
-private fun Color.isLight(): Boolean {
-    val lum = 0.2126f * red + 0.7152f * green + 0.0722f * blue
-    return lum > 0.5f
-}
-
-/**
- * 圆角折射透镜（改编自官方 coui `component.liquid.Lens` 的 SDF 折射 shader，Apache-2.0）。
- *
- * 官方 `lens()` 位于 `coui-ui` 模块，本项目仅依赖 `coui-blur`，故在此本地复刻等价实现：
- * 在玻璃圆角区域的近边缘带，按"距边缘深度"把采样坐标沿法线方向外推，形成 iOS/ColorOS 液态玻璃
- * 那种边缘把身后内容"掰弯"的折射感。纯 `runtimeShaderEffect`（draw 期着色器），可安全随动。
- */
-private fun BackdropEffectScope.refractionLens(
-    refractionHeight: Float,
-    refractionAmount: Float,
-) {
-    if (refractionHeight <= 0f || refractionAmount <= 0f) return
-    if (padding < refractionAmount) padding = refractionAmount
-
-    val radii = roundedRectCornerRadii() ?: return
-    val sf = downscaleFactor.coerceAtLeast(1).toFloat()
-    val scaledSizeW = size.width / sf
-    val scaledSizeH = size.height / sf
-    val scaledPadding = padding / sf
-    val scaledRefractionHeight = refractionHeight / sf
-    val scaledRefractionAmount = refractionAmount / sf
-    val scaledRadii = FloatArray(radii.size) { radii[it] / sf }
-
-    runtimeShaderEffect(
-        key = "KewuGlassLens",
-        shaderString = ROUNDED_RECT_REFRACTION_SHADER,
-        uniformShaderName = "content",
+/** 轻量图标按钮（无波纹，置于输入框末尾）。 */
+@Composable
+private fun FieldIcon(image: ImageVector, tint: Color, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(CircleShape)
+            .clickable { onClick() },
+        contentAlignment = Alignment.Center,
     ) {
-        setFloatUniform("size", scaledSizeW, scaledSizeH)
-        setFloatUniform("offset", -scaledPadding, -scaledPadding)
-        setFloatUniform("cornerRadii", scaledRadii)
-        setFloatUniform("refractionHeight", scaledRefractionHeight)
-        setFloatUniform("refractionAmount", -scaledRefractionAmount)
-        setFloatUniform("depthEffect", 0f)
+        Icon(image, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
     }
 }
-
-private fun BackdropEffectScope.roundedRectCornerRadii(): FloatArray? {
-    val cornerShape = shape as? androidx.compose.foundation.shape.CornerBasedShape ?: return null
-    val sizePx = size
-    val maxRadius = sizePx.minDimension / 2f
-    val isLtr = layoutDirection == androidx.compose.ui.unit.LayoutDirection.Ltr
-    val topLeft = if (isLtr) cornerShape.topStart.toPx(sizePx, this) else cornerShape.topEnd.toPx(sizePx, this)
-    val topRight = if (isLtr) cornerShape.topEnd.toPx(sizePx, this) else cornerShape.topStart.toPx(sizePx, this)
-    val bottomRight = if (isLtr) cornerShape.bottomEnd.toPx(sizePx, this) else cornerShape.bottomStart.toPx(sizePx, this)
-    val bottomLeft = if (isLtr) cornerShape.bottomStart.toPx(sizePx, this) else cornerShape.bottomEnd.toPx(sizePx, this)
-    return floatArrayOf(
-        topLeft.coerceAtMost(maxRadius),
-        topRight.coerceAtMost(maxRadius),
-        bottomRight.coerceAtMost(maxRadius),
-        bottomLeft.coerceAtMost(maxRadius),
-    )
-}
-
-private const val ROUNDED_RECT_SDF = """
-float radiusAt(float2 coord, float4 radii) {
-    if (coord.x >= 0.0) {
-        if (coord.y <= 0.0) return radii.y;
-        else return radii.z;
-    } else {
-        if (coord.y <= 0.0) return radii.x;
-        else return radii.w;
-    }
-}
-float sdRoundedRect(float2 coord, float2 halfSize, float radius) {
-    float2 cornerCoord = abs(coord) - (halfSize - float2(radius));
-    float outside = length(max(cornerCoord, 0.0)) - radius;
-    float inside = min(max(cornerCoord.x, cornerCoord.y), 0.0);
-    return outside + inside;
-}
-float2 gradSdRoundedRect(float2 coord, float2 halfSize, float radius) {
-    float2 cornerCoord = abs(coord) - (halfSize - float2(radius));
-    if (cornerCoord.x >= 0.0 || cornerCoord.y >= 0.0) {
-        return sign(coord) * normalize(max(cornerCoord, 0.0));
-    } else {
-        float gradX = step(cornerCoord.y, cornerCoord.x);
-        return sign(coord) * float2(gradX, 1.0 - gradX);
-    }
-}
-"""
-
-private const val ROUNDED_RECT_REFRACTION_SHADER = """
-uniform shader content;
-uniform float2 size;
-uniform float2 offset;
-uniform float4 cornerRadii;
-uniform float refractionHeight;
-uniform float refractionAmount;
-uniform float depthEffect;
-$ROUNDED_RECT_SDF
-float circleMap(float x) {
-    return 1.0 - sqrt(1.0 - x * x);
-}
-half4 main(float2 coord) {
-    float2 halfSize = size * 0.5;
-    float2 centeredCoord = (coord + offset) - halfSize;
-    float radius = radiusAt(coord, cornerRadii);
-    float sd = sdRoundedRect(centeredCoord, halfSize, radius);
-    if (-sd >= refractionHeight) {
-        return content.eval(coord);
-    }
-    sd = min(sd, 0.0);
-    float d = circleMap(1.0 - -sd / refractionHeight) * refractionAmount;
-    float gradRadius = min(radius * 1.5, min(halfSize.x, halfSize.y));
-    float2 grad = normalize(gradSdRoundedRect(centeredCoord, halfSize, gradRadius) + depthEffect * normalize(centeredCoord));
-    float2 refractedCoord = coord + d * grad;
-    return content.eval(refractedCoord);
-}
-"""

@@ -2,6 +2,8 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
@@ -17,6 +19,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -35,6 +38,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
@@ -51,7 +55,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.KewuGreen
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import kotlinx.coroutines.delay
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
@@ -118,6 +123,30 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
 
 // ───────────────────────── 主页：资料头 + 功能列表 ─────────────────────────
 
+/**
+ * 仿 MIUI / coui 的错峰进场：元素从下方上浮归位，按 [index] 级联。
+ * - 玻璃卡（[glass]=true）：只做 placement 位移，**不**叠 alpha/graphicsLayer（coui 采样者被包裹
+ *   有首帧 SIGSEGV 风险）；
+ * - 普通元素：位移 + alpha 淡入，观感是「内容逐层落位」。
+ * 首次组合触发（切到「我的」tab 时 MyHome 重新挂载即播放）。
+ */
+@Composable
+private fun Modifier.myEnter(index: Int, glass: Boolean = false): Modifier {
+    var target by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) { delay((index * 55L).coerceAtMost(520L)); target = 1f }
+    val p by animateFloatAsState(
+        // 低阻尼弹簧 → 落位时轻微过冲再回弹（用户要求的「有回弹」手感）
+        targetValue = target,
+        animationSpec = spring(dampingRatio = 0.55f, stiffness = 380f),
+        label = "myEnter$index",
+    )
+    return if (glass) {
+        this.offset { IntOffset(0, ((1f - p) * 26f).dp.roundToPx()) }
+    } else {
+        this.offset { IntOffset(0, ((1f - p) * 26f).dp.roundToPx()) }.alpha(p.coerceIn(0f, 1f))
+    }
+}
+
 @Composable
 private fun MyHome(
     profile: UserProfile,
@@ -150,7 +179,7 @@ private fun MyHome(
         Spacer(Modifier.height(12.dp))
 
         // 资料头：液态玻璃大卡，头像 + 名字 + 学号 + 学校/班级 + 编辑入口
-        LiquidGlassSurface(
+        KewuGlassCard(
             backdrop = backdrop,
             shape = RoundedCornerShape(20.dp),
             blurRadius = 22.dp,
@@ -158,7 +187,8 @@ private fun MyHome(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
-                .padding(bottom = 12.dp),
+                .padding(bottom = 12.dp)
+                .myEnter(0, glass = true),
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(18.dp),
@@ -211,26 +241,26 @@ private fun MyHome(
         }
 
         // 分组标题
-        GroupLabel("校园功能")
+        GroupLabel("校园功能", Modifier.myEnter(1))
         // 功能列表（squircle 行，可点进子页 / 留作占位）
-        FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onEdit /* 占位：接课表绑定 */)
-        FuncRow(1, "录音管理", "查看本地录音、手动重传", backdrop, onClick = onRecording)
-        FuncRow(2, "通知设置", "签到提醒、纪要推送", backdrop, onClick = {})
-        FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = {})
+        FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onEdit /* 占位：接课表绑定 */, modifier = Modifier.myEnter(2))
+        FuncRow(1, "录音管理", "查看本地录音、手动重传", backdrop, onClick = onRecording, modifier = Modifier.myEnter(3))
+        FuncRow(2, "通知设置", "签到提醒、纪要推送", backdrop, onClick = {}, modifier = Modifier.myEnter(4))
+        FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = {}, modifier = Modifier.myEnter(5))
 
         Spacer(Modifier.height(14.dp))
-        GroupLabel("账号")
+        GroupLabel("账号", Modifier.myEnter(6))
         // 退出登录：玻璃按钮 + 错误色文字（不造背景色，用 error 语义）
-        LiquidGlassSurface(
+        KewuGlassCard(
             backdrop = backdrop,
             shape = RoundedCornerShape(16.dp),
             blurRadius = 18.dp,
             tintAlpha = 0.26f,
+            onClick = onLogout,
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
-                .clip(RoundedCornerShape(16.dp))
-                .clickable { onLogout() },
+                .myEnter(7, glass = true),
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 15.dp, horizontal = 18.dp),
@@ -246,10 +276,10 @@ private fun MyHome(
 }
 
 @Composable
-private fun GroupLabel(text: String) {
+private fun GroupLabel(text: String, modifier: Modifier = Modifier) {
     Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
         fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 }
 
 /** Mishka 风格功能行：图标 + 标题 + 副标题 + 右侧箭头（›）。点击整行。 */
@@ -260,10 +290,11 @@ private fun FuncRow(
     subtitle: String,
     backdrop: LayerBackdrop,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 10.dp)
@@ -328,25 +359,23 @@ private fun EditProfilePage(
             Spacer(Modifier.width(10.dp))
             Text("编辑资料", color = cs.onSurface, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.weight(1f))
-            LiquidGlassSurface(
+            KewuGlassCard(
                 backdrop = backdrop,
                 shape = RoundedCornerShape(14.dp),
                 blurRadius = 16.dp,
                 tintAlpha = 0.3f,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .clickable {
-                        onSave(
-                            profile.copy(
-                                name = name.trim().ifEmpty { profile.name },
-                                studentId = studentId.trim(),
-                                school = school.trim(),
-                                className = className.trim(),
-                                phone = phone.trim(),
-                                email = email.trim(),
-                            ),
-                        )
-                    },
+                onClick = {
+                    onSave(
+                        profile.copy(
+                            name = name.trim().ifEmpty { profile.name },
+                            studentId = studentId.trim(),
+                            school = school.trim(),
+                            className = className.trim(),
+                            phone = phone.trim(),
+                            email = email.trim(),
+                        ),
+                    )
+                },
             ) {
                 Text("保存", color = cs.primary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 9.dp))
@@ -473,7 +502,7 @@ private fun RecordingManagePage(backdrop: LayerBackdrop, onBack: () -> Unit) {
             Spacer(Modifier.height(8.dp))
             // 概览玻璃头：总录音数 + 待重传数
             val failed = items.count { it.status == "失败" }
-            LiquidGlassSurface(
+            KewuGlassCard(
                 backdrop = backdrop,
                 shape = RoundedCornerShape(16.dp),
                 blurRadius = 20.dp,

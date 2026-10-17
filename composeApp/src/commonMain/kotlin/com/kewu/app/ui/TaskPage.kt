@@ -44,7 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp as floatLerp
 import com.kewu.app.KewuGreen
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import kotlinx.coroutines.launch
@@ -130,25 +130,30 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
             Spacer(Modifier.height(12.dp))
 
             // coui 玻璃汇总卡：本周待交数 + 完成进度环（M3 进度环，spring 跟随）
-            // 「N 项」数字在数量变化时来一次小脉冲（1 → 1.1 → 1），把"又少一项"演出来
+            // 「N 项」数字在**用户完成/取消**导致数量变化时来一次小脉冲（1 → 1.1 → 1），把"又少一项"演出来；
+            // 首次进入页面**不**脉冲（否则一打开数字就跳一下，观感像 bug）。
             val progress by animateFloatAsState(
                 targetValue = if (tasks.isEmpty()) 0f else done.size.toFloat() / tasks.size,
                 animationSpec = spring(dampingRatio = 0.6f, stiffness = 300f),
                 label = "taskProgress",
             )
             val pendingPulse = remember { Animatable(1f) }
+            val prevPending = remember { mutableStateOf(pending.size) }
             LaunchedEffect(pending.size) {
-                if (pendingPulse.value != 1f) pendingPulse.snapTo(1f)
-                launch {
-                    pendingPulse.animateTo(1.1f, tween(durationMillis = 90, easing = androidx.compose.animation.core.FastOutSlowInEasing))
-                    pendingPulse.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 420f))
+                if (prevPending.value != pending.size) {
+                    prevPending.value = pending.size
+                    pendingPulse.snapTo(1f)
+                    launch {
+                        pendingPulse.animateTo(1.1f, tween(durationMillis = 90, easing = androidx.compose.animation.core.FastOutSlowInEasing))
+                        pendingPulse.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 420f))
+                    }
                 }
             }
-            LiquidGlassSurface(
+            KewuGlassCard(
                 backdrop = pageBackdrop,
                 shape = RoundedCornerShape(16.dp),
                 blurRadius = 20.dp,
-                tintAlpha = 0.3f,
+                tintAlpha = 0.30f,
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 12.dp),
