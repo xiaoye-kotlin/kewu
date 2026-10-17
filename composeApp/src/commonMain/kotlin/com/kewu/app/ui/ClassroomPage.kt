@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -7,6 +8,9 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -40,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
@@ -58,7 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.kewu.app.KewuGreen
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
@@ -130,7 +135,7 @@ private fun mockHistory(): List<Course> = listOf(
  * 是**负数**，`(-4.4e-8).pow(0.5)` = `NaN`，一个 NaN 点就能让整条 Path 作废 ——
  * `drawPath` 什么都不画、也不抛异常，表现成「卡片整块空白但文字/图标正常」。
  */
-private fun squirclePath(w: Float, h: Float, r: Float): Path {
+internal fun squirclePath(w: Float, h: Float, r: Float): Path {
     val path = Path()
     val steps = 16
     val halfPi = 3.1415927f / 2f
@@ -172,7 +177,7 @@ private fun squirclePath(w: Float, h: Float, r: Float): Path {
  * 所以这里走 `drawBehind` + `DrawScope.drawPath`（纯 Canvas 绘制链路，稳定），
  * 越界内容（超大水印）交给 `clipToBounds()`（矩形 outline，RenderNode 支持）。
  */
-private fun Modifier.squircleCard(radius: Dp, color: Color): Modifier =
+internal fun Modifier.squircleCard(radius: Dp, color: Color): Modifier =
     this.drawBehind {
         val half = if (size.width < size.height) size.width / 2f else size.height / 2f
         drawPath(squirclePath(size.width, size.height, radius.toPx().coerceAtMost(half)), color)
@@ -195,7 +200,7 @@ private fun Modifier.squircleCard(radius: Dp, color: Color): Modifier =
  * ② 课程卡「已总结」徽章；③ 课程卡「失败」徽章（`cross = true`）。
  */
 @Composable
-private fun ThreeQuarterCheck(
+internal fun ThreeQuarterCheck(
     size: Dp,
     color: Color,
     modifier: Modifier = Modifier,
@@ -246,14 +251,9 @@ private fun ThreeQuarterCheck(
  *
  * @param onGoToTab 跳转到主界面某个 tab（头像 → 「我的」= 3）
  * @param onNavHide 滚动方向回调：true = 向下浏览（收起底部导航栏），false = 回顶（展开）
- * @param onOpenRecorder 打开录音测试页（简陋版，验证后台上传接口用）
  */
 @Composable
-fun ClassroomPage(
-    onGoToTab: (Int) -> Unit,
-    onNavHide: (Boolean) -> Unit,
-    onOpenRecorder: () -> Unit = {},
-) {
+fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var showAll by remember { mutableStateOf(false) }
     val today = remember { mockToday() }
     val history = remember { mockHistory() }
@@ -285,6 +285,10 @@ fun ClassroomPage(
         }
     }
 
+    // 课堂主页 ⇄ 课表页：由「今日课程」小卡进入。状态提升到本页，切走 tab 再回来会重置
+    // （课表是「查看排课」的一次性入口，不需要跨 tab 保留）。
+    var showTimetable by remember { mutableStateOf(false) }
+
     Box(Modifier.fillMaxSize()) {
         // 背景层：M3 默认背景色，是玻璃的采样源
         Box(
@@ -293,20 +297,72 @@ fun ClassroomPage(
                 .layerBackdrop(pageBackdrop)
                 .background(MaterialTheme.colorScheme.background),
         )
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(bottom = 96.dp),
-        ) {
-            Spacer(Modifier.height(12.dp))
-            GreetingBar(name = "刘宇豪") { onGoToTab(3) }
-            StatusSection(courses)
-            if (recording) RecordingOverlay(devices, pageBackdrop)
-            RecorderEntryCard(onOpenRecorder)
-            courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
-            MoreBar(showAll) { showAll = !showAll }
-            Spacer(Modifier.height(24.dp))
+        // M3 共享轴（横向推入）。注意：**只用 slide、不加 fade** —— fade 会给玻璃子树
+        // 套 alpha 离屏层，课表页里的 coui 玻璃日条首帧有 RenderThread SIGSEGV 风险
+        // （coui 采样者必须留在被采样层之外，且不能被 alpha/graphicsLayer 包裹）。
+        AnimatedContent(
+            targetState = showTimetable,
+            transitionSpec = {
+                if (targetState) {
+                    slideInHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
+                        slideOutHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
+                } else {
+                    slideInHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
+                        slideOutHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> w }
+                }
+            },
+            modifier = Modifier.fillMaxSize(),
+            label = "classroomTimetable",
+        ) { timetable ->
+            if (timetable) {
+                TimetablePage(onBack = { showTimetable = false }, onNavHide = onNavHide)
+            } else {
+                Column(
+                    Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scrollState)
+                        .padding(bottom = 96.dp),
+                ) {
+                    // 首次进场（开 app / 切回课堂 tab）：问候栏、状态区、录音浮层错峰落位。
+                    // ★ 只位移 + 对非玻璃元素用 alpha；录音浮层是 coui 采样者，只用位移。
+                    var appeared by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) { appeared = true }
+                    // enterProgress 返回 Float 非 State，不能用 by 委托
+                    val greetP = enterProgress(appeared, delayMs = 60)
+                    val statusP = enterProgress(appeared, delayMs = 160)
+                    val recP = enterProgress(appeared, delayMs = 260)
+                    Spacer(Modifier.height(12.dp))
+                    Box(
+                        Modifier
+                            .offset { IntOffset(0, ((1f - greetP) * 16f).dp.roundToPx()) }
+                            .alpha(greetP),
+                    ) {
+                        GreetingBar(name = "刘宇豪") { onGoToTab(3) }
+                    }
+                    Box(
+                        Modifier
+                            .offset { IntOffset(0, ((1f - statusP) * 16f).dp.roundToPx()) }
+                            .alpha(statusP),
+                    ) {
+                        StatusSection(
+                            courses = courses,
+                            // 只数「今天」的课（time 为 HH:mm 的才是今天；明天/昨天/前天不计），
+                            // 与课表页今天的 3 节对齐
+                            todayCount = today.count { it.time.length == 5 && it.time[2] == ':' },
+                            onTodayCourses = { showTimetable = true },
+                            onHomework = { onGoToTab(2) },
+                        )
+                    }
+                    if (recording) Box(
+                        Modifier.offset { IntOffset(0, ((1f - recP) * 16f).dp.roundToPx()) },
+                    ) {
+                        RecordingOverlay(devices, pageBackdrop)
+                    }
+                    courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
+                    MoreBar(showAll) { showAll = !showAll }
+                    Spacer(Modifier.height(24.dp))
+                }
+            }
         }
     }
 }
@@ -365,9 +421,18 @@ private fun Avatar(onAvatar: () -> Unit) {
 /**
  * 左：大状态卡（超大水印「大半圆+绿勾」+ 状态标题 + 两行副文本）
  * 右：两张堆叠小卡（标签 13.sp + 数值 20.sp Bold）—— 对齐 Mishka 的 statusSection。
+ *
+ * @param todayCount 今日课程数（不随「查看全部」展开变化）
+ * @param onTodayCourses 点「今日课程」→ 进课表页看排课
+ * @param onHomework 点「作业待交」→ 跳任务 tab
  */
 @Composable
-private fun StatusSection(courses: List<Course>) {
+private fun StatusSection(
+    courses: List<Course>,
+    todayCount: Int,
+    onTodayCourses: () -> Unit,
+    onHomework: () -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     val live = courses.firstOrNull { it.status == CourseStatus.LIVE }
     val done = courses.count { it.status == CourseStatus.DONE }
@@ -424,36 +489,66 @@ private fun StatusSection(courses: List<Course>) {
             }
         }
 
-        // 右侧两张堆叠小卡
+        // 右侧两张堆叠小卡（均可点：进课表 / 跳任务页）
         Column(Modifier.weight(1f).fillMaxHeight()) {
             MiniStatCard(
                 label = "今日课程",
-                value = "${courses.size}",
+                value = "$todayCount",
                 modifier = Modifier.fillMaxWidth().weight(1f),
+                onClick = onTodayCourses,
             )
             Spacer(Modifier.height(12.dp))
             MiniStatCard(
                 label = "作业待交",
-                value = "${courses.count { it.status == CourseStatus.DONE && it.homework }}",
+                value = "3", // mock：与任务页「本周待交」对齐
                 modifier = Modifier.fillMaxWidth().weight(1f),
+                onClick = onHomework,
             )
         }
     }
 }
 
+/**
+ * Mishka 堆叠小卡：标签 + 大数值。
+ * [onClick] 非空时整卡可点，并在右侧画一个小箭头提示「可进入」。
+ */
 @Composable
-private fun MiniStatCard(label: String, value: String, modifier: Modifier = Modifier) {
+private fun MiniStatCard(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+) {
     val cs = MaterialTheme.colorScheme
     Box(
         modifier
             .squircleCard(16.dp, cs.surfaceVariant)
+            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
             .padding(16.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Column {
-            Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
-            Spacer(Modifier.height(2.dp))
-            Text(value, color = cs.onSurface, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                Spacer(Modifier.height(2.dp))
+                Text(value, color = cs.onSurface, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+            }
+            if (onClick != null) {
+                Spacer(Modifier.width(6.dp))
+                // 右侧小箭头（›）：弱提示「这张卡可以点」
+                Canvas(Modifier.size(13.dp)) {
+                    val sw = size.width * 0.14f
+                    val p = Path().apply {
+                        moveTo(size.width * 0.35f, size.height * 0.2f)
+                        lineTo(size.width * 0.65f, size.height * 0.5f)
+                        lineTo(size.width * 0.35f, size.height * 0.8f)
+                    }
+                    drawPath(
+                        p, cs.onSurfaceVariant,
+                        style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                    )
+                }
+            }
         }
     }
 }
@@ -464,7 +559,7 @@ private fun MiniStatCard(label: String, value: String, modifier: Modifier = Modi
 private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBackdrop) {
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
-    LiquidGlassSurface(
+    KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
         blurRadius = 20.dp,
@@ -472,9 +567,8 @@ private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBack
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .padding(bottom = 12.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable { expanded = !expanded },
+            .padding(bottom = 12.dp),
+        onClick = { expanded = !expanded },
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -541,49 +635,11 @@ private fun Waveform() {
     }
 }
 
-// ───────────────────────── 录音测试入口 ─────────────────────────
-
-/** 首页的录音测试入口：点进去是简陋版录音页，专门给后台上传接口做联调 */
-@Composable
-private fun RecorderEntryCard(onOpen: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 12.dp)
-            .squircleCard(16.dp, cs.primaryContainer)
-            .clickable { onOpen() }
-            .padding(16.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 红点 = 录音的语义
-        Box(
-            Modifier.size(34.dp).clip(CircleShape).background(cs.error),
-            contentAlignment = Alignment.Center,
-        ) {
-            Box(Modifier.size(12.dp).clip(CircleShape).background(Color.White))
-        }
-        Spacer(Modifier.width(13.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                "录音测试", color = cs.onPrimaryContainer,
-                fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-            )
-            Text(
-                "录一段音频上传到后端，验证接口通不通", color = cs.onPrimaryContainer.copy(alpha = 0.7f),
-                fontSize = 13.sp, maxLines = 1,
-            )
-        }
-        Text("›", color = cs.onPrimaryContainer, fontSize = 22.sp)
-    }
-}
-
 // ───────────────────────── 课程卡片流 ─────────────────────────
 
 @Composable
 private fun CourseCard(course: Course, backdrop: LayerBackdrop, index: Int) {
-    LiquidGlassSurface(
+    KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
         blurRadius = 20.dp,
@@ -734,7 +790,7 @@ private fun MetaText(text: String) {
 
 /** Mishka 风格小标签：胶囊底 + 对应 on 色文字。 */
 @Composable
-private fun StatusTag(label: String, background: Color, content: Color) {
+internal fun StatusTag(label: String, background: Color, content: Color) {
     Box(
         Modifier
             .clip(RoundedCornerShape(8.dp))
@@ -770,7 +826,7 @@ private fun MoreBar(showAll: Boolean, onClick: () -> Unit) {
 // 而 coui 的 drawBackdrop 要把 backdrop 层映射到子树内，首帧极易算出非法尺寸导致
 // RenderThread SIGSEGV。所以入场只做位移。
 @Composable
-private fun Modifier.cardEnter(index: Int): Modifier {
+internal fun Modifier.cardEnter(index: Int): Modifier {
     var target by remember { mutableStateOf(0f) }
     LaunchedEffect(Unit) { delay((index * 35L).coerceAtMost(400L)); target = 1f }
     val p by animateFloatAsState(

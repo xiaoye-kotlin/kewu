@@ -62,7 +62,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.MaterialTheme
 import com.kewu.app.KewuBlue
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
@@ -93,7 +93,10 @@ private val NAV_ITEMS = listOf(
 )
 
 @Composable
-fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
+fun MainScreen(
+    onGoToTab: (Int) -> Unit = {},
+    onLogout: () -> Unit = {},
+) {
     var selected by remember { mutableStateOf(0) }
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
@@ -101,6 +104,13 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
     var showRecorder by remember { mutableStateOf(false) }
     // 向下浏览内容时收起底部导航栏（课堂页滚动时回调），回到顶部自动展开
     var navHidden by remember { mutableStateOf(false) }
+    // ★ 泡泡中心 / tab 宽度提升到本层：页内入口（作业待交→任务、头像→我的）也要能驱动
+    //   泡泡滑行。此前 centerAnim 藏在导航栏内部，goToTab 只改 selected/preview 不动它
+    //   → 内容切了、标签高亮了，泡泡却卡在旧 tab（用户实测 bug）。
+    val navScope = rememberCoroutineScope()
+    val tabW = remember { mutableStateOf(0f) }
+    val centerAnim = remember { Animatable(0f) }
+    var tabSwitchJob by remember { mutableStateOf<Job?>(null) } // 内容区 crossfade 动画协程
     // 收起动画：从大到小 + 淡出 + 轻微下沉。低阻尼弹簧（damping 0.42）让它「弹性」消失
     // —— 缩过头再回弹一下，不是线性淡出。
     val navVisible by animateFloatAsState(
@@ -109,6 +119,52 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
         label = "navVisible",
     )
     val backdrop = rememberGlassBackdrop()
+    // 主界面首次入场：TopBar 下滑、内容上浮、导航栏弹起。★ 全部用 placement 位移
+    // （lambda 版 offset = 布局平移，不产生离屏层）—— 内容区/导航栏都是 coui 玻璃
+    // 采样者，套 alpha/graphicsLayer 有首帧 SIGSEGV 风险，只能位移。
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+    val enterT by animateFloatAsState(
+        targetValue = if (entered) 1f else 0f,
+        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+        label = "mainEnter",
+    )
+    // 页内入口跳 tab（课堂页头像 → 「我的」= 3、作业待交 → 「任务」= 2 等）。
+    // ★ 必须在本 Composable 里自己接上：App.kt 只传 onLogout，形参 onGoToTab 默认是
+    //   **空 lambda** —— 不接的话这些点击全部静默无效（实测：作业卡反复点击无反应，
+    //   事件已送达 App 但没人改 selected/preview/previewFloat）。接完再转调外部
+    //   onGoToTab（调用方若有传），内外两边都生效。
+    // ★ 泡泡同步：centerAnim 弹簧滑到目标 tab 中心 —— 滑行中 centerAnim.value 与
+    //   targetCenter 有差 → 导航栏的 active 自动为真 → 泡泡放大、按速度横向拉伸
+    //   （加速度扭曲那套），滑到再缩回，与点选 tab 完全同一套观感。
+    // ★ 内容区 crossfade 也走弹簧动画（previewFloat 连续变化 → 两页 alpha 混合），
+    //   与拖拽跟手复用同一机制（实测无 coui SIGSEGV）；拖拽直写 previewFloat 不受影响。
+    val goToTab: (Int) -> Unit = { idx ->
+        if (idx in NAV_ITEMS.indices) {
+            selected = idx
+            preview = idx
+            navHidden = false // 切 tab 时一律把导航栏放出来
+            if (tabW.value > 0f) {
+                navScope.launch {
+                    centerAnim.animateTo(
+                        targetValue = idx * tabW.value + tabW.value / 2f,
+                        animationSpec = spring(dampingRatio = 0.62f, stiffness = 380f),
+                    )
+                }
+            }
+            tabSwitchJob?.cancel()
+            tabSwitchJob = navScope.launch {
+                val anim = Animatable(previewFloat)
+                anim.animateTo(
+                    targetValue = idx.toFloat(),
+                    animationSpec = spring(dampingRatio = 0.68f, stiffness = 420f),
+                ) {
+                    previewFloat = value
+                }
+            }
+        }
+        onGoToTab(idx)
+    }
     Box(
         Modifier
             .fillMaxSize()
@@ -122,7 +178,12 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
                 .fillMaxSize()
                 .statusBarsPadding(), // 顶部避开状态栏，内容不被状态栏遮挡
         ) {
-            TopBar()
+            TopBar(
+                // 入场：从上方滑下（TopBar 无玻璃采样，alpha 可用）
+                Modifier
+                    .offset { IntOffset(0, ((1f - enterT) * -14f).dp.roundToPx()) }
+                    .alpha(enterT),
+            )
             // 内容区：记录进玻璃层，供底部导航栏采样折射。
             // 用 previewFloat（小数 tab 索引）驱动两页交叉淡入淡出 → 拖拽时丝滑过渡。
             val n = NAV_ITEMS.size
@@ -134,16 +195,18 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .layerBackdrop(backdrop),
+                    .layerBackdrop(backdrop)
+                    // 入场：从下方浮上（placement 位移，不套 layer）
+                    .offset { IntOffset(0, ((1f - enterT) * 20f).dp.roundToPx()) },
             ) {
                 if (f < 0.001f) {
-                    TabContent(NAV_ITEMS[from], onGoToTab, onOpenRecorder = { showRecorder = true }) { navHidden = it }
+                    TabContent(NAV_ITEMS[from], goToTab, onLogout) { navHidden = it }
                 } else {
                     Box(Modifier.fillMaxSize().alpha(1f - f)) {
-                        TabContent(NAV_ITEMS[from], onGoToTab, onOpenRecorder = { showRecorder = true }) { navHidden = it }
+                        TabContent(NAV_ITEMS[from], goToTab, onLogout) { navHidden = it }
                     }
                     Box(Modifier.fillMaxSize().alpha(f)) {
-                        TabContent(NAV_ITEMS[to], onGoToTab, onOpenRecorder = { showRecorder = true }) { navHidden = it }
+                        TabContent(NAV_ITEMS[to], goToTab, onLogout) { navHidden = it }
                     }
                 }
             }
@@ -154,30 +217,53 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
             onSelect = {
                 selected = it
                 preview = it
-                previewFloat = it.toFloat()
                 navHidden = false // 切 tab 时一律把导航栏放出来
+                // 内容区交叉淡入也走弹簧（与泡泡滑行同步）；centerAnim 由 navGestures
+                // 内部驱动，这里不重复动画它。
+                tabSwitchJob?.cancel()
+                tabSwitchJob = navScope.launch {
+                    val anim = Animatable(previewFloat)
+                    anim.animateTo(
+                        targetValue = it.toFloat(),
+                        animationSpec = spring(dampingRatio = 0.68f, stiffness = 420f),
+                    ) {
+                        previewFloat = value
+                    }
+                }
             },
             preview = preview,
             onPreview = { preview = it },
             previewFloat = previewFloat,
-            onPreviewFloat = { previewFloat = it },
+            onPreviewFloat = {
+                // 拖拽跟手：直写 + 取消在途的 tab 切换动画（否则两种驱动互相打架）
+                tabSwitchJob?.cancel()
+                previewFloat = it
+            },
             backdrop = backdrop,
             hidden = navHidden,
+            tabW = tabW,
+            centerAnim = centerAnim,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .scale((0.35f + 0.65f * navVisible).coerceAtLeast(0f))
                 .alpha(navVisible.coerceIn(0f, 1f))
-                .offset(y = ((1f - navVisible) * 14f).dp),
+                // 入场：从屏幕底部弹上来（与收起动画的 offset 合并；都是 placement 位移）
+                .offset {
+                    IntOffset(
+                        0,
+                        (((1f - enterT) * 40f).dp.roundToPx()) + (((1f - navVisible) * 14f).dp.roundToPx()),
+                    )
+                },
         )
         }
     }
 }
 
 @Composable
-private fun TopBar() {
+private fun TopBar(modifier: Modifier = Modifier) {
     val cs = MaterialTheme.colorScheme
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(64.dp)
             .background(cs.surface),
@@ -200,7 +286,7 @@ private fun TopBar() {
 private fun TabContent(
     item: NavItem,
     onGoToTab: (Int) -> Unit,
-    onOpenRecorder: () -> Unit,
+    onLogout: () -> Unit = {},
     onNavHide: (Boolean) -> Unit,
 ) {
     if (item.index == 0) {
@@ -208,6 +294,16 @@ private fun TabContent(
         // 注意：Coui 玻璃的采样者必须在被采样层**之外**，所以 ClassroomPage 内部自己开了一个
         // pageBackdrop（背景层）并让玻璃内容与它平级；这里不需要把导航栏的 backdrop 传进去。
         ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide, onOpenRecorder = onOpenRecorder)
+        return
+    }
+    if (item.index == 2) {
+        // 任务页：课堂页「作业待交」小卡的跳转目标（作业 / 待办列表，可勾选完成）
+        TaskPage(onNavHide = onNavHide)
+        return
+    }
+    if (item.index == 3) {
+        // 我的页：个人主页 + 校园功能入口；点「退出登录」回到启动屏。
+        MyPage(onLogout = onLogout, onNavHide = onNavHide)
         return
     }
     val cs = MaterialTheme.colorScheme
@@ -239,11 +335,12 @@ private fun AppleLiquidGlassNavBar(
     onPreviewFloat: (Float) -> Unit,
     backdrop: LayerBackdrop,
     hidden: Boolean = false,
+    tabW: MutableState<Float>,
+    centerAnim: Animatable<Float, AnimationVector1D>,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
-    val tabW = remember { mutableStateOf(0f) }
     val expanded = remember { mutableStateOf(false) }   // 是否已长按进入「拾取态」
     val dragging = remember { mutableStateOf(false) }   // 拾取态下是否正在滑动
     val settling = remember { mutableStateOf(false) }   // 松手吸合中：立刻由大变小，不等滑行结束
@@ -286,7 +383,8 @@ private fun AppleLiquidGlassNavBar(
     )
     // 泡泡中心：用 Animatable 手动驱动 —— 拖拽时 snapTo 跟手、松手时 animateTo 吸到最近的 tab，
     // 避免 animateFloatAsState 在拖拽中"值过期"导致松手瞬移回旧 tab。
-    val centerAnim = remember { Animatable(0f) }
+    // （Animatable 由 MainScreen 持有并传入：页内入口跳 tab 时也要能驱动它滑行，
+    //   否则泡泡会卡在旧 tab —— 见 MainScreen 里 goToTab 的注释。）
     var centerPositioned by remember { mutableStateOf(false) }
     LaunchedEffect(tabW.value) {
         if (tabW.value > 0f && !centerPositioned) {
@@ -364,7 +462,7 @@ private fun AppleLiquidGlassNavBar(
             .height(containerHeight),
     ) {
         // 1) 底部玻璃胶囊托盘（淡，提供 bar 质感；全圆角无直边）
-        LiquidGlassSurface(
+        KewuGlassCard(
             backdrop = backdrop,
             shape = RoundedCornerShape(33.dp),
             blurRadius = 22.dp,
@@ -427,7 +525,7 @@ private fun AppleLiquidGlassNavBar(
                 //   再由 magnify 把透过来的内容在泡泡里放大 —— 这才是液态玻璃的折射感，
                 //   光靠"淡"只会变成一块看不清内容的灰片。
                 val bubbleActive = expanded.value || tapExpand.value
-                LiquidGlassSurface(
+                KewuGlassCard(
                     backdrop = backdrop,
                     shape = RoundedCornerShape(50),
                     blurRadius = if (bubbleActive) 16.dp else 12.dp,
