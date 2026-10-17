@@ -37,10 +37,15 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -62,9 +67,11 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
@@ -142,6 +149,8 @@ fun LoginScreen(onLogin: () -> Unit) {
     var school by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf(kvGet("kewu_pwd") ?: "") }
     var pwd2 by remember { mutableStateOf("") }
+    // 学校选择器：底部弹层开关（MIUI 风选项 + 模糊搜索）
+    var schoolSheetOpen by remember { mutableStateOf(false) }
     // 登录/注册失败文案（网络异常 / 账号密码错误），成功后清空
     var loginError by remember { mutableStateOf("") }
 
@@ -305,14 +314,15 @@ fun LoginScreen(onLogin: () -> Unit) {
                                         password = true,
                                         onValueChange = { pwd = it },
                                     )
-                                    // 注册态：展开其余字段
+                                    // 注册态：确认密码紧跟密码下方（用户明确要求），再姓名、学校
                                     if (m == 1) {
+                                        Spacer(Modifier.height(12.dp))
+                                        MiuixField("确认密码", pwd2, KeyboardType.Password, password = true) { pwd2 = it }
                                         Spacer(Modifier.height(12.dp))
                                         MiuixField("姓名", name, KeyboardType.Text) { name = it }
                                         Spacer(Modifier.height(12.dp))
-                                        MiuixField("学校", school, KeyboardType.Text) { school = it }
-                                        Spacer(Modifier.height(12.dp))
-                                        MiuixField("确认密码", pwd2, KeyboardType.Password, password = true) { pwd2 = it }
+                                        // ★ 学校改为选择器：点开底部弹层（coui 玻璃 + MIUI 选项 + 模糊搜索）
+                                        SchoolSelectorField(school) { schoolSheetOpen = true }
                                     }
                                 }
                             }
@@ -354,6 +364,16 @@ fun LoginScreen(onLogin: () -> Unit) {
                     Spacer(Modifier.height(12.dp))
                 }
             }
+        }
+
+        // ★ 学校选择底部弹层（coui 玻璃 + MIUI 选项 + 模糊搜索）。
+        //   从底部滑入；点遮罩/选中后滑出关闭。全屏遮罩为普通绘制层（非玻璃），可安全套 alpha。
+        if (schoolSheetOpen) {
+            SchoolPickerSheet(
+                selected = school,
+                onDismiss = { schoolSheetOpen = false },
+                onSelect = { school = it; schoolSheetOpen = false },
+            )
         }
     }
 }
@@ -630,7 +650,9 @@ private fun MiuixField(
             .clip(RoundedCornerShape(18.dp))
             .background(cardColor)
             .border(1.4.dp, borderColor, RoundedCornerShape(18.dp))
-            .padding(horizontal = 18.dp, vertical = 15.dp),
+            // ★ 输入框加长：横向内边距收紧（18→14）让输入区更宽，
+            //   纵向 15→17 让框更高，避免「确认密码」码字被遮住/看不清。
+            .padding(horizontal = 14.dp, vertical = 17.dp),
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -643,7 +665,8 @@ private fun MiuixField(
                 fontWeight = FontWeight.Medium,
                 maxLines = 1,
                 softWrap = false,
-                modifier = Modifier.width(56.dp),
+                // ★ 标签列 56→72dp：「确认密码」四字能完整放下，不再挤压右侧输入区
+                modifier = Modifier.width(72.dp),
             )
             BasicTextField(
                 value = value,
@@ -697,5 +720,221 @@ private fun FieldIcon(image: ImageVector, tint: Color, onClick: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Icon(image, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+// ───────────────────────── 学校选择（底部弹层 · coui 玻璃 · MIUI 风 · 模糊搜索） ─────────────────────────
+
+/**
+ * 注册页「学校」选择字段：与 [MiuixField] 同卡片样式（白底/圆角/蓝色边框），
+ * 但只读不可输入 —— 点击整卡弹出底部选择器（[SchoolPickerSheet]）。
+ * 选中后显示学校名；未选时显示占位「请选择学校」。
+ */
+@Composable
+private fun SchoolSelectorField(value: String, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val cardColor = if (cs.background.isLight()) Color.White else cs.surface
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(18.dp))
+            .background(cardColor)
+            .border(1.4.dp, KewuBlue.copy(alpha = 0.35f), RoundedCornerShape(18.dp))
+            .hapticClickable { onClick() }
+            .padding(horizontal = 14.dp, vertical = 17.dp),
+    ) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("学校", color = cs.onSurfaceVariant, fontSize = 15.sp,
+                fontWeight = FontWeight.Medium, maxLines = 1, softWrap = false,
+                modifier = Modifier.width(72.dp))
+            Text(
+                if (value.isEmpty()) "请选择学校" else value,
+                color = if (value.isEmpty()) cs.onSurfaceVariant.copy(alpha = 0.5f) else cs.onSurface,
+                fontSize = 15.sp, maxLines = 1, modifier = Modifier.weight(1f),
+            )
+            // 下拉箭头（▼）
+            Canvas(Modifier.size(16.dp)) {
+                val s = size.width
+                val p = Path().apply {
+                    moveTo(s * 0.2f, s * 0.38f); lineTo(s * 0.5f, s * 0.66f); lineTo(s * 0.8f, s * 0.38f)
+                }
+                drawPath(p, cs.onSurfaceVariant, style = Stroke(width = s * 0.12f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+            }
+        }
+    }
+}
+
+/**
+ * 学校选择底部弹层：
+ * - 全屏半透明遮罩（点击关闭），底部玻璃卡（coui drawBackdrop）从下方滑入；
+ * - 顶部：标题 + 搜索输入框（MIUI 风：白底圆角 + 放大镜）；
+ * - 列表：模糊搜索（名称/拼音/简写），命中项高亮，未命中显示「使用『xxx』」自由输入兜底；
+ * - 选中行右侧绿勾，点击回填并滑出关闭。
+ *
+ * ★ 安全约束：玻璃卡（coui 采样者）只做 placement 位移滑入，禁套 alpha/graphicsLayer。
+ */
+@Composable
+private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var query by remember { mutableStateOf("") }
+    val listState = rememberLazyListState()
+
+    // 滑入进度（placement 位移，安全）
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val slideP by animateFloatAsState(
+        targetValue = if (shown) 1f else 0f,
+        animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f),
+        label = "schoolSheetSlide",
+    )
+
+    val sheetBackdrop = rememberLayerBackdrop()
+    val isDark = !cs.background.isLight()
+
+    Box(Modifier.fillMaxSize()) {
+        // 遮罩（普通绘制层，点击关闭）——非玻璃，可自由 alpha
+        Box(
+            Modifier
+                .fillMaxSize()
+                .alpha(0.45f)
+                .background(Color.Black)
+                .clickable { onDismiss() },
+        )
+        // 底部玻璃卡：从下方滑入（placement 位移）
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .align(Alignment.BottomCenter)
+                .offset { IntOffset(0, ((1f - slideP) * 900f).dp.roundToPx()) }
+                .drawBackdrop(
+                    backdrop = sheetBackdrop,
+                    shape = { RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp) },
+                    effects = {
+                        colorControls(brightness = 0f, contrast = 1f, saturation = 1.5f)
+                        blur(26.dp.toPx(), 26.dp.toPx())
+                        if (isRuntimeShaderSupported()) {
+                            refractionLens(refractionHeight = 20.dp.toPx(), refractionAmount = 20.dp.toPx())
+                        }
+                    },
+                    highlight = { defaultKewuHighlight(isDark) },
+                    onDrawSurface = {
+                        drawRect(if (isDark) Color.Black.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.30f))
+                    },
+                )
+                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(top = 14.dp, bottom = 18.dp)) {
+                // 顶部抓手（MIUI 风小横条）
+                Box(
+                    Modifier
+                        .align(Alignment.CenterHorizontally)
+                        .width(38.dp)
+                        .height(4.dp)
+                        .clip(CircleShape)
+                        .background(cs.onSurfaceVariant.copy(alpha = 0.4f)),
+                )
+                Spacer(Modifier.height(12.dp))
+                Text("选择学校", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.align(Alignment.CenterHorizontally))
+                Spacer(Modifier.height(12.dp))
+
+                // 搜索框（MIUI 风：白底圆角 + 放大镜）
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(if (isDark) cs.surface else Color.White)
+                        .border(1.2.dp, KewuBlue.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // 放大镜图标
+                        Canvas(Modifier.size(16.dp)) {
+                            val s = size.width
+                            drawCircle(cs.onSurfaceVariant, radius = s * 0.32f, center = Offset(s * 0.38f, s * 0.38f),
+                                style = Stroke(width = s * 0.10f))
+                            drawLine(cs.onSurfaceVariant, Offset(s * 0.62f, s * 0.62f), Offset(s * 0.9f, s * 0.9f),
+                                strokeWidth = s * 0.10f, cap = StrokeCap.Round)
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        BasicTextField(
+                            value = query,
+                            onValueChange = { query = it },
+                            singleLine = true,
+                            textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
+                            modifier = Modifier.weight(1f),
+                            decorationBox = { inner ->
+                                Box(Modifier.fillMaxWidth()) {
+                                    if (query.isEmpty()) {
+                                        Text("搜索学校（名称 / 拼音）", color = cs.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 14.sp)
+                                    }
+                                    inner()
+                                }
+                            },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+
+                // 结果列表（模糊搜索：名称 / 全拼 / 简写）
+                val results = remember(query) { searchUniversities(query) }
+                Box(Modifier.fillMaxWidth().height(320.dp)) {
+                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                        // 未命中时给「自由输入」兜底项（后端 register 接受任意 nickname/school 字符串）
+                        if (results.isEmpty() && query.isNotBlank()) {
+                            item {
+                                SchoolOptionRow(
+                                    name = "使用「${query.trim()}」",
+                                    sub = "未收录，手动指定",
+                                    isSelected = false,
+                                ) { onSelect(query.trim()) }
+                            }
+                        }
+                        itemsIndexed(results) { _, uni ->
+                            SchoolOptionRow(
+                                name = uni.name,
+                                sub = uni.province,
+                                isSelected = uni.name == selected,
+                            ) { onSelect(uni.name) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** MIUI 风选项行：学校名 + 省份（副标题）+ 选中态绿勾；整行可点。 */
+@Composable
+private fun SchoolOptionRow(name: String, sub: String, isSelected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) cs.primaryContainer else Color.Transparent)
+            .hapticClickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 11.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(name, color = cs.onSurface, fontSize = 15.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium, maxLines = 1)
+                if (sub.isNotEmpty()) {
+                    Spacer(Modifier.height(1.dp))
+                    Text(sub, color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
+                }
+            }
+            if (isSelected) {
+                // 选中绿勾（Canvas 两段折线）
+                Canvas(Modifier.size(18.dp)) {
+                    val s = size.width
+                    val p = Path().apply {
+                        moveTo(s * 0.22f, s * 0.52f); lineTo(s * 0.44f, s * 0.72f); lineTo(s * 0.80f, s * 0.30f)
+                    }
+                    drawPath(p, KewuGreen, style = Stroke(width = s * 0.13f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                }
+            }
+        }
     }
 }
