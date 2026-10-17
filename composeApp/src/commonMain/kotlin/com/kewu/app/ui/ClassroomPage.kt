@@ -246,9 +246,14 @@ private fun ThreeQuarterCheck(
  *
  * @param onGoToTab 跳转到主界面某个 tab（头像 → 「我的」= 3）
  * @param onNavHide 滚动方向回调：true = 向下浏览（收起底部导航栏），false = 回顶（展开）
+ * @param onOpenRecorder 打开录音测试页（简陋版，验证后台上传接口用）
  */
 @Composable
-fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
+fun ClassroomPage(
+    onGoToTab: (Int) -> Unit,
+    onNavHide: (Boolean) -> Unit,
+    onOpenRecorder: () -> Unit = {},
+) {
     var showAll by remember { mutableStateOf(false) }
     val today = remember { mockToday() }
     val history = remember { mockHistory() }
@@ -298,6 +303,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             GreetingBar(name = "刘宇豪") { onGoToTab(3) }
             StatusSection(courses)
             if (recording) RecordingOverlay(devices, pageBackdrop)
+            RecorderEntryCard(onOpenRecorder)
             courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
             MoreBar(showAll) { showAll = !showAll }
             Spacer(Modifier.height(24.dp))
@@ -532,6 +538,44 @@ private fun Waveform() {
                 cornerRadius = CornerRadius(bw * 0.25f),
             )
         }
+    }
+}
+
+// ───────────────────────── 录音测试入口 ─────────────────────────
+
+/** 首页的录音测试入口：点进去是简陋版录音页，专门给后台上传接口做联调 */
+@Composable
+private fun RecorderEntryCard(onOpen: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 12.dp)
+            .squircleCard(16.dp, cs.primaryContainer)
+            .clickable { onOpen() }
+            .padding(16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // 红点 = 录音的语义
+        Box(
+            Modifier.size(34.dp).clip(CircleShape).background(cs.error),
+            contentAlignment = Alignment.Center,
+        ) {
+            Box(Modifier.size(12.dp).clip(CircleShape).background(Color.White))
+        }
+        Spacer(Modifier.width(13.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                "录音测试", color = cs.onPrimaryContainer,
+                fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+            )
+            Text(
+                "录一段音频上传到后端，验证接口通不通", color = cs.onPrimaryContainer.copy(alpha = 0.7f),
+                fontSize = 13.sp, maxLines = 1,
+            )
+        }
+        Text("›", color = cs.onPrimaryContainer, fontSize = 22.sp)
     }
 }
 

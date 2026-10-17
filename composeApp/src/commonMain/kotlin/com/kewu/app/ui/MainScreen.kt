@@ -97,6 +97,8 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
     var selected by remember { mutableStateOf(0) }
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
+    // 录音测试页：全屏盖住主界面（返回时再切回来），先做简陋版验证后台上传
+    var showRecorder by remember { mutableStateOf(false) }
     // 向下浏览内容时收起底部导航栏（课堂页滚动时回调），回到顶部自动展开
     var navHidden by remember { mutableStateOf(false) }
     // 收起动画：从大到小 + 淡出 + 轻微下沉。低阻尼弹簧（damping 0.42）让它「弹性」消失
@@ -112,6 +114,9 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background), // 全 app 底色走 M3，不自造色
     ) {
+        if (showRecorder) {
+            RecordingScreen(onBack = { showRecorder = false })
+        } else {
         Column(
             Modifier
                 .fillMaxSize()
@@ -132,13 +137,13 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
                     .layerBackdrop(backdrop),
             ) {
                 if (f < 0.001f) {
-                    TabContent(NAV_ITEMS[from], onGoToTab) { navHidden = it }
+                    TabContent(NAV_ITEMS[from], onGoToTab, onOpenRecorder = { showRecorder = true }) { navHidden = it }
                 } else {
                     Box(Modifier.fillMaxSize().alpha(1f - f)) {
-                        TabContent(NAV_ITEMS[from], onGoToTab) { navHidden = it }
+                        TabContent(NAV_ITEMS[from], onGoToTab, onOpenRecorder = { showRecorder = true }) { navHidden = it }
                     }
                     Box(Modifier.fillMaxSize().alpha(f)) {
-                        TabContent(NAV_ITEMS[to], onGoToTab) { navHidden = it }
+                        TabContent(NAV_ITEMS[to], onGoToTab, onOpenRecorder = { showRecorder = true }) { navHidden = it }
                     }
                 }
             }
@@ -164,6 +169,7 @@ fun MainScreen(onGoToTab: (Int) -> Unit = {}) {
                 .alpha(navVisible.coerceIn(0f, 1f))
                 .offset(y = ((1f - navVisible) * 14f).dp),
         )
+        }
     }
 }
 
@@ -194,13 +200,14 @@ private fun TopBar() {
 private fun TabContent(
     item: NavItem,
     onGoToTab: (Int) -> Unit,
+    onOpenRecorder: () -> Unit,
     onNavHide: (Boolean) -> Unit,
 ) {
     if (item.index == 0) {
         // 课堂主页：大状态卡 + 统计条 + 课程卡片流（仿 KernelSU 主页信息架构）。
         // 注意：Coui 玻璃的采样者必须在被采样层**之外**，所以 ClassroomPage 内部自己开了一个
         // pageBackdrop（背景层）并让玻璃内容与它平级；这里不需要把导航栏的 backdrop 传进去。
-        ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide)
+        ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide, onOpenRecorder = onOpenRecorder)
         return
     }
     val cs = MaterialTheme.colorScheme
