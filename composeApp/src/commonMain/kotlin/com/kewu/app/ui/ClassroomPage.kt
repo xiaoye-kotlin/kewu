@@ -2,6 +2,7 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -48,6 +49,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -325,43 +327,28 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             label = "classroomTimetable",
         ) { timetable ->
             if (timetable) {
+                // 课表页激活时拦截系统返回手势（含屏幕侧滑/底部上滑），回到课堂主页，
+                // 而不是让 Activity 直接 finish 退出 app。
+                BackHandler { showTimetable = false }
                 TimetablePage(onBack = { showTimetable = false }, onNavHide = onNavHide)
             } else {
-                // 首次进场（开 app / 切回课堂 tab）：整页上浮 + 各区块错峰落位。
-                // ★ appeared / homeEnter 必须提到 Column 修饰符**之前**声明：offset {} 是非 Composable
-                //   lambda，不能在里面调 animateFloatAsState；这里只做 placement 位移（玻璃安全）。
-                var appeared by remember { mutableStateOf(false) }
-                LaunchedEffect(Unit) { appeared = true }
-                val homeEnter by animateFloatAsState(
-                    targetValue = if (appeared) 1f else 0f,
-                    animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
-                    label = "homeEnter",
-                )
+                // 首次进场（开 app / 切回课堂 tab）：分块 Mac 式入场，各块修饰符内部自行延迟驱动
+                // （greetIn / macPopIn / cardEnter）。整页不再一起动，避免「上渐显下先出」的割裂感。
                 Column(
                     Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
-                        .padding(bottom = 96.dp)
-                        // ★ 首页 Mac 式整页入场：整页从屏幕下方上浮（placement 位移，玻璃安全）
-                        .offset { IntOffset(0, ((1f - homeEnter) * 56f).dp.roundToPx()) },
+                        .padding(bottom = 96.dp),
                 ) {
-                    // enterProgress 返回 Float 非 State，不能用 by 委托
-                    val greetP = enterProgress(appeared, delayMs = 60)
-                    val statusP = enterProgress(appeared, delayMs = 160)
-                    val recP = enterProgress(appeared, delayMs = 260)
                     Spacer(Modifier.height(12.dp))
-                    Box(
-                        Modifier
-                            .offset { IntOffset(0, ((1f - greetP) * 16f).dp.roundToPx()) }
-                            .alpha(greetP),
-                    ) {
+                    // ★ 首页 Mac 式分块入场（不再整页一起动，避免「上面渐显、下面先出」的割裂感）：
+                    //   先整页空白（各块 scale/offset 初始都在屏外或零），先让「正在上课」状态块
+                    //   以 Mac app 打开式弹出（底部零大小放大 + 扭曲回弹），再让问候栏、录音浮层、
+                    //   课程卡依次从屏幕底部「钻」出来。
+                    Box(Modifier.greetIn(40)) {
                         GreetingBar(name = "刘宇豪") { onGoToTab(3) }
                     }
-                    Box(
-                        Modifier
-                            .offset { IntOffset(0, ((1f - statusP) * 16f).dp.roundToPx()) }
-                            .alpha(statusP),
-                    ) {
+                    Box(Modifier.macPopIn(140)) {
                         StatusSection(
                             courses = courses,
                             // 只数「今天」的课（time 为 HH:mm 的才是今天；明天/昨天/前天不计），
@@ -371,9 +358,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                             onHomework = { onGoToTab(2) },
                         )
                     }
-                    if (recording) Box(
-                        Modifier.offset { IntOffset(0, ((1f - recP) * 16f).dp.roundToPx()) },
-                    ) {
+                    if (recording) Box(Modifier.cardEnter(-1)) {
                         RecordingOverlay(devices, pageBackdrop)
                     }
                     courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
@@ -401,7 +386,6 @@ private fun GreetingBar(name: String, onAvatar: () -> Unit) {
             Text(
                 name, color = cs.onSurface, fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1,
-                modifier = Modifier.textRiseIn(120),
             )
         }
         Avatar(onAvatar)
@@ -496,7 +480,6 @@ private fun StatusSection(
                 Text(
                     if (live != null) "正在上课" else "今日已就绪",
                     color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                    modifier = Modifier.textRiseIn(220),
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -851,19 +834,46 @@ private fun MoreBar(showAll: Boolean, onClick: () -> Unit) {
     }
 }
 
-// 卡片入场：从下往上浮动，按 index 错峰。
-// 注意：这里**不能**用 alpha() 包裹玻璃卡片 —— 会为子树创建离屏 layer，
-// 而 coui 的 drawBackdrop 要把 backdrop 层映射到子树内，首帧极易算出非法尺寸导致
-// RenderThread SIGSEGV。所以入场只做位移。
+// 卡片入场：从屏幕底部「钻」出来（玻璃安全，只用 placement 位移，绝不 scale/alpha 包裹采样者）。
+// 错峰从 300ms 起、每条 +60ms，观感是「一条一条从底下冒出来」。
 @Composable
 internal fun Modifier.cardEnter(index: Int): Modifier {
     var target by remember { mutableStateOf(0f) }
-    LaunchedEffect(Unit) { delay((index * 35L).coerceAtMost(400L)); target = 1f }
+    LaunchedEffect(Unit) { delay((300L + index * 60L).coerceAtMost(900L)); target = 1f }
     val p by animateFloatAsState(
         targetValue = target,
-        animationSpec = tween(360, easing = FastOutSlowInEasing),
+        animationSpec = spring(dampingRatio = 0.7f, stiffness = 340f),
+        label = "cardEnter$index",
     )
-    return this.offset { IntOffset(0, ((1f - p) * 12f).dp.roundToPx()) }
+    return this.offset { IntOffset(0, ((1f - p) * 70f).dp.roundToPx()) }
+}
+
+/**
+ * 首页「正在上课」状态块：Mac app 打开式弹出 —— 从底部、近乎零大小放大入场，
+ * 中段带一次「扭曲」（scaleX 压窄 + scaleY 拉长）再回弹到 1:1，配合轻微上浮与淡入。
+ * 状态块是 squircle（drawBehind 绘制，非 coui 采样者），可安全叠 scale/alpha。
+ */
+@Composable
+internal fun Modifier.macPopIn(delayMs: Int = 120): Modifier {
+    val p = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { delay(delayMs.toLong()); p.animateTo(1f, spring(dampingRatio = 0.5f, stiffness = 300f)) }
+    val v = p.value.coerceIn(0f, 1f)
+    // 扭曲：前半段纵向拉长、横向压窄，弹回 1:1（弹簧过冲自然产生「回正」的果冻感）
+    val sx = lerp(0.82f, 1f, v)
+    val sy = lerp(1.18f, 1f, v)
+    return this
+        .alpha(v)
+        .offset { IntOffset(0, ((1f - v) * 48f).dp.roundToPx()) }
+        .scale(sx, sy)
+}
+
+/** 问候栏轻量入场：从下方小幅上浮 + 淡入。 */
+@Composable
+internal fun Modifier.greetIn(delayMs: Int = 40): Modifier {
+    val p = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { delay(delayMs.toLong()); p.animateTo(1f, spring(dampingRatio = 0.6f, stiffness = 380f)) }
+    val v = p.value.coerceIn(0f, 1f)
+    return this.alpha(v).offset { IntOffset(0, ((1f - v) * 24f).dp.roundToPx()) }
 }
 
 /**

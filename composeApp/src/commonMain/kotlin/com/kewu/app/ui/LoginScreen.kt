@@ -464,6 +464,7 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
+            .height(50.dp)
             .scale(scale)
             .clip(RoundedCornerShape(14.dp))
             .background(bg)
@@ -484,8 +485,7 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
                     delay(320)
                     onDone()
                 }
-            }
-            .padding(vertical = 14.dp),
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(

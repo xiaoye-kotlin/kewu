@@ -60,6 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.KewuGreen
+import com.kewu.app.KewuBlue
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -324,7 +325,7 @@ private fun DayStrip(
                     .fillMaxHeight()
                     .padding(vertical = 2.dp)
                     .clip(RoundedCornerShape(50))
-                    .background(cs.primary),
+                    .background(KewuBlue),
             )
             Row(
                 Modifier.fillMaxSize(),
@@ -334,12 +335,12 @@ private fun DayStrip(
                 week.forEachIndexed { i, d ->
                     val sel = i == selected
                     val topColor by animateColorAsState(
-                        targetValue = if (sel) cs.onPrimary else cs.onSurfaceVariant,
+                        targetValue = if (sel) Color.White else cs.onSurface,
                         animationSpec = tween(durationMillis = 220),
                         label = "dayTop$i",
                     )
                     val dateColor by animateColorAsState(
-                        targetValue = if (sel) cs.onPrimary else cs.onSurface,
+                        targetValue = if (sel) Color.White else cs.onSurface,
                         animationSpec = tween(durationMillis = 220),
                         label = "dayDate$i",
                     )
@@ -348,6 +349,7 @@ private fun DayStrip(
                             .width(chipW)
                             .fillMaxHeight()
                             .clip(RoundedCornerShape(50))
+                            .background(if (sel) Color.Transparent else cs.surfaceVariant.copy(alpha = 0.55f))
                             .clickable { onSelect(i) },
                         contentAlignment = Alignment.Center,
                     ) {

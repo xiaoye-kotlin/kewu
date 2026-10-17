@@ -50,7 +50,6 @@ import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
-import kotlin.math.sin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -306,28 +305,22 @@ private fun TaskBadge(done: Boolean, modifier: Modifier = Modifier) {
 }
 
 /**
- * 任务卡入场：**完成态从上方"落"到位 + 落地挤压回弹**（用户要求的「从上面滑下来 + 加速度形变 + 会弹」）。
- * - 完成态（[done]=true，刚被勾选移入"已完成"）：从上方 −20dp 加速落下、中点挤压、弹簧回弹；
- * - 待完成态（[done]=false）：从下方 +18dp 升起归位（取消完成时的反向运动）；
- * - 全程低阻尼弹簧（落位时轻微过冲再回弹），中点按 `sin(π·p)` 做 scaleX/scaleY 反向形变（加速度变形的手感）。
- *
- * 任务卡是 squircle 卡（非 coui 采样者），可安全叠 scale/placement；玻璃汇总卡不适用此逻辑。
+ * 任务卡入场：从屏幕底部「钻」出来（与首页课程卡同一套 Mac 式语言）。
+ * - 单弹簧驱动的 placement 位移（从下方 60dp 滑入归位），错峰延迟；
+ * - 不再用 sin 形变 + 弹簧 offset + scale 三路叠加（旧版多动画耦合会产生「发抖」观感）。
+ * 任务卡是 squircle（drawBehind 绘制，非 coui 采样者），这里叠一点 scale 回弹也安全，
+ * 但为与首页玻璃卡视觉统一、杜绝抖动，只用位移。
  */
 @Composable
 internal fun Modifier.taskEnter(done: Boolean, index: Int): Modifier {
     var appeared by remember { mutableStateOf(0f) }
-    LaunchedEffect(Unit) { delay((index * 30L).coerceAtMost(360L)); appeared = 1f }
+    LaunchedEffect(Unit) { delay((260L + index * 55L).coerceAtMost(800L)); appeared = 1f }
     val p by animateFloatAsState(
         targetValue = appeared,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 320f),
+        animationSpec = spring(dampingRatio = 0.75f, stiffness = 340f),
         label = "taskEnter$index",
     )
-    val q = p.coerceIn(0f, 1f)
-    val fromAbove = if (done) -20f else 18f // 完成=从上方落，待完成=从下方升
-    val squash = sin(3.1415927f * q) // 0→1→0，落位中点形变最大
-    return this
-        .offset { IntOffset(0, (fromAbove * (1f - q)).dp.roundToPx()) }
-        .scale(1f + 0.11f * squash, 1f - 0.11f * squash)
+    return this.offset { IntOffset(0, ((1f - p) * 60f).dp.roundToPx()) }
 }
 
 /** 任务卡（Mishka squircle）：左徽章（圈⇄绿勾形变）+ 标题 + 课程截止 + 紧急标签。 */

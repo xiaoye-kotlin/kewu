@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -186,28 +187,34 @@ fun MainScreen(
                     .alpha(enterT),
             )
             // 内容区：记录进玻璃层，供底部导航栏采样折射。
-            // 用 previewFloat（小数 tab 索引）驱动两页交叉淡入淡出 → 拖拽时丝滑过渡。
+            // 横向滑动切换：把 n 个 tab 页面横向并排（每个宽 = 屏宽），整行按 previewFloat 做 X 位移
+            // —— 拖拽导航泡泡 / 点选切换时，内容真的「横着滑」过去（替代原来的 alpha 交叉淡入）。
+            // ★ 只用 placement 位移（offset lambda）：不套 alpha/graphicsLayer，玻璃采样者安全。
             val n = NAV_ITEMS.size
-            val pf = previewFloat.coerceIn(0f, (n - 1).toFloat())
-            val from = pf.toInt().coerceIn(0, n - 1)
-            val to = (from + 1).coerceIn(0, n - 1)
-            val f = (pf - from).coerceIn(0f, 1f)
+            val screenW = remember { mutableStateOf(0f) }
             Box(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    .onSizeChanged { screenW.value = it.width.toFloat() }
                     .layerBackdrop(backdrop)
-                    // 入场：从下方浮上（placement 位移，不套 layer）
-                    .offset { IntOffset(0, ((1f - enterT) * 20f).dp.roundToPx()) },
+                    // 入场：从下方浮上（Y 位移）+ 切页横移（X 位移），都是 placement 位移
+                    .offset {
+                        IntOffset(
+                            (-previewFloat * screenW.value).toInt(),
+                            ((1f - enterT) * 20f).dp.roundToPx(),
+                        )
+                    },
             ) {
-                if (f < 0.001f) {
-                    TabContent(NAV_ITEMS[from], goToTab, onLogout) { navHidden = it }
-                } else {
-                    Box(Modifier.fillMaxSize().alpha(1f - f)) {
-                        TabContent(NAV_ITEMS[from], goToTab, onLogout) { navHidden = it }
-                    }
-                    Box(Modifier.fillMaxSize().alpha(f)) {
-                        TabContent(NAV_ITEMS[to], goToTab, onLogout) { navHidden = it }
+                Row(Modifier.fillMaxSize()) {
+                    repeat(n) { i ->
+                        Box(
+                            Modifier
+                                .width(with(LocalDensity.current) { screenW.value.toDp() })
+                                .fillMaxHeight(),
+                        ) {
+                            TabContent(NAV_ITEMS[i], goToTab, onLogout) { navHidden = it }
+                        }
                     }
                 }
             }
