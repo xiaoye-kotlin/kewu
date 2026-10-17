@@ -74,14 +74,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import com.kewu.app.HapticKind
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.KewuSky
+import com.kewu.app.haptic
+import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.defaultKewuHighlight
 import com.kewu.app.ui.liquidglass.isLight
 import com.kewu.app.ui.liquidglass.refractionLens
@@ -323,12 +325,6 @@ fun LoginScreen(onLogin: () -> Unit) {
                         )
                     }
                     Spacer(Modifier.height(12.dp))
-                    val footP = enterProgress(appeared, delayMs = 480)
-                    Text(
-                        "基于华为云 · 多端协同采集 · 云端择优融合",
-                        color = cs.onSurfaceVariant, fontSize = 11.5.sp, textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().alpha(footP),
-                    )
                 }
             }
         }
@@ -402,7 +398,7 @@ private fun Segmented(selected: Int, items: List<String>, onSelect: (Int) -> Uni
                     Modifier
                         .weight(1f)
                         .clip(RoundedCornerShape(9.dp))
-                        .clickable { onSelect(i) }
+                        .hapticClickable { onSelect(i) }
                         .padding(vertical = 9.dp),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -432,6 +428,8 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
 
     var state by remember { mutableStateOf(0) } // 0=idle 1=loading 2=success
     val checkProgress = remember { Animatable(0f) }
+    // 登录成功瞬间的柔光闪（视觉印象）+ 配合线性马达震动
+    val successFlash = remember { Animatable(0f) }
 
     val bg by animateColorAsState(
         targetValue = when {
@@ -473,10 +471,15 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
                 interactionSource = interactionSource,
                 enabled = enabled && state == 0,
             ) {
+                haptic(HapticKind.Tick)
                 state = 1
                 scope.launch {
                     delay(900) // mock 网络请求
                     state = 2
+                    // ★ 登录成功：线性马达中档震动 + 一次柔光闪（视觉印象）
+                    haptic(HapticKind.Medium)
+                    successFlash.snapTo(0.18f)
+                    successFlash.animateTo(0f, tween(durationMillis = 280))
                     checkProgress.animateTo(1f, tween(durationMillis = 450, easing = LinearOutSlowInEasing))
                     delay(320)
                     onDone()
@@ -535,6 +538,8 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
                 }
             }
         }
+        // 成功柔光闪（盖在按钮内容之上，快速淡出）—— 给"变对勾"加一点视觉印象
+        Box(Modifier.fillMaxSize().alpha(successFlash.value).background(Color.White))
     }
 }
 
@@ -607,14 +612,22 @@ private fun MiuixField(
                     }
                 },
             )
-            if (value.isNotEmpty()) {
-                if (password) {
-                    FieldIcon(AppIcons.Lock, cs.onSurfaceVariant) { pwdVisible = !pwdVisible }
-                } else {
-                    FieldIcon(AppIcons.Clear, cs.onSurfaceVariant) { onValueChange("") }
+            // ★ 末尾图标区**常驻 28dp 槽位**：输入首个字符时图标出现不再撑高行高（修复跳动）。
+            // 非密码且空内容时槽位留空（仅占位、不可点）；其余情况显示 Lock/Clear 并给轻震动。
+            val showTrail = value.isNotEmpty() || password
+            Box(
+                Modifier.size(28.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (showTrail) {
+                    FieldIcon(
+                        image = if (password) AppIcons.Lock else AppIcons.Clear,
+                        tint = cs.onSurfaceVariant,
+                    ) {
+                        haptic(HapticKind.Tick)
+                        if (password) pwdVisible = !pwdVisible else onValueChange("")
+                    }
                 }
-            } else if (password) {
-                FieldIcon(AppIcons.Lock, cs.onSurfaceVariant) { pwdVisible = !pwdVisible }
             }
         }
     }

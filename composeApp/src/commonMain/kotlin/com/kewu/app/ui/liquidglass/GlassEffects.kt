@@ -11,6 +11,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.kewu.app.HapticKind
+import com.kewu.app.haptic
 import io.github.suqi8.coui.kmp.blur.BackdropEffectScope
 import io.github.suqi8.coui.kmp.blur.blur
 import io.github.suqi8.coui.kmp.blur.colorControls
@@ -61,7 +63,11 @@ fun KewuGlassCard(
     Box(
         modifier = modifier
             .clip(shape)
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+            .then(if (onClick != null) Modifier.clickable {
+                // 玻璃卡点击统一给一次极轻震动（"所有点击都给一点反馈"，但不震太狠）
+                haptic(HapticKind.Tick)
+                onClick()
+            } else Modifier)
             .drawBackdrop(
                 backdrop = backdrop,
                 shape = { shape },

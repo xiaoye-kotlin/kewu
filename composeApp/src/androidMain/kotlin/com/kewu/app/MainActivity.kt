@@ -21,6 +21,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        appContext = applicationContext // 供 haptic() 取 Vibrator
         enableEdgeToEdge()
         hideSystemBars() // 进入软件即全屏，底部不留白色系统条
         setContent {

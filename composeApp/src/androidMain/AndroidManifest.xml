@@ -4,6 +4,9 @@
     <!-- 上传录音要访问后端服务器 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 线性马达震动反馈（全 app 点击 / 导航 / 登录成功）。缺失会导致 Vibrator.vibrate 抛 SecurityException 崩溃 -->
+    <uses-permission android:name="android.permission.VIBRATE" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"

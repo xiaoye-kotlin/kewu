@@ -1,6 +1,7 @@
 package com.kewu.app.ui
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearOutSlowInEasing
@@ -61,7 +62,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.MaterialTheme
+import com.kewu.app.HapticKind
 import com.kewu.app.KewuBlue
+import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -100,10 +103,10 @@ fun MainScreen(
     var selected by remember { mutableStateOf(0) }
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
-    // 录音测试页：全屏盖住主界面（返回时再切回来），先做简陋版验证后台上传
-    var showRecorder by remember { mutableStateOf(false) }
     // 向下浏览内容时收起底部导航栏（课堂页滚动时回调），回到顶部自动展开
     var navHidden by remember { mutableStateOf(false) }
+    // 滑行/拖拽经过每一栏只触发一次极轻震动：记录上一次触发的栏索引，跨栏才打，同栏内移动不重复
+    var lastPreviewHaptic by remember { mutableStateOf(-1) }
     // ★ 泡泡中心 / tab 宽度提升到本层：页内入口（作业待交→任务、头像→我的）也要能驱动
     //   泡泡滑行。此前 centerAnim 藏在导航栏内部，goToTab 只改 selected/preview 不动它
     //   → 内容切了、标签高亮了，泡泡却卡在旧 tab（用户实测 bug）。
@@ -146,10 +149,11 @@ fun MainScreen(
             navHidden = false // 切 tab 时一律把导航栏放出来
             if (tabW.value > 0f) {
                 navScope.launch {
-                    centerAnim.animateTo(
+                    centerAnim.slidePassHaptic(
                         targetValue = idx * tabW.value + tabW.value / 2f,
+                        tabW = tabW.value,
                         animationSpec = spring(dampingRatio = 0.62f, stiffness = 380f),
-                    )
+                    ) { haptic(HapticKind.Tick) }
                 }
             }
             tabSwitchJob?.cancel()
@@ -170,9 +174,6 @@ fun MainScreen(
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background), // 全 app 底色走 M3，不自造色
     ) {
-        if (showRecorder) {
-            RecordingScreen(onBack = { showRecorder = false })
-        } else {
         Column(
             Modifier
                 .fillMaxSize()
@@ -215,6 +216,8 @@ fun MainScreen(
             items = NAV_ITEMS,
             selected = selected,
             onSelect = {
+                // 切换 tab：一次轻确认（点选 / 松手吸合都走这里）
+                haptic(HapticKind.Light)
                 selected = it
                 preview = it
                 navHidden = false // 切 tab 时一律把导航栏放出来
@@ -232,7 +235,14 @@ fun MainScreen(
                 }
             },
             preview = preview,
-            onPreview = { preview = it },
+            onPreview = {
+                // 滑行/拖拽经过每一栏 → 一次极轻震动（同栏内连续移动不重复触发；用户要求"不要太明显"）
+                if (it != lastPreviewHaptic) {
+                    lastPreviewHaptic = it
+                    haptic(HapticKind.Tick)
+                }
+                preview = it
+            },
             previewFloat = previewFloat,
             onPreviewFloat = {
                 // 拖拽跟手：直写 + 取消在途的 tab 切换动画（否则两种驱动互相打架）
@@ -255,7 +265,6 @@ fun MainScreen(
                     )
                 },
         )
-        }
     }
 }
 
@@ -293,7 +302,7 @@ private fun TabContent(
         // 课堂主页：大状态卡 + 统计条 + 课程卡片流（仿 KernelSU 主页信息架构）。
         // 注意：Coui 玻璃的采样者必须在被采样层**之外**，所以 ClassroomPage 内部自己开了一个
         // pageBackdrop（背景层）并让玻璃内容与它平级；这里不需要把导航栏的 backdrop 传进去。
-        ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide, onOpenRecorder = onOpenRecorder)
+        ClassroomPage(onGoToTab = onGoToTab, onNavHide = onNavHide)
         return
     }
     if (item.index == 2) {
@@ -772,10 +781,11 @@ private suspend fun PointerInputScope.navGestures(
                 // 点击：从当前位置平滑滑到目标 tab 中心
                 val ti = tabIndexFromX(downX, tabW.value, itemCount)
                 scope.launch {
-                    centerAnim.animateTo(
+                    centerAnim.slidePassHaptic(
                         targetValue = ti * tabW.value + tabW.value / 2f,
+                        tabW = tabW.value,
                         animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
-                    )
+                    ) { haptic(HapticKind.Tick) }
                 }
                 // 点在泡泡上：复刻长按的放大效果（同一套 scale/height/玻璃质感弹簧），
                 // 保持 tapExpandMs（与点选切换滑行时长一致）后自动变回原大小。
@@ -794,6 +804,31 @@ private suspend fun PointerInputScope.navGestures(
                 }
                 onSelect(ti)
             }
+        }
+    }
+}
+
+/**
+ * 泡泡滑行并逐栏触发 [perColumn]：泡泡中心每跨过一栏（`value/tabW` 的整数变化）打一次反馈，
+ * 用于"点选远 tab / 页内跳 tab"滑行时「每经过一个栏目都给一点反馈」（Tick 极轻、不震手）。
+ * tabW<=0（首帧未测量）时退化为普通 animateTo。
+ */
+private suspend fun Animatable<Float, AnimationVector1D>.slidePassHaptic(
+    targetValue: Float,
+    tabW: Float,
+    animationSpec: AnimationSpec<Float>,
+    perColumn: () -> Unit,
+) {
+    if (tabW <= 0f) {
+        animateTo(targetValue, animationSpec)
+        return
+    }
+    var lastCol = (value / tabW).toInt()
+    animateTo(targetValue, animationSpec) {
+        val col = (value / tabW).toInt()
+        if (col != lastCol) {
+            lastCol = col
+            perColumn()
         }
     }
 }

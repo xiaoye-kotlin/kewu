@@ -1,13 +1,19 @@
 package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -48,6 +54,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
@@ -62,7 +69,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import com.kewu.app.KewuGreen
+import com.kewu.app.haptic
+import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -317,16 +327,24 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             if (timetable) {
                 TimetablePage(onBack = { showTimetable = false }, onNavHide = onNavHide)
             } else {
+                // 首次进场（开 app / 切回课堂 tab）：整页上浮 + 各区块错峰落位。
+                // ★ appeared / homeEnter 必须提到 Column 修饰符**之前**声明：offset {} 是非 Composable
+                //   lambda，不能在里面调 animateFloatAsState；这里只做 placement 位移（玻璃安全）。
+                var appeared by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) { appeared = true }
+                val homeEnter by animateFloatAsState(
+                    targetValue = if (appeared) 1f else 0f,
+                    animationSpec = tween(durationMillis = 600, easing = FastOutSlowInEasing),
+                    label = "homeEnter",
+                )
                 Column(
                     Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
-                        .padding(bottom = 96.dp),
+                        .padding(bottom = 96.dp)
+                        // ★ 首页 Mac 式整页入场：整页从屏幕下方上浮（placement 位移，玻璃安全）
+                        .offset { IntOffset(0, ((1f - homeEnter) * 56f).dp.roundToPx()) },
                 ) {
-                    // 首次进场（开 app / 切回课堂 tab）：问候栏、状态区、录音浮层错峰落位。
-                    // ★ 只位移 + 对非玻璃元素用 alpha；录音浮层是 coui 采样者，只用位移。
-                    var appeared by remember { mutableStateOf(false) }
-                    LaunchedEffect(Unit) { appeared = true }
                     // enterProgress 返回 Float 非 State，不能用 by 委托
                     val greetP = enterProgress(appeared, delayMs = 60)
                     val statusP = enterProgress(appeared, delayMs = 160)
@@ -383,6 +401,7 @@ private fun GreetingBar(name: String, onAvatar: () -> Unit) {
             Text(
                 name, color = cs.onSurface, fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1,
+                modifier = Modifier.textRiseIn(120),
             )
         }
         Avatar(onAvatar)
@@ -408,8 +427,8 @@ private fun Avatar(onAvatar: () -> Unit) {
         Modifier
             .size(36.dp)
             .clip(CircleShape)
-            .background(cs.secondaryContainer)
-            .clickable { onAvatar() },
+        .background(cs.secondaryContainer)
+        .hapticClickable { onAvatar() },
         contentAlignment = Alignment.Center,
     ) {
         Text("刘", color = cs.onSecondaryContainer, fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -436,9 +455,10 @@ private fun StatusSection(
     val cs = MaterialTheme.colorScheme
     val live = courses.firstOrNull { it.status == CourseStatus.LIVE }
     val done = courses.count { it.status == CourseStatus.DONE }
-    // 状态语义色：有课在上是「进行中」，否则「已就绪」（绿）
-    val statusTint = if (live != null) cs.tertiary else KewuGreen
-    val statusContainer = if (live != null) cs.tertiaryContainer else cs.secondaryContainer
+    // 状态语义色：背景统一走灰色（surfaceVariant，与右侧两张小卡一致），不再用 tertiary 红/紫；
+    // 标题与勾勾统一用更鲜亮的品牌绿 [KewuGreen]（用户要求"背景灰色、绿色改亮眼"）
+    val statusTint = KewuGreen
+    val statusContainer = cs.surfaceVariant
 
     Row(
         modifier = Modifier
@@ -476,6 +496,7 @@ private fun StatusSection(
                 Text(
                     if (live != null) "正在上课" else "今日已就绪",
                     color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                    modifier = Modifier.textRiseIn(220),
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
@@ -523,7 +544,7 @@ private fun MiniStatCard(
     Box(
         modifier
             .squircleCard(16.dp, cs.surfaceVariant)
-            .then(if (onClick != null) Modifier.clickable { onClick() } else Modifier)
+            .then(if (onClick != null) Modifier.hapticClickable { onClick() } else Modifier)
             .padding(16.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
@@ -591,20 +612,29 @@ private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBack
                     Text("3", color = cs.onSurfaceVariant, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
             }
-            if (expanded) {
-                Spacer(Modifier.height(10.dp))
-                devices.forEach {
-                    Row(
-                        Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(Modifier.size(7.dp).background(cs.primary, CircleShape))
-                        Spacer(Modifier.width(10.dp))
-                        Text(
-                            it.name, color = cs.onSurface, fontSize = 14.sp,
-                            modifier = Modifier.weight(1f), maxLines = 1,
-                        )
-                        Text(it.state, color = cs.onSurfaceVariant, fontSize = 13.sp)
+            // 展开设备列表：缓慢纵向展开 + 淡入（丝滑，不再"直接出现"）。
+            // AnimatedVisibility 只动内容高度/透明度，不包裹玻璃 sampler 本体（采样者是外层 KewuGlassCard），安全。
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(spring(dampingRatio = 0.72f, stiffness = 300f)) + fadeIn(tween(180)),
+                exit = shrinkVertically(spring(dampingRatio = 0.72f, stiffness = 300f)) + fadeOut(tween(140)),
+                label = "recDevices",
+            ) {
+                Column {
+                    Spacer(Modifier.height(10.dp))
+                    devices.forEach {
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Box(Modifier.size(7.dp).background(cs.primary, CircleShape))
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                it.name, color = cs.onSurface, fontSize = 14.sp,
+                                modifier = Modifier.weight(1f), maxLines = 1,
+                            )
+                            Text(it.state, color = cs.onSurfaceVariant, fontSize = 13.sp)
+                        }
                     }
                 }
             }
@@ -809,7 +839,7 @@ private fun MoreBar(showAll: Boolean, onClick: () -> Unit) {
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .squircleCard(16.dp, cs.surfaceVariant)
-            .clickable { onClick() }
+            .hapticClickable { onClick() }
             .padding(vertical = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -834,4 +864,20 @@ internal fun Modifier.cardEnter(index: Int): Modifier {
         animationSpec = tween(360, easing = FastOutSlowInEasing),
     )
     return this.offset { IntOffset(0, ((1f - p) * 12f).dp.roundToPx()) }
+}
+
+/**
+ * 文字缩放出现（Mac 式文字入场）：首次组合后按 [delayMs] 从 0.92 弹到 1.0 并淡入。
+ * 用于纯文字（非玻璃采样者），可安全叠 scale/alpha。给首页「文字缩放出现」用。
+ */
+@Composable
+internal fun Modifier.textRiseIn(delayMs: Int): Modifier {
+    var target by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) { delay(delayMs.toLong()); target = 1f }
+    val v by animateFloatAsState(
+        targetValue = target,
+        animationSpec = spring(dampingRatio = 0.6f, stiffness = 380f),
+        label = "textRise$delayMs",
+    )
+    return this.alpha(v).scale(lerp(0.92f, 1f, v))
 }

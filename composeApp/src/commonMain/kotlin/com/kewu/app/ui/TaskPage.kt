@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -41,12 +42,16 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp as floatLerp
 import com.kewu.app.KewuGreen
+import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import kotlin.math.sin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 // ───────────────────────── 数据模型（mock） ─────────────────────────
@@ -300,6 +305,31 @@ private fun TaskBadge(done: Boolean, modifier: Modifier = Modifier) {
     }
 }
 
+/**
+ * 任务卡入场：**完成态从上方"落"到位 + 落地挤压回弹**（用户要求的「从上面滑下来 + 加速度形变 + 会弹」）。
+ * - 完成态（[done]=true，刚被勾选移入"已完成"）：从上方 −20dp 加速落下、中点挤压、弹簧回弹；
+ * - 待完成态（[done]=false）：从下方 +18dp 升起归位（取消完成时的反向运动）；
+ * - 全程低阻尼弹簧（落位时轻微过冲再回弹），中点按 `sin(π·p)` 做 scaleX/scaleY 反向形变（加速度变形的手感）。
+ *
+ * 任务卡是 squircle 卡（非 coui 采样者），可安全叠 scale/placement；玻璃汇总卡不适用此逻辑。
+ */
+@Composable
+internal fun Modifier.taskEnter(done: Boolean, index: Int): Modifier {
+    var appeared by remember { mutableStateOf(0f) }
+    LaunchedEffect(Unit) { delay((index * 30L).coerceAtMost(360L)); appeared = 1f }
+    val p by animateFloatAsState(
+        targetValue = appeared,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 320f),
+        label = "taskEnter$index",
+    )
+    val q = p.coerceIn(0f, 1f)
+    val fromAbove = if (done) -20f else 18f // 完成=从上方落，待完成=从下方升
+    val squash = sin(3.1415927f * q) // 0→1→0，落位中点形变最大
+    return this
+        .offset { IntOffset(0, (fromAbove * (1f - q)).dp.roundToPx()) }
+        .scale(1f + 0.11f * squash, 1f - 0.11f * squash)
+}
+
 /** 任务卡（Mishka squircle）：左徽章（圈⇄绿勾形变）+ 标题 + 课程截止 + 紧急标签。 */
 @Composable
 private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: () -> Unit) {
@@ -315,9 +345,9 @@ private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: (
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 10.dp)
-            .cardEnter(enterIndex)
+            .taskEnter(done, enterIndex)
             .squircleCard(16.dp, cs.surfaceVariant)
-            .clickable { onToggle() }
+            .hapticClickable { onToggle() }
             .padding(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {

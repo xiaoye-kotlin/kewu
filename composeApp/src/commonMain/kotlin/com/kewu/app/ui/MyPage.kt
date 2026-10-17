@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -54,7 +55,9 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.util.lerp
 import com.kewu.app.KewuGreen
+import com.kewu.app.hapticClickable
 import kotlinx.coroutines.delay
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -141,9 +144,13 @@ private fun Modifier.myEnter(index: Int, glass: Boolean = false): Modifier {
         label = "myEnter$index",
     )
     return if (glass) {
+        // 玻璃卡（coui 采样者）：只做 placement 位移，禁叠 scale/alpha（首帧 SIGSEGV 风险）
         this.offset { IntOffset(0, ((1f - p) * 26f).dp.roundToPx()) }
     } else {
-        this.offset { IntOffset(0, ((1f - p) * 26f).dp.roundToPx()) }.alpha(p.coerceIn(0f, 1f))
+        // 普通元素：位移 + 缩放弹入（0.94→1）+ 淡入 —— "有回弹 + 缩放出现"（与任务页一致的 Mac 手感）
+        this.offset { IntOffset(0, ((1f - p) * 26f).dp.roundToPx()) }
+            .scale(lerp(0.94f, 1f, p.coerceIn(0f, 1f)))
+            .alpha(p.coerceIn(0f, 1f))
     }
 }
 
@@ -233,8 +240,8 @@ private fun MyHome(
                     Modifier
                         .size(34.dp)
                         .clip(CircleShape)
-                        .background(cs.surfaceVariant)
-                        .clickable { onEdit() },
+                    .background(cs.surfaceVariant)
+                    .hapticClickable { onEdit() },
                     contentAlignment = Alignment.Center,
                 ) { EditGlyph(cs.onSurfaceVariant, 18.dp) }
             }
@@ -299,7 +306,7 @@ private fun FuncRow(
             .padding(horizontal = 12.dp)
             .padding(bottom = 10.dp)
             .squircleCard(16.dp, cs.surfaceVariant)
-            .clickable { onClick() }
+            .hapticClickable { onClick() }
             .padding(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -353,7 +360,7 @@ private fun EditProfilePage(
         ) {
             Box(
                 Modifier.size(36.dp).clip(CircleShape).background(cs.surfaceVariant)
-                    .clickable { onBack() },
+                    .hapticClickable { onBack() },
                 contentAlignment = Alignment.Center,
             ) { BackGlyph(cs.onSurface, 18.dp) }
             Spacer(Modifier.width(10.dp))
@@ -489,7 +496,7 @@ private fun RecordingManagePage(backdrop: LayerBackdrop, onBack: () -> Unit) {
         ) {
             Box(
                 Modifier.size(36.dp).clip(CircleShape).background(cs.surfaceVariant)
-                    .clickable { onBack() },
+                    .hapticClickable { onBack() },
                 contentAlignment = Alignment.Center,
             ) { BackGlyph(cs.onSurface, 18.dp) }
             Spacer(Modifier.width(10.dp))
@@ -562,7 +569,7 @@ private fun RecordingRow(item: RecordingItem, onRetry: () -> Unit) {
                     Modifier
                         .clip(RoundedCornerShape(10.dp))
                         .background(cs.error)
-                        .clickable { onRetry() }
+                        .hapticClickable { onRetry() }
                         .padding(horizontal = 14.dp, vertical = 8.dp),
                 ) {
                     Text("重试", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
