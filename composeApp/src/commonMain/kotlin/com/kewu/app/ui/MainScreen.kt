@@ -22,10 +22,13 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
+import kotlin.math.roundToInt
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -187,35 +190,36 @@ fun MainScreen(
                     .alpha(enterT),
             )
             // 内容区：记录进玻璃层，供底部导航栏采样折射。
-            // 横向滑动切换：把 n 个 tab 页面横向并排（每个宽 = 屏宽），整行按 previewFloat 做 X 位移
-            // —— 拖拽导航泡泡 / 点选切换时，内容真的「横着滑」过去（替代原来的 alpha 交叉淡入）。
-            // ★ 只用 placement 位移（offset lambda）：不套 alpha/graphicsLayer，玻璃采样者安全。
+            // ★ 关键：**只渲染当前选中的那一页**，且固定在 offset=0。
+            //   之前用「Row 并排 4 页 + 整条 Row 按 previewFloat 位移」实现横滑，实测有两个致命问题：
+            //   ① Row 是 fillMaxSize（宽=屏宽），第 1 个子项吃掉整宽后，后续子项被以 maxWidth=0 测量
+            //      → 宽度塌成 0，tab1/2/3 整片空白（用户报「我的/任务内容不见了」）；
+            //   ② 整条 Row 被 offset 位移后，coui 采样坐标错乱 → 导航栏采到坏层变黑。
+            //   现在只画当前页、offset 恒为 0 → 采样坐标稳定：内容必显示、导航栏不再变黑。
+            //   切页只换 index，不做内容位移（导航泡泡的滑行已提供足够的切换反馈）。
             val n = NAV_ITEMS.size
-            val screenW = remember { mutableStateOf(0f) }
             Box(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .onSizeChanged { screenW.value = it.width.toFloat() }
                     .layerBackdrop(backdrop)
-                    // 入场：从下方浮上（Y 位移）+ 切页横移（X 位移），都是 placement 位移
-                    .offset {
-                        IntOffset(
-                            (-previewFloat * screenW.value).toInt(),
-                            ((1f - enterT) * 20f).dp.roundToPx(),
+                    // 内容区左右滑动切页：仅识别「横向主导」的手势，松手按方向切上一/下一栏。
+                    // 竖向滑动原样透传给页面内的 verticalScroll（不抢手势）。
+                    .pointerInput(Unit) {
+                        var acc = 0f
+                        detectHorizontalDragGestures(
+                            onDragStart = { acc = 0f },
+                            onHorizontalDrag = { _, dragAmount -> acc += dragAmount },
+                            onDragEnd = {
+                                val threshold = 96f // ~35dp，足够区分「误触」与「真的想切页」
+                                if (acc <= -threshold) goToTab((selected + 1).coerceAtMost(n - 1))
+                                else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
+                            },
                         )
                     },
             ) {
-                Row(Modifier.fillMaxSize()) {
-                    repeat(n) { i ->
-                        Box(
-                            Modifier
-                                .width(with(LocalDensity.current) { screenW.value.toDp() })
-                                .fillMaxHeight(),
-                        ) {
-                            TabContent(NAV_ITEMS[i], goToTab, onLogout) { navHidden = it }
-                        }
-                    }
+                Box(Modifier.fillMaxSize()) {
+                    TabContent(NAV_ITEMS[selected], goToTab, onLogout) { navHidden = it }
                 }
             }
         }
@@ -322,20 +326,23 @@ private fun TabContent(
         MyPage(onLogout = onLogout, onNavHide = onNavHide)
         return
     }
+    if (item.index == 1) {
+        // 助教（课程中心）：真实页面（课程列表 + 作业列表），「作业」分组标题居中。
+        TaPage(onNavHide = onNavHide, onGoToTab = onGoToTab)
+        return
+    }
+    // 兜底（理论上不会到这）：纯色背景占位
     val cs = MaterialTheme.colorScheme
     Box(
         Modifier
             .fillMaxSize()
-            // ★ 背景一律走 M3 语义色，不再每个 tab 一套硬编码渐变。
-            // 顺带解决了原来的老问题：渐变透过导航栏玻璃会变成"上浅下深 + 中间分界线"，
-            // 纯色背景下「身后底色」天然均匀，玻璃怎么采样都不会有色差。
             .background(cs.background),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(item.label, color = cs.onSurface, fontSize = 42.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
-            Text("内容区域 · 演示页", color = cs.onSurfaceVariant, fontSize = 15.sp)
+            Text("内容区域", color = cs.onSurfaceVariant, fontSize = 15.sp)
         }
     }
 }

@@ -84,6 +84,8 @@ import com.kewu.app.KewuGreen
 import com.kewu.app.KewuSky
 import com.kewu.app.haptic
 import com.kewu.app.hapticClickable
+import com.kewu.app.kvGet
+import com.kewu.app.kvSet
 import com.kewu.app.ui.liquidglass.defaultKewuHighlight
 import com.kewu.app.ui.liquidglass.isLight
 import com.kewu.app.ui.liquidglass.refractionLens
@@ -132,10 +134,12 @@ fun LoginScreen(onLogin: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val isDark = !cs.background.isLight() // 近似深浅判定（M3 背景浅=亮色）
     var mode by remember { mutableStateOf(0) } // 0=登录 1=注册
-    var account by remember { mutableStateOf("") }
+    // ★ 自动记住：首次登录后把账号密码存进 kv，下次启动直接进主界面（App 层读 kewu_logged 决定）。
+    //   这里进场即预填，用户无需重输；只有「我的→退出登录」才会清空。
+    var account by remember { mutableStateOf(kvGet("kewu_account") ?: "") }
     var name by remember { mutableStateOf("") }
     var school by remember { mutableStateOf("") }
-    var pwd by remember { mutableStateOf("") }
+    var pwd by remember { mutableStateOf(kvGet("kewu_pwd") ?: "") }
     var pwd2 by remember { mutableStateOf("") }
 
     val pageBackdrop = rememberLayerBackdrop()
@@ -321,7 +325,14 @@ fun LoginScreen(onLogin: () -> Unit) {
                         LoginButton(
                             enabled = enabled,
                             label = if (mode == 0) "登录" else "注册并登录",
-                            onDone = onLogin,
+                            onDone = {
+                                // ★ 自动记住：登录/注册成功后持久化账号密码 + 已登录标记，
+                                //   下次启动直接进主界面（除非在「我的」点退出登录清空）。
+                                kvSet("kewu_account", account)
+                                kvSet("kewu_pwd", pwd)
+                                kvSet("kewu_logged", "1")
+                                onLogin()
+                            },
                         )
                     }
                     Spacer(Modifier.height(12.dp))
@@ -591,12 +602,15 @@ private fun MiuixField(
                 color = titleColor,
                 fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier.width(52.dp),
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.width(56.dp),
             )
             BasicTextField(
                 value = value,
                 onValueChange = onValueChange,
                 singleLine = true,
+                maxLines = 1,
                 keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
                 visualTransformation = if (password && !pwdVisible) PasswordVisualTransformation() else VisualTransformation.None,
                 textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp),

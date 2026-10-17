@@ -254,6 +254,47 @@ internal fun ThreeQuarterCheck(
     }
 }
 
+/**
+ * 警示感叹号水印（未上课态用）：大半圆弧 + 中央"!"，配琥珀黄。
+ * 与 [ThreeQuarterCheck] 同尺寸、同右下偏移布局，可直接替换状态块水印。
+ */
+@Composable
+internal fun ExclaimMark(
+    size: Dp,
+    color: Color,
+    modifier: Modifier = Modifier,
+    alpha: Float = 1f,
+) {
+    Canvas(modifier.size(size)) {
+        val s = this.size.width
+        val sw = s * 0.072f
+        val inset = sw / 2f
+        drawArc(
+            color = color.copy(alpha = alpha),
+            startAngle = 135f,
+            sweepAngle = 270f,
+            useCenter = false,
+            topLeft = Offset(inset, inset),
+            size = Size(s - sw, s - sw),
+            style = Stroke(width = sw, cap = StrokeCap.Round),
+        )
+        // 中央"!"：上竖线 + 底部圆点
+        val cx = s * 0.5f
+        drawLine(
+            color = color.copy(alpha = alpha),
+            start = Offset(cx, s * 0.34f),
+            end = Offset(cx, s * 0.60f),
+            strokeWidth = sw * 1.25f,
+            cap = StrokeCap.Round,
+        )
+        drawCircle(
+            color = color.copy(alpha = alpha),
+            radius = sw * 0.62f,
+            center = Offset(cx, s * 0.70f),
+        )
+    }
+}
+
 // ───────────────────────── 课堂主页 ─────────────────────────
 
 /**
@@ -439,9 +480,10 @@ private fun StatusSection(
     val cs = MaterialTheme.colorScheme
     val live = courses.firstOrNull { it.status == CourseStatus.LIVE }
     val done = courses.count { it.status == CourseStatus.DONE }
-    // 状态语义色：背景统一走灰色（surfaceVariant，与右侧两张小卡一致），不再用 tertiary 红/紫；
-    // 标题与勾勾统一用更鲜亮的品牌绿 [KewuGreen]（用户要求"背景灰色、绿色改亮眼"）
-    val statusTint = KewuGreen
+    // 下节课（未上课时提示"在哪里上"）：取第一门待上/总结中的课
+    val next = courses.firstOrNull { it.status == CourseStatus.PENDING || it.status == CourseStatus.SUMMARIZING }
+    // 状态语义色：正在上课=品牌绿；未上课=琥珀黄"!"（用户要求"没上课就改成黄色感叹号"）
+    val statusTint = if (live != null) KewuGreen else Color(0xFFFFB300)
     val statusContainer = cs.surfaceVariant
 
     Row(
@@ -460,7 +502,7 @@ private fun StatusSection(
                 .fillMaxHeight()
                 .squircleCard(16.dp, statusContainer),
         ) {
-            // 超大水印：170dp 的大半圆+勾（品牌绿），offset 到右下角、被卡片裁掉大半。
+            // 超大水印：170dp 的大半圆+符号，offset 到右下角、被卡片裁掉大半。
             // 注意用 **lambda 版 offset**（px，纯视觉平移）：Dp 版 `offset(x, y)` 会把
             // x/y 加进 min intrinsic 尺寸，导致 `Row(height = IntrinsicSize.Min)` 被撑高 45dp。
             Box(
@@ -469,25 +511,29 @@ private fun StatusSection(
                     .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
                 contentAlignment = Alignment.BottomEnd,
             ) {
-                // 标志性图形恒用品牌绿（不跟着状态变紫）——它是"课悟"的符号，不是状态色
-                ThreeQuarterCheck(
-                    size = 170.dp,
-                    color = KewuGreen,
-                    alpha = 0.30f,
-                )
+                // 正在上课 → 品牌绿大半圆+勾；未上课 → 琥珀黄大半圆+感叹号（用户要求"黄色！"）
+                if (live != null) {
+                    ThreeQuarterCheck(size = 170.dp, color = KewuGreen, alpha = 0.30f)
+                } else {
+                    ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.30f)
+                }
             }
             Column(Modifier.fillMaxSize().padding(16.dp)) {
                 Text(
-                    if (live != null) "正在上课" else "今日已就绪",
+                    if (live != null) "正在上课" else "! 当前无课",
                     color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    if (live != null) "${live.name} · ${live.room}" else "全部纪要已生成",
+                    if (live != null) "${live.name} · ${live.room}" else "下节课在哪里上",
                     color = cs.onSurfaceVariant, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                 )
                 Text(
-                    "已总结 $done / ${courses.size} 节",
+                    if (live != null) {
+                        "已总结 $done / ${courses.size} 节"
+                    } else {
+                        next?.let { "下节课：${it.name} · ${it.room}" } ?: "今日课程已全部结束"
+                    },
                     color = cs.onSurfaceVariant, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                 )
             }

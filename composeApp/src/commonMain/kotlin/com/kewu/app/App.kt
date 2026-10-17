@@ -25,9 +25,17 @@ fun App() {
     MaterialTheme {
         // 启动首屏 = 登录/注册（液态玻璃 + coui）。mock 登录态：登录成功后进入主界面，
         // 在「我的」页点「退出登录」会回到这里（App 级持有 loggedIn，保证跨 tab 不丢）。
-        var loggedIn by remember { mutableStateOf(false) }
+        // ★ 自动登录：首次登录后 kv 写入 kewu_logged="1"，此处据此跳过登录页；
+        //   只有「我的→退出登录」会清空该标记（见 onLogout），下次启动才回到登录页。
+        var loggedIn by remember { mutableStateOf(kvGet("kewu_logged") == "1") }
         if (loggedIn) {
-            MainScreen(onLogout = { loggedIn = false })
+            MainScreen(onLogout = {
+                // 退出登录：清空自动登录标记 + 记住的账号密码（下次启动回到登录页，需重新输入）
+                kvSet("kewu_logged", "")
+                kvSet("kewu_account", "")
+                kvSet("kewu_pwd", "")
+                loggedIn = false
+            })
         } else {
             LoginScreen(onLogin = { loggedIn = true })
         }
