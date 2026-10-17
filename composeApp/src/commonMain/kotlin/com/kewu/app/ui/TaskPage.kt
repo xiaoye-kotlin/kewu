@@ -30,6 +30,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -45,6 +46,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp as floatLerp
+import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
@@ -81,12 +83,36 @@ private fun mockTasks(): List<Task> = listOf(
 @Composable
 fun TaskPage(onNavHide: (Boolean) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val tasks = remember { mockTasks() }
-    var doneIds by remember { mutableStateOf(setOf("t5")) }
+    val scope = rememberCoroutineScope()
+    // ★ 接入真实作业：/api/assignments 替换 mock；失败降级 mock。
+    // 已交状态按 /api/assignments/{id}/my 预标（后端有提交则视为已交）。
+    var tasks by remember { mutableStateOf(mockTasks()) }
+    var doneIds by remember { mutableStateOf(setOf<String>()) }
+    var loading by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        val studentId = KewuApi.username ?: ""
+        val list = KewuApi.getAssignments()
+        if (list != null) {
+            tasks = list.map { a ->
+                Task(id = a.id, title = a.title, course = a.courseId, due = a.deadline.ifBlank { "未设置" })
+            }
+            val done = mutableSetOf<String>()
+            list.forEach { a ->
+                if (studentId.isNotEmpty() && KewuApi.getMySubmissions(a.id, studentId) != null) done.add(a.id)
+            }
+            doneIds = done
+        } else {
+            tasks = mockTasks()
+            doneIds = setOf("t5")
+        }
+        loading = false
+    }
     val pending = tasks.filter { it.id !in doneIds }
     val done = tasks.filter { it.id in doneIds }
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
+
+    val studentName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
 
     // 与课堂页同款：向下浏览收起底部导航栏，回顶展开
     LaunchedEffect(scrollState) {
@@ -192,7 +218,14 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                     task = t,
                     done = false,
                     enterIndex = i,
-                    onToggle = { doneIds = doneIds + t.id },
+                    onToggle = {
+                        // ★ 真实提交：点待完成 → 调用 /api/assignments/{id}/submissions；
+                        // 成功才标记已交，失败不标记（服务端无"取消提交"接口，已交项点按仅本地取消）。
+                        scope.launch {
+                            val err = KewuApi.submitAssignment(t.id, KewuApi.username ?: "", studentName, t.title)
+                            if (err == null) doneIds = doneIds + t.id
+                        }
+                    },
                 )
             }
             if (done.isNotEmpty()) {

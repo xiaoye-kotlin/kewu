@@ -82,6 +82,7 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.KewuSky
+import com.kewu.app.KewuApi
 import com.kewu.app.haptic
 import com.kewu.app.hapticClickable
 import com.kewu.app.kvGet
@@ -141,6 +142,8 @@ fun LoginScreen(onLogin: () -> Unit) {
     var school by remember { mutableStateOf("") }
     var pwd by remember { mutableStateOf(kvGet("kewu_pwd") ?: "") }
     var pwd2 by remember { mutableStateOf("") }
+    // 登录/注册失败文案（网络异常 / 账号密码错误），成功后清空
+    var loginError by remember { mutableStateOf("") }
 
     val pageBackdrop = rememberLayerBackdrop()
     val breath = rememberBreathPhase()
@@ -323,8 +326,13 @@ fun LoginScreen(onLogin: () -> Unit) {
                         val enabled = if (mode == 0) account.isNotBlank() && pwd.isNotBlank()
                         else name.isNotBlank() && account.isNotBlank() && pwd.isNotBlank() && pwd == pwd2
                         LoginButton(
+                            mode = mode,
+                            account = account,
+                            pwd = pwd,
+                            name = name,
                             enabled = enabled,
                             label = if (mode == 0) "登录" else "注册并登录",
+                            onError = { loginError = it },
                             onDone = {
                                 // ★ 自动记住：登录/注册成功后持久化账号密码 + 已登录标记，
                                 //   下次启动直接进主界面（除非在「我的」点退出登录清空）。
@@ -333,6 +341,14 @@ fun LoginScreen(onLogin: () -> Unit) {
                                 kvSet("kewu_logged", "1")
                                 onLogin()
                             },
+                        )
+                    }
+                    // 登录/注册失败提示（错误色，不进主界面）
+                    if (loginError.isNotEmpty()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            loginError, color = cs.error, fontSize = 12.5.sp,
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
                         )
                     }
                     Spacer(Modifier.height(12.dp))
@@ -431,7 +447,16 @@ private fun Segmented(selected: Int, items: List<String>, onSelect: (Int) -> Uni
  * - success：转圈淡出、描线对勾逐段长出（Canvas 手绘），按钮变品牌绿 + 一次脉冲，随后回调 [onDone]。
  */
 @Composable
-private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
+private fun LoginButton(
+    mode: Int,
+    account: String,
+    pwd: String,
+    name: String,
+    enabled: Boolean,
+    label: String,
+    onError: (String) -> Unit,
+    onDone: () -> Unit,
+) {
     val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     val interactionSource = remember { MutableInteractionSource() }
@@ -484,17 +509,31 @@ private fun LoginButton(enabled: Boolean, label: String, onDone: () -> Unit) {
                 enabled = enabled && state == 0,
             ) {
                 haptic(HapticKind.Tick)
+                onError("") // 清除旧错误
                 state = 1
                 scope.launch {
-                    delay(900) // mock 网络请求
-                    state = 2
-                    // ★ 登录成功：线性马达中档震动 + 一次柔光闪（视觉印象）
-                    haptic(HapticKind.Medium)
-                    successFlash.snapTo(0.18f)
-                    successFlash.animateTo(0f, tween(durationMillis = 280))
-                    checkProgress.animateTo(1f, tween(durationMillis = 450, easing = LinearOutSlowInEasing))
-                    delay(320)
-                    onDone()
+                    // ★ 真实请求：登录 / 注册（注册成功后自动登录拿 token）
+                    val msg = if (mode == 0) {
+                        KewuApi.login(account, pwd)
+                    } else {
+                        val r = KewuApi.register(account, pwd, name)
+                        if (r == null) KewuApi.login(account, pwd) else r
+                    }
+                    if (msg == null) {
+                        // 成功：拉取个人资料（最佳努力，失败不影响进入主界面）
+                        KewuApi.me()
+                        state = 2
+                        // ★ 登录成功：线性马达中档震动 + 一次柔光闪（视觉印象）
+                        haptic(HapticKind.Medium)
+                        successFlash.snapTo(0.18f)
+                        successFlash.animateTo(0f, tween(durationMillis = 280))
+                        checkProgress.animateTo(1f, tween(durationMillis = 450, easing = LinearOutSlowInEasing))
+                        delay(320)
+                        onDone()
+                    } else {
+                        onError(msg)
+                        state = 0
+                    }
                 }
             },
         contentAlignment = Alignment.Center,

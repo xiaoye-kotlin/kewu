@@ -72,6 +72,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
 import com.kewu.app.hapticClickable
@@ -308,9 +309,27 @@ internal fun ExclaimMark(
 @Composable
 fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var showAll by remember { mutableStateOf(false) }
-    val today = remember { mockToday() }
-    val history = remember { mockHistory() }
+    // ★ 接入真实课程：/api/courses 替换 mock（后端仅 id/name/description/teacher，
+    //   缺教室/时间/实时状态 → room="待定"、time="—"、status=PENDING）；失败降级 mock。
+    var realCourses by remember { mutableStateOf(mockToday()) }
+    val today = realCourses
+    val history = emptyList<Course>()
     val courses = if (showAll) today + history else today
+
+    // 问候栏/头像用真实姓名（来自 /user/me 或登录账号）
+    var displayName by remember { mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "同学") }
+    LaunchedEffect(Unit) {
+        if (KewuApi.currentUser == null) KewuApi.me()
+        displayName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: displayName
+        KewuApi.getCourses()?.let { list ->
+            realCourses = list.map { c ->
+                Course(
+                    name = c.name, teacher = c.teacher, room = "待定", time = "—",
+                    status = CourseStatus.PENDING, summary = c.description,
+                )
+            }
+        }
+    }
 
     val recording = remember { true } // mock：演示时始终在录音；真实接入后按状态切换
     val devices = remember {
@@ -387,7 +406,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     //   以 Mac app 打开式弹出（底部零大小放大 + 扭曲回弹），再让问候栏、录音浮层、
                     //   课程卡依次从屏幕底部「钻」出来。
                     Box(Modifier.greetIn(40)) {
-                        GreetingBar(name = "刘宇豪") { onGoToTab(3) }
+                        GreetingBar(name = displayName) { onGoToTab(3) }
                     }
                     Box(Modifier.macPopIn(140)) {
                         StatusSection(
@@ -429,7 +448,7 @@ private fun GreetingBar(name: String, onAvatar: () -> Unit) {
                 fontWeight = FontWeight.SemiBold, maxLines = 1,
             )
         }
-        Avatar(onAvatar)
+        Avatar(name, onAvatar)
     }
 }
 
@@ -446,7 +465,7 @@ private fun rememberGreeting(): String {
 }
 
 @Composable
-private fun Avatar(onAvatar: () -> Unit) {
+private fun Avatar(name: String, onAvatar: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Box(
         Modifier
@@ -456,7 +475,8 @@ private fun Avatar(onAvatar: () -> Unit) {
         .hapticClickable { onAvatar() },
         contentAlignment = Alignment.Center,
     ) {
-        Text("刘", color = cs.onSecondaryContainer, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Text(name.firstOrNull()?.toString() ?: "我", color = cs.onSecondaryContainer,
+            fontWeight = FontWeight.Bold, fontSize = 15.sp)
     }
 }
 

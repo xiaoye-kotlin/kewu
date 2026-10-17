@@ -18,7 +18,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,6 +31,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
@@ -53,8 +57,18 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
-    val courses = remember { mockTaCourses() }
-    val assignments = remember { mockTaAssignments() }
+    // ★ 接入真实数据：/api/courses + /api/assignments 替换 mock；失败降级 mock。
+    // 后端 CourseInfo 仅有 id/name/description/teacher，缺教室/下次时间 → 占位"待定/—"。
+    var courses by remember { mutableStateOf(mockTaCourses()) }
+    var assignments by remember { mutableStateOf(mockTaAssignments()) }
+    LaunchedEffect(Unit) {
+        KewuApi.getCourses()?.let { list ->
+            courses = list.map { c -> TaCourse(c.name, c.teacher, "待定", "—") }
+        }
+        KewuApi.getAssignments()?.let { list ->
+            assignments = list.map { a -> TaAssignment(a.title, a.courseId, a.deadline.ifBlank { "未设置" }, false) }
+        }
+    }
 
     // 与课堂/任务/我的同款：向下浏览收起底部导航栏，回顶展开
     LaunchedEffect(scrollState) {

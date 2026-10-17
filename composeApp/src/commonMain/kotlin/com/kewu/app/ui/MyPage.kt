@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.hapticClickable
 import kotlinx.coroutines.delay
@@ -84,6 +85,19 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
 
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
+
+    // ★ 接入真实资料：拉取 /user/me，映射到 UserProfile。
+    // 后端 UserInfo 仅含 id/username/nickname，无 学号/学校/班级/手机/邮箱，
+    // 这些字段用默认值补；学号 = 登录账号(username)。失败则保留默认资料（离线也可用）。
+    LaunchedEffect(Unit) {
+        if (KewuApi.currentUser == null) KewuApi.me()
+        val u = KewuApi.currentUser
+        val uname = KewuApi.username ?: u?.user?.id ?: ""
+        profile = defaultProfile.copy(
+            name = (u?.user?.nickname ?: uname).ifBlank { defaultProfile.name },
+            studentId = uname.ifBlank { defaultProfile.studentId },
+        )
+    }
 
     Box(Modifier.fillMaxSize()) {
         // 背景层：M3 语义色，是玻璃的采样源（采集层与玻璃平级 ✓）
