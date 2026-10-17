@@ -60,7 +60,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.KewuGreen
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
@@ -294,7 +294,7 @@ private fun DayStrip(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    LiquidGlassSurface(
+    KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(50),
         blurRadius = 16.dp,

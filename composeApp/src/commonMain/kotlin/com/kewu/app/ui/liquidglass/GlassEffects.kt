@@ -44,6 +44,9 @@ fun KewuGlassCard(
     shape: RoundedCornerShape = RoundedCornerShape(20.dp),
     blurRadius: Dp = 22.dp,
     tintAlpha: Float = 0.28f,
+    /** 玻璃内的中心放大倍率（1 = 不放大）。>1 时身后内容在玻璃里被放大，即液态玻璃的透镜感。
+     *  导航泡泡需要它（Apple 液态玻璃的"内容透过来还被放大"）；内容页默认 1 不放大。 */
+    magnify: Float = 1f,
     highlight: Highlight? = null,
     onClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
@@ -65,6 +68,9 @@ fun KewuGlassCard(
                 effects = {
                     colorControls(brightness = 0f, contrast = 1f, saturation = 1.5f)
                     if (blurPx > 0.5f) blur(blurPx.dp.toPx(), blurPx.dp.toPx())
+                    // 放大必须放在 blur **之后**：此时 downscaleFactor / padding 已是最终值，
+                    // 才能把中心换算到「降采样后的 padded 纹理」坐标系（否则采样全落在透明黑）。
+                    if (magnify > 1.001f) magnify(magnify)
                     if (refractPx.value > 0.5f && isRuntimeShaderSupported()) {
                         refractionLens(
                             refractionHeight = refractPx.toPx(),
@@ -151,6 +157,42 @@ internal fun BackdropEffectScope.roundedRectCornerRadii(): FloatArray? {
         bottomRight.coerceAtMost(maxRadius),
         bottomLeft.coerceAtMost(maxRadius),
     )
+}
+
+/**
+ * AGSL「放大镜」：以玻璃中心为原点，把采样坐标向中心收 —— 于是身后内容在玻璃里**看起来被放大**，
+ * 这就是液态玻璃的标志性折射感（coui 自带的 effects 只有 blur / blendColors / colorControls，
+ * 没有 scale，所以只能用自定义 runtime shader 做）。
+ *
+ * 采样点始终落在原图内部（|d / scale| ≤ |d|），不会采到透明黑，边缘不需要特殊处理。
+ * 改编自本项目旧 `LiquidGlassSurface` 的同名 shader（Apache-2.0），迁入本共享组件，供导航泡泡复用。
+ */
+private const val MAGNIFY_SHADER = """
+uniform shader child;
+uniform float2 u_center;
+uniform float u_scale;
+
+half4 main(float2 coord) {
+    float2 d = coord - u_center;
+    return child.eval(u_center + d / u_scale);
+}
+"""
+
+internal fun BackdropEffectScope.magnify(scale: Float) {
+    if (scale <= 1.001f) return
+    runtimeShaderEffect(
+        key = "KewuMagnify",
+        shaderString = MAGNIFY_SHADER,
+        uniformShaderName = "child",
+    ) {
+        val ds = downscaleFactor.toFloat().coerceAtLeast(1f)
+        setFloatUniform(
+            "u_center",
+            (padding + size.width / 2f) / ds,
+            (padding + size.height / 2f) / ds,
+        )
+        setFloatUniform("u_scale", scale)
+    }
 }
 
 private const val ROUNDED_RECT_SDF = """

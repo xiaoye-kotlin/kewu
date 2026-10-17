@@ -62,7 +62,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.material3.MaterialTheme
 import com.kewu.app.KewuBlue
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
@@ -456,7 +456,7 @@ private fun AppleLiquidGlassNavBar(
             .height(containerHeight),
     ) {
         // 1) 底部玻璃胶囊托盘（淡，提供 bar 质感；全圆角无直边）
-        LiquidGlassSurface(
+        KewuGlassCard(
             backdrop = backdrop,
             shape = RoundedCornerShape(33.dp),
             blurRadius = 22.dp,
@@ -519,7 +519,7 @@ private fun AppleLiquidGlassNavBar(
                 //   再由 magnify 把透过来的内容在泡泡里放大 —— 这才是液态玻璃的折射感，
                 //   光靠"淡"只会变成一块看不清内容的灰片。
                 val bubbleActive = expanded.value || tapExpand.value
-                LiquidGlassSurface(
+                KewuGlassCard(
                     backdrop = backdrop,
                     shape = RoundedCornerShape(50),
                     blurRadius = if (bubbleActive) 16.dp else 12.dp,

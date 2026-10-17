@@ -63,7 +63,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import com.kewu.app.KewuGreen
-import com.kewu.app.ui.liquidglass.LiquidGlassSurface
+import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
@@ -559,7 +559,7 @@ private fun MiniStatCard(
 private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBackdrop) {
     val cs = MaterialTheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
-    LiquidGlassSurface(
+    KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
         blurRadius = 20.dp,
@@ -567,9 +567,8 @@ private fun RecordingOverlay(devices: List<RecordingDevice>, backdrop: LayerBack
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .padding(bottom = 12.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .clickable { expanded = !expanded },
+            .padding(bottom = 12.dp),
+        onClick = { expanded = !expanded },
     ) {
         Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -640,7 +639,7 @@ private fun Waveform() {
 
 @Composable
 private fun CourseCard(course: Course, backdrop: LayerBackdrop, index: Int) {
-    LiquidGlassSurface(
+    KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp),
         blurRadius = 20.dp,
