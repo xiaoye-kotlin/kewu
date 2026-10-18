@@ -67,6 +67,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -105,6 +106,13 @@ import kotlin.time.Clock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+
+/**
+ * 首页大卡水印专用深绿（2026-10-19 用户反馈）：品牌荧光绿 `KewuGreen`(#19E68C) 即使
+ * 叠在白卡上也偏浅、"看着不舒服"，水印换用同色相的深绿，α 由 0.30 提到 0.55。
+ * 只作用于水印；交互元素仍用品牌荧光绿。
+ */
+private val WatermarkGreen = Color(0xFF0B8A54)
 
 // ───────────────────────── 数据模型（mock） ─────────────────────────
 
@@ -267,8 +275,14 @@ internal fun Modifier.squircleShadow(radius: Dp, spread: Dp = 5.dp, alpha: Float
  * ② 课程卡「已总结」徽章；③ 课程卡「失败」徽章（`cross = true`）。
  * 另：任务页每条任务前的徽章、课表页「已上过」徽章也复用同一组件。
  *
- * ★ 出场动效：默认 `animateEntry = true`，先扫出大半圆（420ms）再逐段写出勾／叉（260ms），
- * 观感是「当场画出来」——这是本软件的标志性动效，无特殊理由不要关掉。
+ * ★ 出场动效：默认 `animateEntry = true` —— 先扫出大半圆（400ms），提笔呼吸 70ms，
+ * 再**一笔**「写」出中间的勾/叉（240ms），像有人用笔当场画出来。这是本软件的标志性动效，
+ * 无特殊理由不要关掉（见交接文档 15.2）。
+ *
+ * ★★ 勾必须**单笔绘制**（2026-10-19 用户反馈修正）：旧版把勾拆成两根 drawLine 分画，
+ * 两笔交界处两次描边 alpha 叠加、颜色明显发深，能看出是"两根线接出来的"。现改为：
+ * 整条折线合成一个 Path，用 PathMeasure 按进度截取后**一次 drawPath** 绘制，
+ * 中间拐角由 `join = Round` 一笔带过——看不出接缝。
  */
 @Composable
 internal fun ThreeQuarterCheck(
@@ -280,15 +294,16 @@ internal fun ThreeQuarterCheck(
     /** 是否播放「画出来」的出场动效（默认开 —— 这是本软件的标志性动效） */
     animateEntry: Boolean = true,
 ) {
-    // ★★ 软件标志性出场动效（2026-10-19）：**先扫出大半圆，再逐段"写"出中间的勾／叉**。
+    // ★★ 软件标志性出场动效（2026-10-19）：**先扫出大半圆，再一笔写出中间的勾/叉**。
     // 两段动画串起来，看起来像有人用笔当场把这个符号画出来 —— 首页大卡水印、任务条目徽章、
-    // 课表/课程卡徽章全都用它，是全 app 统一的识别点（见交接文档 14.2）。
+    // 课表/课程卡徽章全都用它，是全 app 统一的识别点（见交接文档 15.2）。
     val arcP = remember { Animatable(if (animateEntry) 0f else 1f) }
     val markP = remember { Animatable(if (animateEntry) 0f else 1f) }
     LaunchedEffect(Unit) {
         if (!animateEntry) return@LaunchedEffect
-        arcP.animateTo(1f, tween(durationMillis = 420, easing = FastOutSlowInEasing))
-        markP.animateTo(1f, tween(durationMillis = 260, easing = LinearOutSlowInEasing))
+        arcP.animateTo(1f, tween(durationMillis = 400, easing = FastOutSlowInEasing))
+        delay(70) // 提笔呼吸：圆画完，笔挪到中央再落笔，圆与符号有明确先后
+        markP.animateTo(1f, tween(durationMillis = 240, easing = LinearOutSlowInEasing))
     }
     Canvas(modifier.size(size)) {
         val s = this.size.width
@@ -307,32 +322,45 @@ internal fun ThreeQuarterCheck(
         )
         val t = markP.value
         if (t <= 0f) return@Canvas
-        // ② 中间符号：两段笔画各占一半进度，逐段写出（勾 = 折线两段；叉 = 两条对角）
         val mw = sw * 1.25f
-        fun seg(from: Offset, to: Offset, prog: Float) {
-            val p = prog.coerceIn(0f, 1f)
-            if (p <= 0f) return
-            drawLine(
-                color = c,
-                start = from,
-                end = Offset(from.x + (to.x - from.x) * p, from.y + (to.y - from.y) * p),
-                strokeWidth = mw,
-                cap = StrokeCap.Round,
-            )
-        }
+        // ② 中央符号：**单次 drawPath**（cap=Round + join=Round）。
+        //    ★ 绝不能拆成两根 drawLine 分画——交界处两次描边 alpha 叠加会发深（用户反馈）。
+        val style = Stroke(width = mw, cap = StrokeCap.Round, join = StrokeJoin.Round)
         if (cross) {
-            seg(Offset(s * 0.35f, s * 0.35f), Offset(s * 0.65f, s * 0.65f), t * 2f)
-            seg(Offset(s * 0.65f, s * 0.35f), Offset(s * 0.35f, s * 0.65f), (t - 0.5f) * 2f)
+            // 叉 = 两刀（\ 再 /），各占一半进度；两刀本就该相交，各自独立截取绘制
+            fun stroke(ax: Float, ay: Float, bx: Float, by: Float, prog: Float) {
+                val p = prog.coerceIn(0f, 1f)
+                if (p <= 0f) return
+                val path = Path().apply { moveTo(ax, ay); lineTo(bx, by) }
+                val measure = PathMeasure().apply { setPath(path, false) }
+                val seg = Path()
+                if (measure.getSegment(0f, measure.length * p, seg, true)) {
+                    drawPath(seg, c, style = style)
+                }
+            }
+            stroke(s * 0.35f, s * 0.35f, s * 0.65f, s * 0.65f, t * 2f)
+            stroke(s * 0.65f, s * 0.35f, s * 0.35f, s * 0.65f, (t - 0.5f) * 2f)
         } else {
-            seg(Offset(s * 0.31f, s * 0.50f), Offset(s * 0.44f, s * 0.63f), t * 2f)
-            seg(Offset(s * 0.44f, s * 0.63f), Offset(s * 0.69f, s * 0.37f), (t - 0.5f) * 2f)
+            // 勾 = 一笔折线（短边下笔 → 长边提起）：PathMeasure 从起点按进度截取，
+            //    拐角由 join=Round 一笔带过，看不出接缝
+            val path = Path().apply {
+                moveTo(s * 0.31f, s * 0.50f)
+                lineTo(s * 0.44f, s * 0.63f)
+                lineTo(s * 0.69f, s * 0.37f)
+            }
+            val measure = PathMeasure().apply { setPath(path, false) }
+            val seg = Path()
+            if (measure.getSegment(0f, measure.length * t.coerceIn(0f, 1f), seg, true)) {
+                drawPath(seg, c, style = style)
+            }
         }
     }
 }
 
 /**
  * 警示感叹号水印（未上课态用）：大半圆弧 + 中央"!"，配琥珀黄。
- * 与 [ThreeQuarterCheck] 同尺寸、同右下偏移布局，可直接替换状态块水印。
+ * 与 [ThreeQuarterCheck] 同尺寸、同右下偏移布局、同款「先画圆再画符号」描绘动效，
+ * 可直接替换状态块水印。
  */
 @Composable
 internal fun ExclaimMark(
@@ -340,34 +368,52 @@ internal fun ExclaimMark(
     color: Color,
     modifier: Modifier = Modifier,
     alpha: Float = 1f,
+    /** 是否播放「画出来」的出场动效（与 [ThreeQuarterCheck] 同节奏，默认开） */
+    animateEntry: Boolean = true,
 ) {
+    // 与 ThreeQuarterCheck 完全同节奏：大半圆 400ms → 提笔呼吸 70ms → 感叹号 240ms
+    val arcP = remember { Animatable(if (animateEntry) 0f else 1f) }
+    val markP = remember { Animatable(if (animateEntry) 0f else 1f) }
+    LaunchedEffect(Unit) {
+        if (!animateEntry) return@LaunchedEffect
+        arcP.animateTo(1f, tween(durationMillis = 400, easing = FastOutSlowInEasing))
+        delay(70)
+        markP.animateTo(1f, tween(durationMillis = 240, easing = LinearOutSlowInEasing))
+    }
     Canvas(modifier.size(size)) {
         val s = this.size.width
         val sw = s * 0.072f
         val inset = sw / 2f
+        val c = color.copy(alpha = alpha)
+        // ① 大半圆：与勾/叉同一扫出方式
         drawArc(
-            color = color.copy(alpha = alpha),
+            color = c,
             startAngle = 135f,
-            sweepAngle = 270f,
+            sweepAngle = 270f * arcP.value,
             useCenter = false,
             topLeft = Offset(inset, inset),
             size = Size(s - sw, s - sw),
             style = Stroke(width = sw, cap = StrokeCap.Round),
         )
-        // 中央"!"：上竖线 + 底部圆点
+        val t = markP.value
+        if (t <= 0f) return@Canvas
         val cx = s * 0.5f
-        drawLine(
-            color = color.copy(alpha = alpha),
-            start = Offset(cx, s * 0.34f),
-            end = Offset(cx, s * 0.60f),
-            strokeWidth = sw * 1.25f,
-            cap = StrokeCap.Round,
-        )
-        drawCircle(
-            color = color.copy(alpha = alpha),
-            radius = sw * 0.62f,
-            center = Offset(cx, s * 0.70f),
-        )
+        val mw = sw * 1.25f
+        val style = Stroke(width = mw, cap = StrokeCap.Round, join = StrokeJoin.Round)
+        // ② "!" = 两笔：上竖线一笔写出（前半进度）+ 底部圆点（后半进度，半径生长）
+        val barP = (t * 2f).coerceIn(0f, 1f)
+        if (barP > 0f) {
+            val bar = Path().apply { moveTo(cx, s * 0.34f); lineTo(cx, s * 0.60f) }
+            val measure = PathMeasure().apply { setPath(bar, false) }
+            val seg = Path()
+            if (measure.getSegment(0f, measure.length * barP, seg, true)) {
+                drawPath(seg, c, style = style)
+            }
+        }
+        val dotP = ((t - 0.5f) * 2f).coerceIn(0f, 1f)
+        if (dotP > 0f) {
+            drawCircle(color = c, radius = sw * 0.62f * dotP, center = Offset(cx, s * 0.70f))
+        }
     }
 }
 
@@ -688,10 +734,11 @@ private fun StatusSection(
                         contentAlignment = Alignment.BottomEnd,
                     ) {
                         // 无课 → 品牌绿大半圆+勾；正在上课 → 琥珀黄大半圆+「!」（用户 2026-10-19 要求）
+                        // 水印绿用深绿（2026-10-19 用户反馈：品牌荧光绿 α0.30 太浅，看不清）
                         if (live != null) {
                             ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.30f)
                         } else {
-                            ThreeQuarterCheck(size = 170.dp, color = KewuGreen, alpha = 0.30f)
+                            ThreeQuarterCheck(size = 170.dp, color = WatermarkGreen, alpha = 0.55f)
                         }
                     }
                     Column(Modifier.fillMaxSize().padding(16.dp)) {
