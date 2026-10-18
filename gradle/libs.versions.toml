@@ -7,8 +7,6 @@ kotlinxCoroutines = "1.10.2"
 kotlinxSerialization = "1.7.3"
 ktor = "2.3.12"
 coui = "1.1.0"
-ktor = "2.3.12"
-kotlinxSerialization = "1.7.3"
 lettuce = "6.4.0.RELEASE"
 obs = "3.25.10"
 
