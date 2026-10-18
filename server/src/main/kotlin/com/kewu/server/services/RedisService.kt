@@ -63,5 +63,11 @@ class RedisService(private val cfg: RedisConfig) {
     suspend fun getSession(sessionId: String): ClassroomSession? =
         withRedis(null) { it.get("kewu:session:$sessionId") }?.let { Json.decodeFromString(ClassroomSession.serializer(), it) }
 
+    // 录音元数据按会话存一份，上传即落账，融合核对时服务端自己也有账
+    suspend fun saveRecordingMeta(sessionId: String, metaJson: String) =
+        withRedis(false) { it.rpush("kewu:recordings:$sessionId", metaJson) }
+    suspend fun getRecordingMetas(sessionId: String): List<String> =
+        withRedis(emptyList()) { it.lrange("kewu:recordings:$sessionId", 0L, -1L) }
+
     fun close() = runCatching { connection?.close() }
 }

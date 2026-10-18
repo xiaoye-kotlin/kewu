@@ -17,16 +17,19 @@ import io.ktor.server.routing.post
 import io.ktor.utils.io.core.readBytes
 import java.time.Instant
 import java.util.UUID
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
-// 录音上传 + 融合：多端把音频传上来，存好、打分，再把同一节课的多段择优
+// 录音上传 + 融合：多端把音频传上来，存好、算电平/信噪比、打分，教师端优先择优，异常自动回退学生端
 fun Routing.recordingRoutes() {
     val services = application.attributes[ServicesKey]
 
     post("/api/recordings/upload") {
         try {
             val multipart = call.receiveMultipart()
-            var classId = ""; var sessionId = ""; var deviceId = ""
+            var classId = ""; var sessionId = ""; var deviceId = ""; var role = "student"
             var format: String? = null; var sampleRate: Int? = null; var durationSec: Double? = null
+            var avgLevelDb: Double? = null
             var bytes: ByteArray? = null; var ext = "bin"
             var readError: String? = null
 
@@ -36,8 +39,10 @@ fun Routing.recordingRoutes() {
                         "classId" -> classId = part.value
                         "sessionId" -> sessionId = part.value
                         "deviceId" -> deviceId = part.value
+                        "role" -> if (part.value.isNotBlank()) role = part.value
                         "sampleRate" -> part.value.toIntOrNull()?.let { sampleRate = it }
                         "durationSec" -> part.value.toDoubleOrNull()?.let { durationSec = it }
+                        "avgLevel", "avgLevelDb" -> part.value.toDoubleOrNull()?.let { avgLevelDb = it }
                         "format" -> if (format == null) format = part.value
                     }
                     is PartData.FileItem -> if (part.name == "audio") {
@@ -67,22 +72,46 @@ fun Routing.recordingRoutes() {
             }
 
             val recordingId = UUID.randomUUID().toString()
-            val url = services.storage.save(recordingId, bytes!!, ext)
+            // WAV/PCM 服务端自己解析算电平和信噪比；m4a 这类解不了的，用客户端上报的 avgLevel
+            val analysis = services.analyzer.analyze(bytes!!, format)
+            val finalAvgLevel = analysis.avgLevelDb ?: avgLevelDb
+            val finalDuration = durationSec ?: analysis.durationSec
             val meta = RecordingMeta(
                 recordingId = recordingId,
                 classId = classId,
                 sessionId = sessionId,
                 deviceId = deviceId,
+                role = role,
                 format = format,
                 sampleRate = sampleRate,
-                durationSec = durationSec,
+                durationSec = finalDuration,
                 sizeBytes = bytes!!.size.toLong(),
-                storedUrl = url
+                avgLevelDb = finalAvgLevel,
+                snrDb = analysis.snrDb
+            )
+            val url = services.storage.save(
+                recordingId, bytes!!, ext,
+                mapOf(
+                    "classId" to classId,
+                    "sessionId" to sessionId,
+                    "deviceId" to deviceId,
+                    "role" to role,
+                    "format" to (format ?: ext),
+                    "sampleRate" to (sampleRate?.toString() ?: ""),
+                    "durationSec" to (finalDuration?.toString() ?: ""),
+                    "sizeBytes" to bytes!!.size.toString(),
+                    "avgLevelDb" to (finalAvgLevel?.toString() ?: ""),
+                    "snrDb" to (analysis.snrDb?.toString() ?: "")
+                )
             )
             val score = services.scorer.score(meta).score
+            // 元数据按会话落一份 Redis，服务端自己有账，不全靠融合时客户端传
+            if (sessionId.isNotBlank()) {
+                services.redis.saveRecordingMeta(sessionId, Json.encodeToString(RecordingMeta.serializer(), meta))
+            }
             call.respond(
                 HttpStatusCode.Created,
-                RecordingUploadResult(recordingId, url, score, Instant.now().toString())
+                RecordingUploadResult(recordingId, url, score, Instant.now().toString(), role, finalAvgLevel, analysis.snrDb)
             )
         } catch (t: Throwable) {
             println("UPLOAD-ERROR: " + t.stackTraceToString())

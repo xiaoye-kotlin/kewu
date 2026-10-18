@@ -18,7 +18,7 @@ import kotlinx.serialization.json.Json
 // 装一下内容协商，前端/多端传来的 JSON 才能自动序列化
 fun Application.configureSerialization() {
     install(ContentNegotiation) {
-        json(Json { prettyPrint = true; isLenient = true; ignoreUnknownKeys = true })
+        json(Json { prettyPrint = true; isLenient = true; ignoreUnknownKeys = true; encodeDefaults = true })
     }
 }
 

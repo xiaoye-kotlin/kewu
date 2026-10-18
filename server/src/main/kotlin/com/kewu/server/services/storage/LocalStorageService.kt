@@ -8,9 +8,18 @@ import java.io.File
 class LocalStorageService(private val dir: String) : AudioStorage {
     private val root = File(dir).apply { if (!exists()) mkdirs() }
 
-    override suspend fun save(recordingId: String, bytes: ByteArray, ext: String): String {
+    override suspend fun save(recordingId: String, bytes: ByteArray, ext: String, metadata: Map<String, String>): String {
         val file = File(root, "$recordingId.$ext")
-        withContext(Dispatchers.IO) { file.writeBytes(bytes) }
+        withContext(Dispatchers.IO) {
+            file.writeBytes(bytes)
+            if (metadata.isNotEmpty()) {
+                // 本地模式把元数据写成同名 sidecar json，开发时对着音频文件就能看
+                val json = metadata.entries.joinToString(",", "{", "}") { (k, v) ->
+                    "\"${k.replace("\"", "'")}\":\"${v.replace("\"", "'")}\""
+                }
+                File(root, "$recordingId.meta.json").writeText(json)
+            }
+        }
         return "local://${file.absolutePath}"
     }
 

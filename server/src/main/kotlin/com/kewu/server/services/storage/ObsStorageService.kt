@@ -3,6 +3,7 @@ package com.kewu.server.services.storage
 import com.kewu.server.config.ObsConfig
 import com.obs.services.ObsClient
 import com.obs.services.ObsConfiguration
+import com.obs.services.model.ObjectMetadata
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
@@ -14,9 +15,10 @@ class ObsStorageService(private val cfg: ObsConfig) : AudioStorage {
         ObsClient(cfg.ak ?: "", cfg.sk ?: "", config)
     }
 
-    override suspend fun save(recordingId: String, bytes: ByteArray, ext: String): String {
+    override suspend fun save(recordingId: String, bytes: ByteArray, ext: String, metadata: Map<String, String>): String {
         val key = "recordings/$recordingId.$ext"
-        withContext(Dispatchers.IO) { client.putObject(cfg.bucket, key, ByteArrayInputStream(bytes)) }
+        val obsMeta = ObjectMetadata().apply { metadata.forEach { (k, v) -> addUserMetadata(k, v) } }
+        withContext(Dispatchers.IO) { client.putObject(cfg.bucket, key, ByteArrayInputStream(bytes), obsMeta) }
         val base = cfg.endpoint.removePrefix("https://").removePrefix("http://").removeSuffix("/")
         return "https://${cfg.bucket}.$base/$key"
     }

@@ -8,6 +8,7 @@ import com.kewu.server.plugins.configureSerialization
 import com.kewu.server.plugins.configureStatusPages
 import com.kewu.server.services.ai.AiService
 import com.kewu.server.services.ai.NoOpAiService
+import com.kewu.server.services.AudioAnalyzer
 import com.kewu.server.services.AudioFusion
 import com.kewu.server.services.QualityScorer
 import com.kewu.server.services.RedisService
@@ -38,6 +39,7 @@ class Services(
     val redis: RedisService,
     val scorer: QualityScorer,
     val fusion: AudioFusion,
+    val analyzer: AudioAnalyzer,
     val ai: AiService
 )
 
@@ -57,6 +59,7 @@ fun Application.installServices(config: com.kewu.server.config.AppConfig) {
             redis = RedisService(config.redis),
             scorer = QualityScorer(),
             fusion = AudioFusion(),
+            analyzer = AudioAnalyzer(),
             ai = NoOpAiService()
         )
     )
