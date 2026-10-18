@@ -27,6 +27,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,8 +37,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -56,14 +61,33 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
+import com.kewu.app.CourseInfo
+import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
+import com.kewu.app.haptic
 import com.kewu.app.hapticClickable
+import com.kewu.app.isAudioPermissionGranted
+import com.kewu.app.isCameraPermissionGranted
+import com.kewu.app.isNotificationPermissionGranted
+import com.kewu.app.kvGet
+import com.kewu.app.kvSet
+import com.kewu.app.openAppSettings
+import com.kewu.app.platformActivity
+import com.kewu.app.requestAudioPermission
+import com.kewu.app.requestCameraPermission
+import com.kewu.app.requestNotificationPermission
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.basic.Card
+import io.github.suqi8.coui.kmp.basic.CardColors
+import io.github.suqi8.coui.kmp.basic.Switch
+import io.github.suqi8.coui.kmp.basic.SwitchDefaults
 
 // ───────────────────────── 我的页（tab 3） ─────────────────────────
 
@@ -81,7 +105,9 @@ import io.github.suqi8.coui.kmp.blur.layerBackdrop
 @Composable
 fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
     var profile by remember { mutableStateOf(defaultProfile) }
-    var screen by remember { mutableStateOf(0) } // 0=主页 1=编辑资料 2=录音管理
+    // 0=主页 1=编辑资料 2=录音管理 3=课程绑定 6=通知设置 7=关于我们
+    // （4/5 原为教师工具的发起签到/发布笔记 —— 学生端已移除，2026-10-18）
+    var screen by remember { mutableStateOf(0) }
 
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
@@ -98,6 +124,10 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
             studentId = uname.ifBlank { defaultProfile.studentId },
         )
     }
+
+    // ★ 内部子页返回：screen != 0 时（编辑资料 / 录音管理 / 课程绑定 / 通知设置 / 关于我们）
+    // 按返回键回到主页（screen=0），而不是直接 finish Activity 退出软件。
+    BackHandler(enabled = screen != 0) { screen = 0 }
 
     Box(Modifier.fillMaxSize()) {
         // 背景层：M3 语义色，是玻璃的采样源（采集层与玻璃平级 ✓）
@@ -125,6 +155,9 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 0 -> MyHome(profile, pageBackdrop, scrollState, onNavHide,
                     onEdit = { screen = 1 },
                     onRecording = { screen = 2 },
+                    onBindCourse = { screen = 3 },
+                    onNotification = { screen = 6 },
+                    onAbout = { screen = 7 },
                     onLogout = onLogout,
                 )
                 1 -> EditProfilePage(
@@ -133,6 +166,9 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     onSave = { profile = it; screen = 0 },
                 )
                 2 -> RecordingManagePage(pageBackdrop, onBack = { screen = 0 })
+                3 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
+                6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
+                7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
             }
         }
     }
@@ -176,6 +212,9 @@ private fun MyHome(
     onNavHide: (Boolean) -> Unit,
     onEdit: () -> Unit,
     onRecording: () -> Unit,
+    onBindCourse: () -> Unit,
+    onNotification: () -> Unit,
+    onAbout: () -> Unit,
     onLogout: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -191,12 +230,24 @@ private fun MyHome(
         }
     }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .verticalScroll(scrollState)
-            .padding(bottom = 96.dp),
-    ) {
+    // 「我的课程」状态提升到本层：退出课程的玻璃菜单要渲染在滚动区之外的根层
+    //（LiquidGlassActionMenu 是 fillMaxSize 遮罩，不能塞进 verticalScroll 里），
+    // 课程移除也要在这里改列表。
+    var myCourses by remember { mutableStateOf<List<CourseInfo>?>(null) }
+    var coursesLoading by remember { mutableStateOf(true) }
+    var exitTarget by remember { mutableStateOf<CourseInfo?>(null) }
+    LaunchedEffect(Unit) {
+        myCourses = KewuApi.getCourses()
+        coursesLoading = false
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(bottom = 96.dp),
+        ) {
         Spacer(Modifier.height(12.dp))
 
         // 资料头：液态玻璃大卡，头像 + 名字 + 学号 + 学校/班级 + 编辑入口
@@ -246,7 +297,10 @@ private fun MyHome(
                             fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp, maxLines = 1)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("${profile.school} · ${profile.className}", color = cs.onSurfaceVariant,
+                    Text("${profile.school}", color = cs.onSurfaceVariant,
+                        fontSize = 13.sp, maxLines = 1)
+                    Spacer(Modifier.height(4.dp))
+                    Text("${profile.className}", color = cs.onSurfaceVariant,
                         fontSize = 13.sp, maxLines = 1)
                 }
                 // 编辑入口：铅笔图标（轻提示「资料可改」）
@@ -261,16 +315,20 @@ private fun MyHome(
             }
         }
 
-        // 分组标题
-        GroupLabel("校园功能", Modifier.myEnter(1))
-        // 功能列表（squircle 行，可点进子页 / 留作占位）
-        FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onEdit /* 占位：接课表绑定 */, modifier = Modifier.myEnter(2))
-        FuncRow(1, "录音管理", "查看本地录音、手动重传", backdrop, onClick = onRecording, modifier = Modifier.myEnter(3))
-        FuncRow(2, "通知设置", "签到提醒、纪要推送", backdrop, onClick = {}, modifier = Modifier.myEnter(4))
-        FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = {}, modifier = Modifier.myEnter(5))
+        // 我的课程列表
+        GroupLabel("我的课程", Modifier.myEnter(1))
+        MyCoursesList(myCourses, coursesLoading, backdrop, Modifier.myEnter(2)) { exitTarget = it }
+
+        // 校园功能（学生端：教师工具已移除，2026-10-18）
+        GroupLabel("校园功能", Modifier.myEnter(3))
+        // 功能列表（coui 原生 Card 行，可点进子页）
+        FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onBindCourse, modifier = Modifier.myEnter(4))
+        FuncRow(1, "录音管理", "查看本地录音、手动重传", backdrop, onClick = onRecording, modifier = Modifier.myEnter(5))
+        FuncRow(2, "通知设置", "签到提醒、纪要推送与权限管理", backdrop, onClick = onNotification, modifier = Modifier.myEnter(6))
+        FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout, modifier = Modifier.myEnter(7))
 
         Spacer(Modifier.height(14.dp))
-        GroupLabel("账号", Modifier.myEnter(6))
+        GroupLabel("账号", Modifier.myEnter(8))
         // 退出登录：玻璃按钮 + 错误色文字（不造背景色，用 error 语义）
         KewuGlassCard(
             backdrop = backdrop,
@@ -281,7 +339,7 @@ private fun MyHome(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
-                .myEnter(7, glass = true),
+                .myEnter(9, glass = true),
         ) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 15.dp, horizontal = 18.dp),
@@ -293,6 +351,34 @@ private fun MyHome(
             }
         }
         Spacer(Modifier.height(24.dp))
+        }
+
+        // ── 退出课程：底部弹出弹窗（自写 KewuBottomSheet，仅一个「退出课程」确认钮） ──
+        // 渲染在滚动列之外的根层（Dialog 独立窗口，天然盖全屏）。
+        val exitCourse = exitTarget
+        if (exitCourse != null) {
+            KewuBottomSheet(
+                show = true,
+                onDismiss = { exitTarget = null },
+                title = "退出课程",
+            ) { close ->
+                Text(
+                    exitCourse.name,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(bottom = 14.dp),
+                )
+                SheetConfirmButton(
+                    text = "退出课程",
+                    danger = true,
+                ) {
+                    // 后端暂无退出课程接口（KewuApi 无 leaveCourse）：本地移出列表，
+                    // 接口后补后在这里调 KewuApi.leaveCourse(courseId)
+                    myCourses = myCourses?.filter { it.id != exitCourse.id }
+                    close()
+                }
+            }
+        }
     }
 }
 
@@ -303,7 +389,8 @@ private fun GroupLabel(text: String, modifier: Modifier = Modifier) {
         modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp))
 }
 
-/** Mishka 风格功能行：图标 + 标题 + 副标题 + 右侧箭头（›）。点击整行。 */
+/** 功能行（2026-10-18 换 coui 原生 Card，用户要求：不自造控件）：图标 + 标题 + 副标题 + 右侧箭头。
+ *  coui Card 自带 squircle 外形与 COUI 官方按压 Tint 反馈。 */
 @Composable
 private fun FuncRow(
     glyph: Int,
@@ -314,31 +401,40 @@ private fun FuncRow(
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    Box(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 10.dp)
-            .squircleCard(16.dp, cs.surfaceVariant)
-            .hapticClickable { onClick() }
-            .padding(16.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            ProfileGlyph(glyph, cs.onSurface, 22.dp)
-            Spacer(Modifier.width(14.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                Spacer(Modifier.height(2.dp))
-                Text(subtitle, color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1)
-            }
-            Canvas(Modifier.size(13.dp)) {
-                val sw = size.width * 0.14f
-                val p = Path().apply {
-                    moveTo(size.width * 0.35f, size.height * 0.2f)
-                    lineTo(size.width * 0.65f, size.height * 0.5f)
-                    lineTo(size.width * 0.35f, size.height * 0.8f)
+    Box(modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 16.dp,
+            colors = CardColors(
+                color = cs.surfaceVariant,
+                contentColor = cs.onSurface,
+                pressedColor = cs.primary.copy(alpha = 0.16f),
+            ),
+            onClick = {
+                haptic(HapticKind.Tick)
+                onClick()
+            },
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ProfileGlyph(glyph, cs.onSurface, 22.dp)
+                Spacer(Modifier.width(14.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Spacer(Modifier.height(2.dp))
+                    Text(subtitle, color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1)
                 }
-                drawPath(p, cs.onSurfaceVariant, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                Canvas(Modifier.size(13.dp)) {
+                    val sw = size.width * 0.14f
+                    val p = Path().apply {
+                        moveTo(size.width * 0.35f, size.height * 0.2f)
+                        lineTo(size.width * 0.65f, size.height * 0.5f)
+                        lineTo(size.width * 0.35f, size.height * 0.8f)
+                    }
+                    drawPath(p, cs.onSurfaceVariant, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                }
             }
         }
     }
@@ -626,5 +722,446 @@ private fun EditGlyph(color: Color, sizeDp: Dp) {
         drawPath(body, color, style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
         drawLine(color, Offset(s * 0.40f, s * 0.82f),
             Offset(s * 0.58f, s * 0.82f), strokeWidth = sw, cap = StrokeCap.Round)
+    }
+}
+
+// ───────────────────────── 通知设置页（coui 组件，2026-10-18 新增） ─────────────────────────
+
+/**
+ * 通知设置：提醒开关（签到 / 作业截止 / 纪要生成，kv 本地持久化）+ 权限管理
+ * （通知、麦克风、相机：查看状态、一键申请、去系统设置）。
+ * 用户要求用 coui：开关 = coui Switch，行 = coui Card。
+ */
+@Composable
+private fun NotificationSettingsPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val scrollState = rememberScrollState()
+
+    // 权限状态：进入页面读一次，申请回调里更新
+    var notifGranted by remember { mutableStateOf(isNotificationPermissionGranted()) }
+    var audioGranted by remember { mutableStateOf(isAudioPermissionGranted()) }
+    var cameraGranted by remember { mutableStateOf(isCameraPermissionGranted()) }
+
+    // 提醒开关（kv 持久化："off" = 关，缺省 = 开）
+    var remindCheckin by remember { mutableStateOf(kvGet("ntf_checkin") != "off") }
+    var remindHomework by remember { mutableStateOf(kvGet("ntf_homework") != "off") }
+    var remindSummary by remember { mutableStateOf(kvGet("ntf_summary") != "off") }
+
+    fun requestPerm(kind: String) {
+        val act = platformActivity() ?: return
+        when (kind) {
+            "notif" -> requestNotificationPermission(act) { granted -> notifGranted = granted }
+            "audio" -> requestAudioPermission(act) { granted -> audioGranted = granted }
+            "camera" -> requestCameraPermission(act) { granted -> cameraGranted = granted }
+        }
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        // 顶栏：返回 + 标题
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).background(cs.surfaceVariant)
+                    .hapticClickable { onBack() },
+                contentAlignment = Alignment.Center,
+            ) { BackGlyph(cs.onSurface, 18.dp) }
+            Spacer(Modifier.width(10.dp))
+            Text("通知设置", color = cs.onSurface, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        Column(Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp)) {
+            Spacer(Modifier.height(8.dp))
+            // 说明玻璃卡
+            KewuGlassCard(
+                backdrop = backdrop,
+                shape = RoundedCornerShape(16.dp),
+                blurRadius = 20.dp,
+                tintAlpha = 0.28f,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp),
+            ) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    ProfileGlyph(0, cs.primary, 22.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        "开启后，签到开始、作业截止、纪要生成会第一时间提醒你",
+                        color = cs.onSurfaceVariant, fontSize = 13.sp, lineHeight = 19.sp,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+            }
+
+            GroupLabel("提醒开关")
+            SwitchRow("签到提醒", "老师发起签到时立即通知", remindCheckin) {
+                remindCheckin = it; kvSet("ntf_checkin", if (it) null else "off")
+            }
+            SwitchRow("作业截止提醒", "截止前 2 小时提醒未交作业", remindHomework) {
+                remindHomework = it; kvSet("ntf_homework", if (it) null else "off")
+            }
+            SwitchRow("课堂纪要提醒", "AI 纪要生成后推送", remindSummary) {
+                remindSummary = it; kvSet("ntf_summary", if (it) null else "off")
+            }
+
+            Spacer(Modifier.height(8.dp))
+            GroupLabel("权限管理")
+            PermissionRow(
+                "通知", "接收签到、作业、纪要推送", notifGranted,
+                onAction = { if (notifGranted) openAppSettings() else requestPerm("notif") },
+            )
+            PermissionRow(
+                "麦克风", "课堂录音需要", audioGranted,
+                onAction = { if (audioGranted) openAppSettings() else requestPerm("audio") },
+            )
+            PermissionRow(
+                "相机", "扫码签到需要", cameraGranted,
+                onAction = { if (cameraGranted) openAppSettings() else requestPerm("camera") },
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** 提醒开关行（coui 原生 Switch + coui Card 行）。 */
+@Composable
+private fun SwitchRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 16.dp,
+            colors = CardColors(
+                color = cs.surfaceVariant,
+                contentColor = cs.onSurface,
+                pressedColor = cs.primary.copy(alpha = 0.12f),
+            ),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Spacer(Modifier.height(2.dp))
+                    Text(subtitle, color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1)
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = checked,
+                    onCheckedChange = { onChange(it); haptic(HapticKind.Tick) },
+                    colors = SwitchDefaults.switchColors(
+                        checkedTrackColor = KewuGreen,
+                        uncheckedTrackColor = cs.outlineVariant,
+                        checkedThumbColor = Color.White,
+                        uncheckedThumbColor = Color.White,
+                    ),
+                )
+            }
+        }
+    }
+}
+
+/** 权限管理行：名称 + 用途 + 状态 + 操作按钮（未授予=申请，已授予=去设置）。 */
+@Composable
+private fun PermissionRow(title: String, subtitle: String, granted: Boolean, onAction: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 16.dp,
+            colors = CardColors(
+                color = cs.surfaceVariant,
+                contentColor = cs.onSurface,
+                pressedColor = cs.primary.copy(alpha = 0.12f),
+            ),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Spacer(Modifier.height(2.dp))
+                    Text(subtitle, color = cs.onSurfaceVariant, fontSize = 12.5.sp, maxLines = 1)
+                }
+                Text(
+                    if (granted) "已开启" else "未开启",
+                    color = if (granted) KewuGreen else cs.error,
+                    fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
+                )
+                Spacer(Modifier.width(10.dp))
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (granted) cs.secondaryContainer else cs.primary)
+                        .hapticClickable { onAction() }
+                        .padding(horizontal = 14.dp, vertical = 8.dp),
+                ) {
+                    Text(
+                        if (granted) "去设置" else "申请",
+                        color = if (granted) cs.onSecondaryContainer else Color.White,
+                        fontSize = 12.5.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ───────────────────────── 关于我们页（2026-10-18 新增） ─────────────────────────
+
+/** 关于我们：项目介绍 + 团队信息（作者：第一队 · 重庆对外经贸学院）。 */
+@Composable
+private fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val scrollState = rememberScrollState()
+
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Box(
+                Modifier.size(36.dp).clip(CircleShape).background(cs.surfaceVariant)
+                    .hapticClickable { onBack() },
+                contentAlignment = Alignment.Center,
+            ) { BackGlyph(cs.onSurface, 18.dp) }
+            Spacer(Modifier.width(10.dp))
+            Text("关于我们", color = cs.onSurface, fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+        }
+
+        Column(
+            Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(Modifier.height(18.dp))
+            // 品牌头：玻璃卡 + 课字标
+            KewuGlassCard(
+                backdrop = backdrop,
+                shape = RoundedCornerShape(24.dp),
+                blurRadius = 22.dp,
+                tintAlpha = 0.30f,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            ) {
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 26.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier
+                            .size(68.dp)
+                            .clip(RoundedCornerShape(18.dp))
+                            .background(cs.primary),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("课", color = cs.onPrimary, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text("课悟 · Kewu", color = cs.onSurface, fontSize = 21.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text("高校课堂的多端 AI 助手", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(KewuGreen.copy(alpha = 0.16f))
+                            .padding(horizontal = 10.dp, vertical = 4.dp),
+                    ) {
+                        Text("v0.1.0", color = KewuGreen, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+
+            // 项目简介（coui Card）
+            Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    cornerRadius = 16.dp,
+                    colors = CardColors(
+                        color = cs.surfaceVariant,
+                        contentColor = cs.onSurface,
+                        pressedColor = cs.surfaceVariant,
+                    ),
+                ) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text("项目介绍", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "课悟把课堂录音、扫码签到、作业批阅和 AI 助教小悟装进一个 App：\n" +
+                                "· 上课自动录音，课后生成 AI 纪要\n" +
+                                "· 老师发起签到，学生扫码/暗号一键完成\n" +
+                                "· 作业在线提交，AI 预批阅即时反馈\n" +
+                                "· 小悟 AI 助教，随时追问课堂没听懂的地方",
+                            color = cs.onSurfaceVariant, fontSize = 13.sp, lineHeight = 21.sp,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+
+            // 信息行
+            InfoRow("开发团队", "我是第一对不队 · 重庆对外经贸学院")
+            InfoRow("技术栈", "Kotlin Multiplatform + Compose Multiplatform")
+            InfoRow("云服务", "后端与录音存储部署于华为云")
+            InfoRow("支持平台", "Android · Desktop · iOS")
+
+            Spacer(Modifier.height(18.dp))
+            Text("让每一节课，都被记录、被理解", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+            Text("© 2026 课悟团队", color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 11.sp)
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+/** 关于页信息行（coui Card）。 */
+@Composable
+private fun InfoRow(label: String, value: String) {
+    val cs = MaterialTheme.colorScheme
+    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp)) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            cornerRadius = 16.dp,
+            colors = CardColors(
+                color = cs.surfaceVariant,
+                contentColor = cs.onSurface,
+                pressedColor = cs.surfaceVariant,
+            ),
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, modifier = Modifier.width(76.dp), maxLines = 1)
+                Text(value, color = cs.onSurface, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, maxLines = 2)
+            }
+        }
+    }
+}
+
+// ───────────────────────── 我的课程列表 ─────────────────────────
+
+@Composable
+private fun MyCoursesList(
+    courses: List<CourseInfo>?,
+    loading: Boolean,
+    backdrop: LayerBackdrop,
+    modifier: Modifier = Modifier,
+    onRequestExit: (CourseInfo) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+
+    if (loading) {
+        Box(
+            modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            CircularProgressIndicator()
+        }
+    } else if (courses.isNullOrEmpty()) {
+        KewuGlassCard(
+            backdrop = backdrop,
+            shape = RoundedCornerShape(16.dp),
+            blurRadius = 20.dp,
+            tintAlpha = 0.25f,
+            modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp)
+        ) {
+            Box(
+                Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("暂无课程", color = cs.onSurfaceVariant, fontSize = 14.sp)
+            }
+        }
+    } else {
+        Column(modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            courses.take(3).forEachIndexed { i, course ->
+                CourseCardCompact(course, backdrop, i, onRequestExit)
+            }
+            if (courses.size > 3) {
+                Text(
+                    "共 ${courses.size} 门课程",
+                    color = cs.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(start = 4.dp, top = 4.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CourseCardCompact(
+    course: CourseInfo,
+    backdrop: LayerBackdrop,
+    index: Int,
+    onRequestExit: (CourseInfo) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    // 错峰入场：从零上浮「长」出来（与全 app 动画语言统一）
+    val p = rememberEnterProgress(index, baseDelayMs = 240L, stepMs = 60L)
+
+    KewuGlassCard(
+        backdrop = backdrop,
+        shape = RoundedCornerShape(14.dp),
+        blurRadius = glassCondenseBlur(p, 18f),
+        tintAlpha = 0.25f * p,
+        modifier = Modifier
+            .fillMaxWidth()
+            .glassEnter(p, 40f)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().alpha(p).padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // 课程图标
+            Box(
+                Modifier
+                    .size(42.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(cs.primaryContainer),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    course.name.take(2),
+                    color = cs.onPrimaryContainer,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            // 课程信息
+            Column(Modifier.weight(1f)) {
+                Text(
+                    course.name,
+                    color = cs.onSurface,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    course.teacher.ifBlank { "未知教师" },
+                    color = cs.onSurfaceVariant,
+                    fontSize = 12.sp,
+                    maxLines = 1
+                )
+            }
+
+            // 菜单按钮（⋯）：弹出液态玻璃动作菜单（退出课程）
+            Box(
+                Modifier
+                    .size(32.dp)
+                    .clip(CircleShape)
+                    .background(cs.surfaceVariant)
+                    .hapticClickable { onRequestExit(course) },
+                contentAlignment = Alignment.Center
+            ) {
+                Text("⋯", color = cs.onSurfaceVariant, fontSize = 18.sp)
+            }
+        }
     }
 }

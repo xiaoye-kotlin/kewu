@@ -44,6 +44,7 @@ kotlin {
             implementation(libs.androidx.lifecycle.runtime.compose)
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.coui.blur)
+            implementation(libs.coui.ui)
             // 录音测试页调后端上传接口用：客户端核心放 common，引擎按平台放各自 sourceSet
             implementation(libs.ktor.client.core)
             implementation(libs.kotlinx.serialization.json)
@@ -52,6 +53,12 @@ kotlin {
         androidMain.dependencies {
             implementation(libs.androidx.activity.compose)
             implementation(libs.ktor.client.okhttp)
+            // 扫码签到：CameraX 相机预览 + ML Kit 条码识别（仅 Android；Desktop/iOS 的 QrScannerView 是占位 actual）
+            implementation(libs.androidx.camera.core)
+            implementation(libs.androidx.camera.camera2)
+            implementation(libs.androidx.camera.lifecycle)
+            implementation(libs.androidx.camera.view)
+            implementation(libs.mlkit.barcode.scanning)
         }
 
         desktopMain.dependencies {

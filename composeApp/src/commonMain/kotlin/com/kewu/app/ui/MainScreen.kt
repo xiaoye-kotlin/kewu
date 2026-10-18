@@ -99,6 +99,9 @@ private val NAV_ITEMS = listOf(
     NavItem(3, "我的"),
 )
 
+/** 助教页在 NAV_ITEMS 中的下标（该页禁用内容区横滑切页）。 */
+private const val ASSISTANT_TAB = 1
+
 @Composable
 fun MainScreen(
     onGoToTab: (Int) -> Unit = {},
@@ -118,6 +121,44 @@ fun MainScreen(
     val tabW = remember { mutableStateOf(0f) }
     val centerAnim = remember { Animatable(0f) }
     var tabSwitchJob by remember { mutableStateOf<Job?>(null) } // 内容区 crossfade 动画协程
+    // ★ 泡泡滑行的唯一驾驶协程（2026-10-18 修复「快速连点两个 tab 泡泡残影/瞬移」）：
+    //   所有滑行入口（点选 tab / 页内 goToTab / 松手吸合）统一改走 slideBubbleTo。
+    //   旧实现里 goToTab 用 navScope、点选用 pointerInput 的 scope、松手用 releaseJob，
+    //   三处各自 launch 并发改 centerAnim 的 target —— 快速连点时弹簧互相打断、
+    //   速度叠加甩出过冲，泡泡看起来「瞬移 + 沿途留残影」。
+    //   现在：新目标 = 取消旧任务 → 从当前位置携带当前速度改奔新目标（animateTo 默认
+    //   继承速度）—— 轨迹数学上连续，无论如何连点都不会瞬移；高阻尼弹簧保证
+    //   「慢慢地完整走完每一条线路」，不甩尾。手指按下瞬间 cancelBubble() 摘掉驾驶权，
+    //   交给拖拽/吸合独占，避免并发写。
+    var bubbleJob by remember { mutableStateOf<Job?>(null) }
+    val slideBubbleTo: (Float) -> Unit = { targetPx ->
+        if (tabW.value > 0f) {
+            bubbleJob?.cancel()
+            bubbleJob = navScope.launch {
+                // 速度继承但夹紧：连点时上一次弹簧的速度若不夹，会叠出巨大初速度 → 冲过头再慢慢荡回来
+                // （观感像"卡住"）。夹紧后无论点多快都是「从当前位置、带当前手感速度」继续跑。
+                // ★ 2026-10-19 用户反馈：700 硬度太快、「都快看不出来是从这边到那边的」——
+                //   放慢到 ~0.3s 的可见滑行（ stiffness 700→260，damping 0.65→0.8 基本无过冲），
+                //   同时把夹紧上限 3200→1800（慢弹簧下 inherited 速度更容易冲过头，收着点）。
+                val v = centerAnim.velocity.coerceIn(-1800f, 1800f)
+                centerAnim.slidePassHaptic(
+                    targetValue = targetPx,
+                    tabW = tabW.value,
+                    animationSpec = spring(dampingRatio = 0.8f, stiffness = 260f),
+                    initialVelocity = v,
+                ) { haptic(HapticKind.Tick) }
+                // 兜底：极端连点下若本次滑行被新目标打断、泡泡停在半路（与选中 tab 不重合），
+                // 再补一段短滑行走完 —— 绝不允许"卡在两个 tab 之间"。
+                if (kotlin.math.abs(centerAnim.value - targetPx) > 1f) {
+                    centerAnim.animateTo(
+                        targetValue = targetPx,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 260f),
+                    )
+                }
+            }
+        }
+    }
+    val cancelBubble: () -> Unit = { bubbleJob?.cancel() }
     // 收起动画：从大到小 + 淡出 + 轻微下沉。低阻尼弹簧（damping 0.42）让它「弹性」消失
     // —— 缩过头再回弹一下，不是线性淡出。
     val navVisible by animateFloatAsState(
@@ -151,15 +192,8 @@ fun MainScreen(
             selected = idx
             preview = idx
             navHidden = false // 切 tab 时一律把导航栏放出来
-            if (tabW.value > 0f) {
-                navScope.launch {
-                    centerAnim.slidePassHaptic(
-                        targetValue = idx * tabW.value + tabW.value / 2f,
-                        tabW = tabW.value,
-                        animationSpec = spring(dampingRatio = 0.62f, stiffness = 380f),
-                    ) { haptic(HapticKind.Tick) }
-                }
-            }
+            // 泡泡滑行走统一驾驶入口（与点选 tab 同一条线路，快速连点不瞬移）
+            slideBubbleTo(idx * tabW.value + tabW.value / 2f)
             tabSwitchJob?.cancel()
             tabSwitchJob = navScope.launch {
                 val anim = Animatable(previewFloat)
@@ -205,24 +239,46 @@ fun MainScreen(
                     .layerBackdrop(backdrop)
                     // 内容区左右滑动切页：仅识别「横向主导」的手势，松手按方向切上一/下一栏。
                     // 竖向滑动原样透传给页面内的 verticalScroll（不抢手势）。
-                    .pointerInput(Unit) {
-                        var acc = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { acc = 0f },
-                            onHorizontalDrag = { _, dragAmount -> acc += dragAmount },
-                            onDragEnd = {
-                                val threshold = 96f // ~35dp，足够区分「误触」与「真的想切页」
-                                if (acc <= -threshold) goToTab((selected + 1).coerceAtMost(n - 1))
-                                else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
-                            },
-                        )
-                    },
+                    // ★ 2026-10-19：**助教页关闭横滑**（输入框/气泡长按/录音手势多，横滑易误触切页）；
+                    //   其它页保留。key 用 selected，切换后手势闭包里的 selected 始终最新。
+                    .then(
+                        if (selected != ASSISTANT_TAB) {
+                            Modifier.pointerInput(selected) {
+                                var acc = 0f
+                                detectHorizontalDragGestures(
+                                    onDragStart = { acc = 0f },
+                                    onHorizontalDrag = { _, dragAmount -> acc += dragAmount },
+                                    onDragEnd = {
+                                        val threshold = 96f // ~35dp，足够区分「误触」与「真的想切页」
+                                        if (acc <= -threshold) goToTab((selected + 1).coerceAtMost(n - 1))
+                                        else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
+                                    },
+                                )
+                            }
+                        } else {
+                            Modifier
+                        },
+                    ),
             ) {
                 Box(Modifier.fillMaxSize()) {
                     TabContent(NAV_ITEMS[selected], goToTab, onLogout) { navHidden = it }
                 }
             }
         }
+        // ★ 底部 24dp 幕布（2026-10-19，小白条透明化）：
+        //   页面内容较短时会从顶部自然排布、直接伸到屏幕底边，戳进系统手势条（小白条）
+        //   所在的 24dp 空隙（课堂页的「查看全部课程」卡片就这样躺在小白条旁边）——
+        //   观感就是那一带"不透"。这里盖一层与根背景同色的幕布把内容遮住：
+        //   空隙只剩纯净 M3 底色，小白条悬在纯色上（微信同款）。
+        //   ★ 高度必须与导航栏的 barBottomGap(24dp) 严格等高；托盘玻璃采样的是
+        //     Column 内记录的 backdrop 层，幕布是后画的兄弟节点、不参与采样，托盘该透还是透。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .align(Alignment.BottomCenter)
+                .background(MaterialTheme.colorScheme.background),
+        )
         AppleLiquidGlassNavBar(
             items = NAV_ITEMS,
             selected = selected,
@@ -264,6 +320,8 @@ fun MainScreen(
             hidden = navHidden,
             tabW = tabW,
             centerAnim = centerAnim,
+            onSlideTo = slideBubbleTo,
+            onGestureStart = cancelBubble,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .scale((0.35f + 0.65f * navVisible).coerceAtLeast(0f))
@@ -275,6 +333,17 @@ fun MainScreen(
                         (((1f - enterT) * 40f).dp.roundToPx()) + (((1f - navVisible) * 14f).dp.roundToPx()),
                     )
                 },
+        )
+        // ★ 一级界面返回键（2026-10-19 用户需求）：按系统返回键 → 浮出「再次按下返回键退出应用」，
+        //   2s 内再按一次退出。二级下钻页（课表/签到详情/扫码/暗号/作业详情…）各自的 BackHandler
+        //   注册更晚 → 优先消费返回事件，不会走到这里；只有回到 tab 根本提示才生效。
+        //   ★ 必须是根 Box 的**最后**一个子节点（绘制在最上层）——放在最前面会被内容 Column
+        //     盖住（页面卡片是不透明背景，气泡被压在下面看不见，2026-10-19 真机实测发现的坑）。
+        //   位置：底部导航栏托盘（托盘底 24dp + 栏高 66dp）上方留 16dp。
+        DoubleBackExitHint(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = (24 + 66 + 16).dp),
         )
     }
 }
@@ -360,6 +429,10 @@ private fun AppleLiquidGlassNavBar(
     hidden: Boolean = false,
     tabW: MutableState<Float>,
     centerAnim: Animatable<Float, AnimationVector1D>,
+    /** 泡泡统一滑行入口（MainScreen 单驾驶协程）：点选 tab 从这里走，快速连点不瞬移 */
+    onSlideTo: (Float) -> Unit,
+    /** 手指按下：摘掉统一驾驶权，交给拖拽/吸合独占（防止并发写 centerAnim） */
+    onGestureStart: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val density = LocalDensity.current
@@ -421,7 +494,9 @@ private fun AppleLiquidGlassNavBar(
     // （centerAnim.velocity 在它动画时实时给出 px/s；点选上限按滑行观感调小，避免一下拉满。）
     val stretch by animateFloatAsState(
         targetValue = (if (dragging.value) (abs(dragVel.value) * 0.045f).coerceIn(0f, 0.5f) else 0f)
-            .coerceAtLeast(if (!dragging.value) (abs(centerAnim.velocity) * 0.0006f).coerceIn(0f, 0.32f) else 0f),
+            // 点选滑行按 centerAnim 速度拉伸：改奔新目标时速度会瞬间叠加，系数/上限调小（0.0006/0.32 → 0.00045/0.26），
+            // 快速连点时液体拉伸不再猛甩（配合统一驾驶协程，消除"残影"观感）。
+            .coerceAtLeast(if (!dragging.value) (abs(centerAnim.velocity) * 0.00045f).coerceIn(0f, 0.26f) else 0f),
         animationSpec = spring(dampingRatio = 0.6f, stiffness = 240f),
         label = "stretch",
     )
@@ -564,23 +639,26 @@ private fun AppleLiquidGlassNavBar(
                         val h = size.height
                         val r = h / 2f
                         // 外圈：极淡的暗轮廓（浅色背景上给泡泡一个边界）
+                        // 静止态再加重一档：白底下 0.05 几乎看不见，用户要求"静止也能看出有个泡泡"
                         val edge = h * 0.012f
                         drawRoundRect(
-                            color = Color.Black.copy(alpha = 0.05f),
+                            color = Color.Black.copy(alpha = if (bubbleActive) 0.05f else 0.10f),
                             topLeft = Offset(edge / 2f, edge / 2f),
                             size = Size(w - edge, h - edge),
                             cornerRadius = CornerRadius(r - edge / 2f),
                             style = Stroke(width = edge),
                         )
-                        // 内圈：白高光（棱边反光）
                         val rimW = h * 0.045f
+                        val rimColor =
+                            Color.White.copy(alpha = 0.60f)
+                        val rimBlend = if (bubbleActive) BlendMode.Screen else BlendMode.SrcOver
                         drawRoundRect(
-                            color = Color.White.copy(alpha = if (bubbleActive) 0.60f else 0.42f),
+                            color = rimColor,
                             topLeft = Offset(rimW, rimW),
                             size = Size(w - rimW * 2f, h - rimW * 2f),
                             cornerRadius = CornerRadius(r - rimW),
                             style = Stroke(width = rimW),
-                            blendMode = BlendMode.Screen,
+                            blendMode = rimBlend,
                         )
                         // 非默认态（active：长按拾取 / 拖拽中 / 点选放大 / 切换滑行中——
                         // 正是泡泡「放大」的时候）再叠两层彩虹描边。真实液态玻璃的彩虹来自
@@ -644,6 +722,8 @@ private fun AppleLiquidGlassNavBar(
                         tapExpand = tapExpand,
                         onSelect = onSelect,
                         onPreview = onPreview,
+                        onSlideTo = onSlideTo,
+                        onGestureStart = onGestureStart,
                         onPreviewFloat = onPreviewFloat,
                     )
                 }),
@@ -701,6 +781,10 @@ private suspend fun PointerInputScope.navGestures(
     onSelect: (Int) -> Unit,
     onPreview: (Int) -> Unit,
     onPreviewFloat: (Float) -> Unit,
+    /** 泡泡统一滑行入口（MainScreen 单驾驶协程），点选路径从这里走 */
+    onSlideTo: (Float) -> Unit,
+    /** 手指按下：摘掉统一驾驶权，交给拖拽/吸合独占 */
+    onGestureStart: () -> Unit,
 ) {
     val longPressMs = 120L   // 长按判定：稍按一会即进入"拾取/跟手"态
     // 点选泡泡的放大保持时长：与点选切换的滑行到位时长一致（滑行 spring(0.7, 420) ≈350ms 落定），
@@ -717,6 +801,7 @@ private suspend fun PointerInputScope.navGestures(
             tapExpandJob?.cancel() // 取消可能残留的点选放大计时
             releaseJob?.cancel() // 取消上一步松手吸合协程，防止其 finally 在本次长按保持期间清 expanded
             // （否则第二次起长按会出现"刚放大就回弹、手指还没松"）
+            onGestureStart() // ★ 摘掉统一滑行驾驶权：本次手势（拖拽/吸合）独占 centerAnim
             val downX = down.position.x
             var engaged = false
             var isTap = true
@@ -792,15 +877,10 @@ private suspend fun PointerInputScope.navGestures(
                 }
                 onSelect(ni)
             } else if (isTap) {
-                // 点击：从当前位置平滑滑到目标 tab 中心
+                // 点击：走统一滑行驾驶（与页内 goToTab 同一条线路）——快速连点 = 带速度改奔新目标，
+                // 轨迹连续不瞬移；逐栏轻震动由 slideBubbleTo 内部统一给出。
                 val ti = tabIndexFromX(downX, tabW.value, itemCount)
-                scope.launch {
-                    centerAnim.slidePassHaptic(
-                        targetValue = ti * tabW.value + tabW.value / 2f,
-                        tabW = tabW.value,
-                        animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
-                    ) { haptic(HapticKind.Tick) }
-                }
+                onSlideTo(ti * tabW.value + tabW.value / 2f)
                 // 点在泡泡上：复刻长按的放大效果（同一套 scale/height/玻璃质感弹簧），
                 // 保持 tapExpandMs（与点选切换滑行时长一致）后自动变回原大小。
                 // （点当前 tab 时泡泡本来不动、没有反馈；点其它 tab 有滑行动画，不叠加放大）
@@ -831,14 +911,15 @@ private suspend fun Animatable<Float, AnimationVector1D>.slidePassHaptic(
     targetValue: Float,
     tabW: Float,
     animationSpec: AnimationSpec<Float>,
+    initialVelocity: Float = this.velocity,
     perColumn: () -> Unit,
 ) {
     if (tabW <= 0f) {
-        animateTo(targetValue, animationSpec)
+        animateTo(targetValue, animationSpec, initialVelocity)
         return
     }
     var lastCol = (value / tabW).toInt()
-    animateTo(targetValue, animationSpec) {
+    animateTo(targetValue, animationSpec, initialVelocity) {
         val col = (value / tabW).toInt()
         if (col != lastCol) {
             lastCol = col
@@ -1090,7 +1171,8 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyph(
 }
 
 // 薄膜干涉式光谱（彩虹）笔刷：玻璃棱边把不同波长折射/干涉成彩色镶边，alpha 随强度淡入。
-private fun spectralBrush(alpha: Float = 1f): Brush = Brush.linearGradient(
+// internal：助教页发送钮的彩虹镶边与导航泡泡同款，直接复用这一支（TaPage.SendBtn）。
+internal fun spectralBrush(alpha: Float = 1f): Brush = Brush.linearGradient(
     0.00f to Color(0xFFFF0040).copy(alpha = alpha),
     0.18f to Color(0xFFFFA500).copy(alpha = alpha),
     0.36f to Color(0xFFFFFF00).copy(alpha = alpha),
@@ -1153,10 +1235,30 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
                     cornerRadius = CornerRadius(s * 0.05f),
                     blendMode = blendMode,
                 )
-                drawLine(color = color, start = Offset(s * 0.55f, s * 0.30f), end = Offset(s * 0.83f, s * 0.30f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
-                drawCircle(color = color, style = glow, radius = s * 0.115f, center = Offset(s * 0.23f, s * 0.44f), blendMode = blendMode)
+                drawLine(
+                    color = color,
+                    start = Offset(s * 0.55f, s * 0.30f),
+                    end = Offset(s * 0.83f, s * 0.30f),
+                    strokeWidth = s * 0.11f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
+                drawCircle(
+                    color = color,
+                    style = glow,
+                    radius = s * 0.115f,
+                    center = Offset(s * 0.23f, s * 0.44f),
+                    blendMode = blendMode
+                )
                 drawPath(shoulders, color = color, style = glow, blendMode = blendMode)
-                drawLine(color = color, start = Offset(s * 0.46f, s * 0.79f), end = Offset(s * 0.585f, s * 0.565f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawLine(
+                    color = color,
+                    start = Offset(s * 0.46f, s * 0.79f),
+                    end = Offset(s * 0.585f, s * 0.565f),
+                    strokeWidth = s * 0.11f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
             } else if (brush != null) {
                 drawRoundRect(
                     brush = brush,
@@ -1166,10 +1268,30 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
                     cornerRadius = CornerRadius(s * 0.05f),
                     blendMode = blendMode,
                 )
-                drawLine(brush = brush, start = Offset(s * 0.55f, s * 0.30f), end = Offset(s * 0.83f, s * 0.30f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
-                drawCircle(brush = brush, style = glow, radius = s * 0.115f, center = Offset(s * 0.23f, s * 0.44f), blendMode = blendMode)
+                drawLine(
+                    brush = brush,
+                    start = Offset(s * 0.55f, s * 0.30f),
+                    end = Offset(s * 0.83f, s * 0.30f),
+                    strokeWidth = s * 0.11f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
+                drawCircle(
+                    brush = brush,
+                    style = glow,
+                    radius = s * 0.115f,
+                    center = Offset(s * 0.23f, s * 0.44f),
+                    blendMode = blendMode
+                )
                 drawPath(shoulders, brush = brush, style = glow, blendMode = blendMode)
-                drawLine(brush = brush, start = Offset(s * 0.46f, s * 0.79f), end = Offset(s * 0.585f, s * 0.565f), strokeWidth = s * 0.11f, cap = StrokeCap.Round, blendMode = blendMode)
+                drawLine(
+                    brush = brush,
+                    start = Offset(s * 0.46f, s * 0.79f),
+                    end = Offset(s * 0.585f, s * 0.565f),
+                    strokeWidth = s * 0.11f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
             }
         }
 
@@ -1190,9 +1312,29 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
                     blendMode = blendMode,
                 )
                 drawPath(check, color = color, style = glow, blendMode = blendMode)
-                drawLine(color = color, start = Offset(s * 0.585f, s * 0.36f), end = Offset(s * 0.755f, s * 0.36f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
-                drawLine(color = color, start = Offset(s * 0.585f, s * 0.60f), end = Offset(s * 0.755f, s * 0.60f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
-                drawCircle(color = color, style = glow, radius = s * 0.075f, center = Offset(s * 0.335f, s * 0.655f), blendMode = blendMode)
+                drawLine(
+                    color = color,
+                    start = Offset(s * 0.585f, s * 0.36f),
+                    end = Offset(s * 0.755f, s * 0.36f),
+                    strokeWidth = s * 0.12f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
+                drawLine(
+                    color = color,
+                    start = Offset(s * 0.585f, s * 0.60f),
+                    end = Offset(s * 0.755f, s * 0.60f),
+                    strokeWidth = s * 0.12f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
+                drawCircle(
+                    color = color,
+                    style = glow,
+                    radius = s * 0.075f,
+                    center = Offset(s * 0.335f, s * 0.655f),
+                    blendMode = blendMode
+                )
             } else if (brush != null) {
                 drawRoundRect(
                     brush = brush,
@@ -1203,9 +1345,29 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
                     blendMode = blendMode,
                 )
                 drawPath(check, brush = brush, style = glow, blendMode = blendMode)
-                drawLine(brush = brush, start = Offset(s * 0.585f, s * 0.36f), end = Offset(s * 0.755f, s * 0.36f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
-                drawLine(brush = brush, start = Offset(s * 0.585f, s * 0.60f), end = Offset(s * 0.755f, s * 0.60f), strokeWidth = s * 0.12f, cap = StrokeCap.Round, blendMode = blendMode)
-                drawCircle(brush = brush, style = glow, radius = s * 0.075f, center = Offset(s * 0.335f, s * 0.655f), blendMode = blendMode)
+                drawLine(
+                    brush = brush,
+                    start = Offset(s * 0.585f, s * 0.36f),
+                    end = Offset(s * 0.755f, s * 0.36f),
+                    strokeWidth = s * 0.12f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
+                drawLine(
+                    brush = brush,
+                    start = Offset(s * 0.585f, s * 0.60f),
+                    end = Offset(s * 0.755f, s * 0.60f),
+                    strokeWidth = s * 0.12f,
+                    cap = StrokeCap.Round,
+                    blendMode = blendMode
+                )
+                drawCircle(
+                    brush = brush,
+                    style = glow,
+                    radius = s * 0.075f,
+                    center = Offset(s * 0.335f, s * 0.655f),
+                    blendMode = blendMode
+                )
             }
         }
 

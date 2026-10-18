@@ -34,11 +34,11 @@ data class UserProfile(
 /** 演示默认资料：学号、学校、班级齐全，符合文档「我的页顶部：头像 + 名字 + 学校/班级」。 */
 internal val defaultProfile = UserProfile(
     name = "刘宇豪",
-    studentId = "2023110108",
-    school = "云岭大学",
-    className = "计算机科学与技术 2301 班",
-    phone = "138****6027",
-    email = "liuyuhao@yunling.edu.cn",
+    studentId = "20260551073",
+    school = "重庆对外经贸学院",
+    className = "计算机科学与技术 5 班",
+    phone = "178****2370",
+    email = "1640432@qq.com",
 )
 
 // ───────────────────────── 通用图标字形（Canvas 绘制） ─────────────────────────

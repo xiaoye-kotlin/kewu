@@ -21,6 +21,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -74,6 +75,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
@@ -81,6 +83,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -109,8 +112,11 @@ import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.blur.runtimeShaderEffect
 import io.github.suqi8.coui.kmp.blur.BackdropEffectScope
+import kewu.composeapp.generated.resources.Res
+import kewu.composeapp.generated.resources.student_logo
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.jetbrains.compose.resources.painterResource
 import kotlin.math.sin
 
 // ───────────────────────── 登录 / 注册（启动首屏 · 官方 coui 液态玻璃范式） ─────────────────────────
@@ -181,7 +187,7 @@ fun LoginScreen(onLogin: () -> Unit) {
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.background)
+                .background(Color(0xFFF8F9FA))
                 .drawBehind {
                     val t = breath
                     val w = size.width
@@ -257,7 +263,15 @@ fun LoginScreen(onLogin: () -> Unit) {
                                 .clip(RoundedCornerShape(13.dp))
                                 .background(KewuBlue),
                             contentAlignment = Alignment.Center,
-                        ) { Text("课", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold) }
+                        ) {
+                            // 2026-10-19：品牌头徽改用新版学生端 logo（裁出中央学士帽+书本+声波主图形）
+                            Image(
+                                painter = painterResource(Res.drawable.student_logo),
+                                contentDescription = "课悟",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+                        }
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text("课悟", color = cs.onSurface, fontSize = 22.sp, fontWeight = FontWeight.Bold)
@@ -366,8 +380,17 @@ fun LoginScreen(onLogin: () -> Unit) {
             }
         }
 
-        // ★ 学校选择底部弹层（coui 玻璃 + MIUI 选项 + 模糊搜索）。
-        //   从底部滑入；点遮罩/选中后滑出关闭。全屏遮罩为普通绘制层（非玻璃），可安全套 alpha。
+        // ★ 一级界面返回键（2026-10-19 用户需求）：登录/注册首屏也按「双击退出」处理 ——
+        //   第一次按系统返回键浮出「再次按下返回键退出应用」，2s 内再按一次退出。
+        //   （深一层只有学校选择弹层，它是平台 Dialog，返回键优先被弹层消费，不会冲突。）
+        DoubleBackExitHint(
+            Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 56.dp),
+        )
+
+        // ★ 学校选择底部弹层（coui 官方 WindowBottomSheet + 模糊搜索）。
+        //   弹窗外壳（抓手/滑入滑出/遮罩/返回键）完全由 coui 提供，不自绘。
         if (schoolSheetOpen) {
             SchoolPickerSheet(
                 selected = school,
@@ -682,7 +705,13 @@ private fun MiuixField(
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth()) {
                         if (value.isEmpty()) {
-                            Text("请输入$title", color = cs.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 15.sp)
+                            Text(
+                                "请输入$title",
+                                color = cs.onSurfaceVariant.copy(alpha = 0.5f),
+                                fontSize = 15.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Clip,
+                            )
                         }
                         inner()
                     }
@@ -750,7 +779,10 @@ private fun SchoolSelectorField(value: String, onClick: () -> Unit) {
             Text(
                 if (value.isEmpty()) "请选择学校" else value,
                 color = if (value.isEmpty()) cs.onSurfaceVariant.copy(alpha = 0.5f) else cs.onSurface,
-                fontSize = 15.sp, maxLines = 1, modifier = Modifier.weight(1f),
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
             // 下拉箭头（▼）
             Canvas(Modifier.size(16.dp)) {
@@ -765,13 +797,14 @@ private fun SchoolSelectorField(value: String, onClick: () -> Unit) {
 }
 
 /**
- * 学校选择底部弹层：
- * - 全屏半透明遮罩（点击关闭），底部玻璃卡（coui drawBackdrop）从下方滑入；
- * - 顶部：标题 + 搜索输入框（MIUI 风：白底圆角 + 放大镜）；
- * - 列表：模糊搜索（名称/拼音/简写），命中项高亮，未命中显示「使用『xxx』」自由输入兜底；
- * - 选中行右侧绿勾，点击回填并滑出关闭。
+ * 学校选择底部弹层（2026-10-19 改）：**弹窗外壳改用自写 `KewuBottomSheet`**（标准 Compose
+ * `Dialog` + coui 视觉：拖拽手柄 / 顶部圆角 / 遮罩 / 上滑入场 / 点遮罩关闭 / 返回键 dismiss）。
+ * 原因：coui 1.1.0 的 `WindowBottomSheet` 在本项目 CMP 1.11.2 下一点击即 `NoSuchMethodError`
+ * 闪退（`DialogProperties` 构造签名不匹配，详见交接文档 12.1）。内容区不变：搜索框（M3 语义色）
+ * + 结果列表（名称/拼音/首字母模糊搜，全量 2900+ 所高校）+ 未命中时「使用『xxx』」自由输入兜底。
  *
- * ★ 安全约束：玻璃卡（coui 采样者）只做 placement 位移滑入，禁套 alpha/graphicsLayer。
+ * 关闭动画：选中的值先暂存 [pendingSelect]，等弹层退场动画结束（KewuBottomSheet 的 onDismiss）
+ * 再回调，退场动画能完整播放。
  */
 @Composable
 private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
@@ -779,124 +812,80 @@ private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect:
     var query by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
-    // 滑入进度（placement 位移，安全）
-    var shown by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { shown = true }
-    val slideP by animateFloatAsState(
-        targetValue = if (shown) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.8f, stiffness = 380f),
-        label = "schoolSheetSlide",
-    )
+    var pendingSelect by remember { mutableStateOf<String?>(null) }
 
-    val sheetBackdrop = rememberLayerBackdrop()
-    val isDark = !cs.background.isLight()
-
-    Box(Modifier.fillMaxSize()) {
-        // 遮罩（普通绘制层，点击关闭）——非玻璃，可自由 alpha
-        Box(
-            Modifier
-                .fillMaxSize()
-                .alpha(0.45f)
-                .background(Color.Black)
-                .clickable { onDismiss() },
-        )
-        // 底部玻璃卡：从下方滑入（placement 位移）
+    KewuBottomSheet(
+        show = true,
+        onDismiss = {
+            val picked = pendingSelect
+            pendingSelect = null
+            if (picked != null) onSelect(picked) else onDismiss()
+        },
+        title = "选择学校",
+    ) { close ->
+        // 搜索框（M3 语义色：surfaceVariant 底 + 品牌蓝描边）
         Box(
             Modifier
                 .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .offset { IntOffset(0, ((1f - slideP) * 900f).dp.roundToPx()) }
-                .drawBackdrop(
-                    backdrop = sheetBackdrop,
-                    shape = { RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp) },
-                    effects = {
-                        colorControls(brightness = 0f, contrast = 1f, saturation = 1.5f)
-                        blur(26.dp.toPx(), 26.dp.toPx())
-                        if (isRuntimeShaderSupported()) {
-                            refractionLens(refractionHeight = 20.dp.toPx(), refractionAmount = 20.dp.toPx())
-                        }
-                    },
-                    highlight = { defaultKewuHighlight(isDark) },
-                    onDrawSurface = {
-                        drawRect(if (isDark) Color.Black.copy(alpha = 0.34f) else Color.White.copy(alpha = 0.30f))
-                    },
-                )
-                .clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
+                .clip(RoundedCornerShape(12.dp))
+                .background(cs.surfaceVariant)
+                .border(1.2.dp, KewuBlue.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp).padding(top = 14.dp, bottom = 18.dp)) {
-                // 顶部抓手（MIUI 风小横条）
-                Box(
-                    Modifier
-                        .align(Alignment.CenterHorizontally)
-                        .width(38.dp)
-                        .height(4.dp)
-                        .clip(CircleShape)
-                        .background(cs.onSurfaceVariant.copy(alpha = 0.4f)),
-                )
-                Spacer(Modifier.height(12.dp))
-                Text("选择学校", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.Bold,
-                    modifier = Modifier.align(Alignment.CenterHorizontally))
-                Spacer(Modifier.height(12.dp))
-
-                // 搜索框（MIUI 风：白底圆角 + 放大镜）
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (isDark) cs.surface else Color.White)
-                        .border(1.2.dp, KewuBlue.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        // 放大镜图标
-                        Canvas(Modifier.size(16.dp)) {
-                            val s = size.width
-                            drawCircle(cs.onSurfaceVariant, radius = s * 0.32f, center = Offset(s * 0.38f, s * 0.38f),
-                                style = Stroke(width = s * 0.10f))
-                            drawLine(cs.onSurfaceVariant, Offset(s * 0.62f, s * 0.62f), Offset(s * 0.9f, s * 0.9f),
-                                strokeWidth = s * 0.10f, cap = StrokeCap.Round)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 放大镜图标
+                Canvas(Modifier.size(16.dp)) {
+                    val s = size.width
+                    drawCircle(cs.onSurfaceVariant, radius = s * 0.32f, center = Offset(s * 0.38f, s * 0.38f),
+                        style = Stroke(width = s * 0.10f))
+                    drawLine(cs.onSurfaceVariant, Offset(s * 0.62f, s * 0.62f), Offset(s * 0.9f, s * 0.9f),
+                        strokeWidth = s * 0.10f, cap = StrokeCap.Round)
+                }
+                Spacer(Modifier.width(8.dp))
+                BasicTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
+                    modifier = Modifier.weight(1f),
+                    decorationBox = { inner ->
+                        Box(Modifier.fillMaxWidth()) {
+                            if (query.isEmpty()) {
+                                Text("搜索学校（名称 / 拼音 / 首字母）", color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 14.sp)
+                            }
+                            inner()
                         }
-                        Spacer(Modifier.width(8.dp))
-                        BasicTextField(
-                            value = query,
-                            onValueChange = { query = it },
-                            singleLine = true,
-                            textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
-                            modifier = Modifier.weight(1f),
-                            decorationBox = { inner ->
-                                Box(Modifier.fillMaxWidth()) {
-                                    if (query.isEmpty()) {
-                                        Text("搜索学校（名称 / 拼音）", color = cs.onSurfaceVariant.copy(alpha = 0.5f), fontSize = 14.sp)
-                                    }
-                                    inner()
-                                }
-                            },
-                        )
+                    },
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // 结果列表（模糊搜索：名称 / 全拼 / 简写；全量 2900+ 所）
+        val results = remember(query) { searchUniversities(query) }
+        Box(Modifier.fillMaxWidth().height(340.dp)) {
+            LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                // 未命中时给「自由输入」兜底项（后端 register 接受任意 nickname/school 字符串）
+                if (results.isEmpty() && query.isNotBlank()) {
+                    item {
+                        SchoolOptionRow(
+                            name = "使用「${query.trim()}」",
+                            sub = "未收录，手动指定",
+                            isSelected = false,
+                        ) {
+                            pendingSelect = query.trim()
+                            close()
+                        }
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-
-                // 结果列表（模糊搜索：名称 / 全拼 / 简写）
-                val results = remember(query) { searchUniversities(query) }
-                Box(Modifier.fillMaxWidth().height(320.dp)) {
-                    LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
-                        // 未命中时给「自由输入」兜底项（后端 register 接受任意 nickname/school 字符串）
-                        if (results.isEmpty() && query.isNotBlank()) {
-                            item {
-                                SchoolOptionRow(
-                                    name = "使用「${query.trim()}」",
-                                    sub = "未收录，手动指定",
-                                    isSelected = false,
-                                ) { onSelect(query.trim()) }
-                            }
-                        }
-                        itemsIndexed(results) { _, uni ->
-                            SchoolOptionRow(
-                                name = uni.name,
-                                sub = uni.province,
-                                isSelected = uni.name == selected,
-                            ) { onSelect(uni.name) }
-                        }
+                itemsIndexed(results) { _, uni ->
+                    SchoolOptionRow(
+                        name = uni.name,
+                        sub = uni.province,
+                        isSelected = uni.name == selected,
+                    ) {
+                        pendingSelect = uni.name
+                        close()
                     }
                 }
             }

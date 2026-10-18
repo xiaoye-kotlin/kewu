@@ -1,13 +1,20 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -35,17 +42,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.util.lerp as floatLerp
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.hapticClickable
@@ -78,17 +82,21 @@ private fun mockTasks(): List<Task> = listOf(
 /**
  * 任务页：课堂页「作业待交」小卡的跳转目标。
  * 版式 = Mishka（squircle 卡 / 12dp 间距 / 卡内 16dp）；顶部汇总卡用 coui 毛玻璃。
- * 交互：点一条待完成 → 打勾移入「已完成」（再点取消），演示用。
+ * 交互：点一条待完成 → 打开作业详情 Hub；已交标记来自 /api/assignments/{id}/my。
+ *
+ * ★ 计数 bug 修复（2026-10-18）：旧版先把 mock 5 条当真实数据上屏（「还有 5 项」），
+ * 接口返回后再整体换成真值（比如 0 条 →「0 项」）—— 数字瞬间跳变。现在初始为空 + loading，
+ * 只显示真实接口数据；仅断网失败才降级 mock。数字脉冲也跳过首次填充。
  */
 @Composable
 fun TaskPage(onNavHide: (Boolean) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    // ★ 接入真实作业：/api/assignments 替换 mock；失败降级 mock。
-    // 已交状态按 /api/assignments/{id}/my 预标（后端有提交则视为已交）。
-    var tasks by remember { mutableStateOf(mockTasks()) }
+    // 初始为空列表（不是 mock！），loading 期间显示加载态
+    var tasks by remember { mutableStateOf(emptyList<Task>()) }
     var doneIds by remember { mutableStateOf(setOf<String>()) }
     var loading by remember { mutableStateOf(true) }
+    var assignmentId by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         val studentId = KewuApi.username ?: ""
         val list = KewuApi.getAssignments()
@@ -102,6 +110,7 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
             }
             doneIds = done
         } else {
+            // 断网兜底：此时才降级 mock（不是一进来就显示假数据）
             tasks = mockTasks()
             doneIds = setOf("t5")
         }
@@ -111,8 +120,6 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
     val done = tasks.filter { it.id in doneIds }
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
-
-    val studentName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
 
     // 与课堂页同款：向下浏览收起底部导航栏，回顶展开
     LaunchedEffect(scrollState) {
@@ -136,231 +143,199 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.background),
         )
-        Column(
-            Modifier
-                .fillMaxSize()
-                .verticalScroll(scrollState)
-                .padding(bottom = 96.dp),
+        // ★ 下钻滑页（与「我的」子路由同款，仅 slide 无 fade）：旧版 if/else 硬切，生硬。
+        AnimatedContent(
+            targetState = assignmentId,
+            transitionSpec = {
+                if (targetState != null) {
+                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
+                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
+                } else {
+                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
+                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w }
+                }
+            },
+            label = "taskDrill",
+        ) { drillId ->
+            if (drillId == null) {
+                TaskListContent(
+                    tasks = tasks,
+                    doneIds = doneIds,
+                    loading = loading,
+                    scrollState = scrollState,
+                    pageBackdrop = pageBackdrop,
+                    onOpenTask = { assignmentId = it },
+                )
+            } else {
+                BackHandler { assignmentId = null }
+                AssignmentDetailScreen(
+                    assignmentId = drillId,
+                    onBack = { assignmentId = null },
+                    onSubmitted = { id -> doneIds = doneIds + id },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaskListContent(
+    tasks: List<Task>,
+    doneIds: Set<String>,
+    loading: Boolean,
+    scrollState: androidx.compose.foundation.ScrollState,
+    pageBackdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop,
+    onOpenTask: (String) -> Unit,
+) {
+    val cs = MaterialTheme.colorScheme
+    val pending = tasks.filter { it.id !in doneIds }
+    val done = tasks.filter { it.id in doneIds }
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(scrollState)
+            .padding(bottom = 96.dp),
+    ) {
+        Spacer(Modifier.height(12.dp))
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Spacer(Modifier.height(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text(
+                    "任务", color = cs.onSurface, fontSize = 20.sp,
+                    fontWeight = FontWeight.SemiBold, maxLines = 1,
+                )
+                Text(
+                    "作业 · 待办 · 提醒", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // coui 玻璃汇总卡：本周待交数 + 完成进度环（M3 进度环，spring 跟随）。
+        // 「N 项」数字在**用户完成/取消**导致数量变化时来一次小脉冲（1 → 1.1 → 1），把"又少一项"演出来；
+        // 首次填充与进入页面**不**脉冲（否则一打开数字就跳一下，观感像 bug —— 原「5 项→0 项」的另一半修复）。
+        val progress by animateFloatAsState(
+            targetValue = if (tasks.isEmpty()) 0f else done.size.toFloat() / tasks.size,
+            animationSpec = spring(dampingRatio = 0.6f, stiffness = 300f),
+            label = "taskProgress",
+        )
+        val pendingPulse = remember { Animatable(1f) }
+        val prevPending = remember { mutableStateOf(-1) } // -1 = 尚未首次填充
+        LaunchedEffect(pending.size) {
+            if (prevPending.value == -1) {
+                // 首次填充：只记录，不脉冲（避免打开页面数字就跳）
+                prevPending.value = pending.size
+            } else if (prevPending.value != pending.size) {
+                prevPending.value = pending.size
+                pendingPulse.snapTo(1f)
+                launch {
+                    pendingPulse.animateTo(1.1f, tween(durationMillis = 90, easing = FastOutSlowInEasing))
+                    pendingPulse.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 420f))
+                }
+            }
+        }
+        // 玻璃凝结入场：先不可见，再从零上浮「长」出来
+        val sumP = rememberEnterProgress(0, baseDelayMs = 200L)
+        KewuGlassCard(
+            backdrop = pageBackdrop,
+            shape = RoundedCornerShape(16.dp),
+            blurRadius = glassCondenseBlur(sumP, 20f),
+            tintAlpha = 0.30f * sumP,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp)
+                .glassEnter(sumP, 40f),
+        ) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                Modifier.padding(16.dp).alpha(sumP),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
+                    Text("本周待交", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                    Spacer(Modifier.height(2.dp))
                     Text(
-                        "任务", color = cs.onSurface, fontSize = 20.sp,
-                        fontWeight = FontWeight.SemiBold, maxLines = 1,
-                    )
-                    Text(
-                        "作业 · 待办 · 提醒", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
+                        if (loading) "…" else "${pending.size} 项", color = cs.onSurface, fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold, maxLines = 1,
+                        modifier = Modifier.scale(pendingPulse.value),
                     )
                 }
+                CircularProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier.size(46.dp),
+                    color = KewuGreen,
+                    strokeWidth = 4.5.dp,
+                    strokeCap = androidx.compose.ui.graphics.StrokeCap.Round,
+                )
             }
-            Spacer(Modifier.height(12.dp))
+        }
+        Spacer(Modifier.height(12.dp))
 
-            // coui 玻璃汇总卡：本周待交数 + 完成进度环（M3 进度环，spring 跟随）
-            // 「N 项」数字在**用户完成/取消**导致数量变化时来一次小脉冲（1 → 1.1 → 1），把"又少一项"演出来；
-            // 首次进入页面**不**脉冲（否则一打开数字就跳一下，观感像 bug）。
-            val progress by animateFloatAsState(
-                targetValue = if (tasks.isEmpty()) 0f else done.size.toFloat() / tasks.size,
-                animationSpec = spring(dampingRatio = 0.6f, stiffness = 300f),
-                label = "taskProgress",
-            )
-            val pendingPulse = remember { Animatable(1f) }
-            val prevPending = remember { mutableStateOf(pending.size) }
-            LaunchedEffect(pending.size) {
-                if (prevPending.value != pending.size) {
-                    prevPending.value = pending.size
-                    pendingPulse.snapTo(1f)
-                    launch {
-                        pendingPulse.animateTo(1.1f, tween(durationMillis = 90, easing = androidx.compose.animation.core.FastOutSlowInEasing))
-                        pendingPulse.animateTo(1f, spring(dampingRatio = 0.45f, stiffness = 420f))
-                    }
-                }
+        if (loading) {
+            // 加载态：不再用 mock 占位（数字跳变 bug 的根因），显示一个轻量加载指示
+            Box(Modifier.fillMaxWidth().padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = cs.primary)
             }
+        } else if (tasks.isEmpty()) {
+            // 真实接口返回空：空态提示（不是 bug，是真的没有作业）
+            val emptyP = rememberEnterProgress(1, baseDelayMs = 240L)
             KewuGlassCard(
                 backdrop = pageBackdrop,
                 shape = RoundedCornerShape(16.dp),
-                blurRadius = 20.dp,
-                tintAlpha = 0.30f,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
+                blurRadius = glassCondenseBlur(emptyP, 18f),
+                tintAlpha = 0.22f * emptyP,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).glassEnter(emptyP, 40f),
             ) {
-                Row(
-                    Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("本周待交", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "${pending.size} 项", color = cs.onSurface, fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold, maxLines = 1,
-                            modifier = Modifier.scale(pendingPulse.value),
-                        )
-                    }
-                    CircularProgressIndicator(
-                        progress = { progress },
-                        modifier = Modifier.size(46.dp),
-                        color = KewuGreen,
-                        strokeWidth = 4.5.dp,
-                        strokeCap = StrokeCap.Round,
-                    )
+                Box(Modifier.fillMaxWidth().alpha(emptyP).padding(vertical = 32.dp), contentAlignment = Alignment.Center) {
+                    Text("暂无作业，休息一下～", color = cs.onSurfaceVariant, fontSize = 14.sp)
                 }
             }
-            Spacer(Modifier.height(12.dp))
-
-            SectionLabel("待完成 · ${pending.size}")
+        } else {
+            SectionLabel("待完成 · ${pending.size}", Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 240L), 24f))
             pending.forEachIndexed { i, t ->
                 TaskCard(
                     task = t,
                     done = false,
                     enterIndex = i,
-                    onToggle = {
-                        // ★ 真实提交：点待完成 → 调用 /api/assignments/{id}/submissions；
-                        // 成功才标记已交，失败不标记（服务端无"取消提交"接口，已交项点按仅本地取消）。
-                        scope.launch {
-                            val err = KewuApi.submitAssignment(t.id, KewuApi.username ?: "", studentName, t.title)
-                            if (err == null) doneIds = doneIds + t.id
-                        }
-                    },
+                    onToggle = { onOpenTask(t.id) },
                 )
             }
             if (done.isNotEmpty()) {
                 Spacer(Modifier.height(4.dp))
-                SectionLabel("已完成 · ${done.size}")
+                SectionLabel("已完成 · ${done.size}", Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 300L), 24f))
                 done.forEachIndexed { i, t ->
                     TaskCard(
                         task = t,
                         done = true,
                         enterIndex = i,
-                        onToggle = { doneIds = doneIds - t.id },
+                        onToggle = { },
                     )
                 }
             }
-            Spacer(Modifier.height(24.dp))
         }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 @Composable
-private fun SectionLabel(text: String) {
+private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(
         text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
         fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp), maxLines = 1,
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 6.dp), maxLines = 1,
     )
 }
 
 /**
- * 任务徽章：**空心圈 ⇄ 大半圆+绿勾的形变动画**（M3 经典 morph）。
- * [done] 变化时一个 Animatable 驱动 progress 0→1：
- * - 0→45%：空心圈 sweep 从 270° 收回 0° 并淡出（圈"化"开）；
- * - 35%→100%：勾的两段折线依次长出（段 1 占 35→75%，段 2 占 65→100%，接缝重叠）；
- * - 颜色全程从 onSurfaceVariant 渐变到 KewuGreen；
- * - 另有一组缩放脉冲（0.82 → 弹簧回弹），点下去那一下有"咬合"手感。
+ * 任务卡（Mishka squircle）：左侧 **大半圆+勾/叉**（与首页状态卡同一套图形语言）+
+ * 标题 + 课程截止 + 紧急标签。点击整卡打开作业详情；勾选态 = 后端已提交。
+ * 入场：从零上浮淡入（riseEnter，非玻璃件可安全叠 alpha/scale）。
  */
-@Composable
-private fun TaskBadge(done: Boolean, modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
-    val progress = remember { Animatable(if (done) 1f else 0f) }
-    val pulse = remember { Animatable(1f) }
-    LaunchedEffect(done) {
-        launch {
-            progress.animateTo(
-                targetValue = if (done) 1f else 0f,
-                animationSpec = if (done) spring(dampingRatio = 0.55f, stiffness = 320f)
-                else spring(dampingRatio = 0.7f, stiffness = 420f),
-            )
-        }
-        if (done) {
-            launch {
-                pulse.animateTo(0.82f, tween(durationMillis = 70))
-                pulse.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = 500f))
-            }
-        }
-    }
-    val p = progress.value
-    // 颜色渐变（勾定型时纯品牌绿）
-    val color = androidx.compose.ui.graphics.lerp(
-        cs.onSurfaceVariant, KewuGreen, ((p - 0.25f) / 0.7f).coerceIn(0f, 1f),
-    )
-    Canvas(
-        modifier
-            .size(26.dp)
-            .scale(pulse.value),
-    ) {
-        val sw = size.width * 0.10f
-        // 空心圈：sweep 270°→0° 收回，淡出
-        val circleT = (p / 0.45f).coerceIn(0f, 1f)
-        val sweep = 270f * (1f - circleT)
-        if (sweep > 1f) {
-            drawArc(
-                color = color.copy(alpha = 0.45f * (1f - circleT * 0.85f)),
-                startAngle = 135f,
-                sweepAngle = sweep,
-                useCenter = false,
-                topLeft = Offset(sw / 2f, sw / 2f),
-                size = androidx.compose.ui.geometry.Size(size.width - sw, size.height - sw),
-                style = Stroke(width = size.width * 0.09f, cap = StrokeCap.Round),
-            )
-        }
-        // 勾：两段折线（相对坐标），段 1 = 35%→75%，段 2 = 65%→100%
-        val t1 = ((p - 0.35f) / 0.4f).coerceIn(0f, 1f)
-        val t2 = ((p - 0.65f) / 0.35f).coerceIn(0f, 1f)
-        if (t1 > 0f) {
-            drawLine(
-                color = color,
-                start = Offset(size.width * 0.30f, size.height * 0.50f),
-                end = Offset(
-                    size.width * floatLerp(0.30f, 0.44f, t1),
-                    size.height * floatLerp(0.50f, 0.65f, t1),
-                ),
-                strokeWidth = sw,
-                cap = StrokeCap.Round,
-            )
-        }
-        if (t2 > 0f) {
-            drawLine(
-                color = color,
-                start = Offset(size.width * 0.44f, size.height * 0.65f),
-                end = Offset(
-                    size.width * floatLerp(0.44f, 0.70f, t2),
-                    size.height * floatLerp(0.65f, 0.32f, t2),
-                ),
-                strokeWidth = sw,
-                cap = StrokeCap.Round,
-            )
-        }
-    }
-}
-
-/**
- * 任务卡入场：从屏幕底部「钻」出来（与首页课程卡同一套 Mac 式语言）。
- * - 单弹簧驱动的 placement 位移（从下方 60dp 滑入归位），错峰延迟；
- * - 不再用 sin 形变 + 弹簧 offset + scale 三路叠加（旧版多动画耦合会产生「发抖」观感）。
- * 任务卡是 squircle（drawBehind 绘制，非 coui 采样者），这里叠一点 scale 回弹也安全，
- * 但为与首页玻璃卡视觉统一、杜绝抖动，只用位移。
- */
-@Composable
-internal fun Modifier.taskEnter(done: Boolean, index: Int): Modifier {
-    var appeared by remember { mutableStateOf(0f) }
-    LaunchedEffect(Unit) { delay((260L + index * 55L).coerceAtMost(800L)); appeared = 1f }
-    val p by animateFloatAsState(
-        targetValue = appeared,
-        animationSpec = spring(dampingRatio = 0.75f, stiffness = 340f),
-        label = "taskEnter$index",
-    )
-    return this.offset { IntOffset(0, ((1f - p) * 60f).dp.roundToPx()) }
-}
-
-/** 任务卡（Mishka squircle）：左徽章（圈⇄绿勾形变）+ 标题 + 课程截止 + 紧急标签。 */
 @Composable
 private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: () -> Unit) {
     val cs = MaterialTheme.colorScheme
-    // 标题颜色 / 删除线随完成态平滑过渡（形变的主角是徽章，这里做柔和的辅助）
+    // 标题颜色 / 删除线随完成态平滑过渡
     val titleColor by animateColorAsState(
         targetValue = if (done) cs.onSurfaceVariant else cs.onSurface,
         animationSpec = tween(durationMillis = 260),
@@ -371,14 +346,20 @@ private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: (
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
             .padding(bottom = 10.dp)
-            .taskEnter(done, enterIndex)
+            .riseEnter(rememberEnterProgress(enterIndex, baseDelayMs = 260L, stepMs = 55L), 60f)
             .squircleCard(16.dp, cs.surfaceVariant)
             .hapticClickable { onToggle() }
             .padding(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // 徽章：空心圈 ⇄ 大半圆+绿勾（形变动画）
-            TaskBadge(done = done)
+            // ★ 与首页同一套「大半圆 + 勾/叉」图形语言（用户 2026-10-19 要求）：
+            //   已完成 = 品牌绿大半圆 + 勾；未完成 = 灰色大半圆 + 叉。
+            //   不再用 coui 的方形 Checkbox（用户明确不喜欢「一个正方形里面一个勾」）。
+            ThreeQuarterCheck(
+                size = 26.dp,
+                color = if (done) KewuGreen else cs.onSurfaceVariant,
+                cross = !done,
+            )
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
                 Text(
@@ -400,3 +381,5 @@ private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: (
         }
     }
 }
+
+

@@ -4,8 +4,17 @@
     <!-- 上传录音要访问后端服务器 -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- 录音权限 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 扫码签到：相机权限 -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
     <!-- 线性马达震动反馈（全 app 点击 / 导航 / 登录成功）。缺失会导致 Vibrator.vibrate 抛 SecurityException 崩溃 -->
     <uses-permission android:name="android.permission.VIBRATE" />
+
+    <!-- 通知（Android 13+ 运行时权限，通知设置页引导申请） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -15,9 +24,11 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Kewu">
 
+        <!-- adjustResize：窗口随键盘收缩，Compose weight 区自动让位（adjustPan 默认会把整页顶上去） -->
         <activity
             android:exported="true"
-            android:name=".MainActivity">
+            android:name=".MainActivity"
+            android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

@@ -1,11 +1,28 @@
 package com.kewu.app
 
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import android.provider.Settings
+import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 
 // 注意：appContext 由同包 Haptics.android.kt 声明（internal lateinit），此处直接复用，避免重复声明冲突。
+
+/** 当前 Activity 实例（MainActivity），供录音权限请求等需要 Activity 的运行时调用。 */
+internal var appActivity: MainActivity? = null
+
+actual fun platformAppContext(): Any = appContext
+actual fun platformActivity(): Any? = appActivity
+actual fun platformCacheDir(): String = appContext.cacheDir.absolutePath
+actual fun platformReadFile(path: String): ByteArray? = try {
+    java.io.File(path).readBytes()
+} catch (_: Exception) {
+    null
+}
 
 actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp) {
     // 明文 HTTP（http://47.99.42.168:8080，非 https）——Android 9+ 需 usesCleartextTraffic，
@@ -41,4 +58,48 @@ actual fun kvGet(key: String): String? {
 actual fun kvSet(key: String, value: String?) {
     val prefs = appContext.getSharedPreferences(KV_NAME, Context.MODE_PRIVATE)
     prefs.edit { if (value == null) remove(key) else putString(key, value) }
+}
+
+// ── 权限状态查询 / 申请 / 系统设置（通知设置页用） ──
+
+private fun hasPermission(permission: String): Boolean =
+    ContextCompat.checkSelfPermission(appContext, permission) == PackageManager.PERMISSION_GRANTED
+
+actual fun isNotificationPermissionGranted(): Boolean = hasPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+
+actual fun requestNotificationPermission(activity: Any, onResult: (Boolean) -> Unit) {
+    if (activity is MainActivity) {
+        activity.requestNotificationPermission { granted ->
+            onResult(granted)
+        }
+    } else {
+        onResult(false)
+    }
+}
+
+actual fun isAudioPermissionGranted(): Boolean = hasPermission(android.Manifest.permission.RECORD_AUDIO)
+
+actual fun isCameraPermissionGranted(): Boolean = hasPermission(android.Manifest.permission.CAMERA)
+
+actual fun openAppSettings() {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.fromParts("package", appContext.packageName, null)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    appContext.startActivity(intent)
+}
+
+actual fun shareText(text: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    appContext.startActivity(Intent.createChooser(intent, "分享到").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+}
+
+actual fun platformExitApp() {
+    // 一级界面双击返回键的第二下：finish 当前 Activity（回到桌面 = 退出）。
+    // 兜底：appActivity 为 null（理论上不会）时不崩。
+    appActivity?.finish()
 }

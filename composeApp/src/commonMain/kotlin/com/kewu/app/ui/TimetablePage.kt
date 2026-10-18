@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
@@ -16,6 +17,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -61,10 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.KewuGreen
 import com.kewu.app.KewuBlue
-import com.kewu.app.ui.liquidglass.KewuGlassCard
-import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
-import io.github.suqi8.coui.kmp.blur.LayerBackdrop
-import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.basic.Card
+import io.github.suqi8.coui.kmp.basic.CardColors
 
 // ───────────────────────── 数据模型（mock） ─────────────────────────
 
@@ -126,19 +126,14 @@ private fun mockWeek(): List<DaySchedule> = listOf(
  * 课表页：由课堂页「今日课程」小卡进入，查看一周排课。
  *
  * 版式 = Mishka（squircle 卡片、12dp 间距、卡内 16dp、状态用标志性图形）；
- * coui 用在**浮动的玻璃日条**上：日条浮在列表上方，列表滚动时从它下面穿过，
- * 被 blur + tint 成磨砂质感 —— 这是本 app 的招牌质感。
- *
- * ★ coui 硬约束：玻璃日条（采样者）必须放在被采集层**之外**。所以结构是
- * 「平色底 → 采集层（layerBackdrop 包住滚动列表）→ 玻璃日条（与采集层平级）」
- * 三层平铺，日条不是列表的子节点。
+ * 顶部「周一到周日」日条用 **coui 原生 Card**（固定浅色配色：未选中 = 白底 +
+ * outlineVariant 描边，选中 = KewuBlue 蓝底白字），芯片仍浮在列表上方，保留浮动感。
  */
 @Composable
 fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val week = remember { mockWeek() }
     var selected by remember { mutableIntStateOf(4) } // 默认选中今天（周五）
-    val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
 
     // 与课堂页同款：向下浏览收起底部导航栏，回顶展开
@@ -157,14 +152,14 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
 
     Box(Modifier.fillMaxSize()) {
         // 1) 平色底（M3 语义色）。不挂 backdrop —— 玻璃日条要采到的是滚动列表。
-        Box(Modifier.matchParentSize().background(cs.background))
+        Box(Modifier.matchParentSize().background(Color(0xFFF8F9FA)))
 
         Column(Modifier.fillMaxSize()) {
             TimetableHeader(onBack)
             // 2) 列表区
             Box(Modifier.fillMaxWidth().weight(1f)) {
-                // 采集层：把滚动列表录进 backdrop，供上层玻璃日条采样
-                Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop)) {
+                // 列表容器（日条已改为 coui Card，不再需要玻璃采集层）
+                Box(Modifier.matchParentSize()) {
                     Column(
                         Modifier
                             .fillMaxSize()
@@ -203,12 +198,11 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                         }
                     }
                 }
-                // 3) 浮动玻璃日条：与采集层平级（在采集层之外）✓
+                // 3) 浮动日条（coui Card）：与列表平级浮在其上方
                 DayStrip(
                     week = week,
                     selected = selected,
                     onSelect = { selected = it },
-                    backdrop = pageBackdrop,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                 )
             }
@@ -283,86 +277,95 @@ private fun TimetableHeader(onBack: () -> Unit) {
     }
 }
 
-/** 浮动玻璃日条：7 天胶囊，选中日用 primary 实底，今天显示「今天」。
- *  选中态由一个**滑块**承担：spring 滑到目标 chip（不是选中 chip 瞬移变色），
- *  文字颜色再 tween 跟上 —— 观感是「一坨高亮滑过去」，而不是「哪块突然亮了」。 */
+/**
+ * 浮动日条（2026-10-19 改）：每天一枚 coui 原生 `Card` 芯片浮在列表上方，
+ * 固定浅色配色 —— 未选中 = `cs.surface` 白底 + `outlineVariant` 描边 + onSurface/onSurfaceVariant
+ * 文字；选中 = `KewuBlue` 蓝底 + 白字（选中进度弹簧过渡，不瞬变）。「今天」额外点一枚品牌绿小点。
+ */
 @Composable
 private fun DayStrip(
     week: List<DaySchedule>,
     selected: Int,
     onSelect: (Int) -> Unit,
-    backdrop: LayerBackdrop,
     modifier: Modifier = Modifier,
 ) {
     val cs = MaterialTheme.colorScheme
-    KewuGlassCard(
-        backdrop = backdrop,
-        shape = RoundedCornerShape(50),
-        blurRadius = 16.dp,
-        tintAlpha = 0.16f,
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .height(62.dp),
+    Row(
+        modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        BoxWithConstraints(
-            Modifier
-                .fillMaxSize()
-                .padding(horizontal = 5.dp, vertical = 5.dp),
-        ) {
-            val gap = 3.dp
-            val chipW = (maxWidth - gap * (week.size - 1)) / week.size
-            // 滑块 x：spring 滑到选中 chip（低阻尼 → 有过冲的"滑"感）
-            val sliderX by animateDpAsState(
-                targetValue = (chipW + gap) * selected,
+        week.forEachIndexed { i, d ->
+            val sel = i == selected
+            val p = rememberEnterProgress(i, baseDelayMs = 120L, stepMs = 45L)
+            // 选中进度：蓝底 / 文字色随之弹簧过渡，不瞬变（不生硬的关键）
+            val cardColor by animateColorAsState(
+                targetValue = if (sel) KewuBlue else cs.surface,
+                // ★ 不能传 Float 的 visibilityThreshold（会把 spring 推导成 SpringSpec<Float>，
+                //   与 AnimationSpec<Color> 不符）；用默认阈值即可，弹簧照样过冲。
                 animationSpec = spring(dampingRatio = 0.62f, stiffness = 420f),
-                label = "daySlider",
+                label = "dayCardColor$i",
             )
+            val topColor by animateColorAsState(
+                targetValue = if (sel) Color.White else cs.onSurfaceVariant,
+                animationSpec = tween(durationMillis = 200),
+                label = "dayTop$i",
+            )
+            val dateColor by animateColorAsState(
+                targetValue = if (sel) Color.White else cs.onSurface,
+                animationSpec = tween(durationMillis = 200),
+                label = "dayDate$i",
+            )
+            val pressedColor = if (sel) {
+                Color.White.copy(alpha = 0.18f)
+            } else {
+                cs.primary.copy(alpha = 0.12f)
+            }
+            // 芯片浮在列表上方：入场只做位移 + 透明度（非玻璃件可安全叠 alpha/scale）
             Box(
                 Modifier
-                    .offset(x = sliderX)
-                    .width(chipW)
-                    .fillMaxHeight()
-                    .padding(vertical = 2.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(KewuBlue),
-            )
-            Row(
-                Modifier.fillMaxSize(),
-                horizontalArrangement = Arrangement.spacedBy(gap),
-                verticalAlignment = Alignment.CenterVertically,
+                    .weight(1f)
+                    .height(62.dp)
+                    .then(
+                        if (!sel) {
+                            Modifier.border(1.dp, cs.outlineVariant, RoundedCornerShape(18.dp))
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .riseEnter(p, 40f),
             ) {
-                week.forEachIndexed { i, d ->
-                    val sel = i == selected
-                    val topColor by animateColorAsState(
-                        targetValue = if (sel) Color.White else cs.onSurface,
-                        animationSpec = tween(durationMillis = 220),
-                        label = "dayTop$i",
-                    )
-                    val dateColor by animateColorAsState(
-                        targetValue = if (sel) Color.White else cs.onSurface,
-                        animationSpec = tween(durationMillis = 220),
-                        label = "dayDate$i",
-                    )
-                    Box(
-                        Modifier
-                            .width(chipW)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(50))
-                            .background(if (sel) Color.Transparent else cs.surfaceVariant.copy(alpha = 0.55f))
-                            .clickable { onSelect(i) },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Card(
+                    modifier = Modifier.fillMaxSize(),
+                    cornerRadius = 18.dp,
+                    colors = CardColors(
+                        color = cardColor,
+                        contentColor = dateColor,
+                        pressedColor = pressedColor,
+                    ),
+                    onClick = { onSelect(i) },
+                ) {
+                    Box(Modifier.fillMaxSize()) {
+                        Column(
+                            Modifier.align(Alignment.Center),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
                             Text(
                                 if (d.isToday) "今天" else d.label,
-                                color = topColor,
-                                fontSize = 11.sp, maxLines = 1,
+                                color = topColor, fontSize = 11.sp, maxLines = 1,
                             )
                             Text(
-                                d.date,
-                                color = dateColor,
+                                d.date, color = dateColor,
                                 fontSize = 14.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                            )
+                        }
+                        // 「今天」绿点：未选中时点在日期下方提示今天在哪
+                        if (d.isToday && !sel) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 5.dp)
+                                    .size(4.dp)
+                                    .background(KewuGreen, CircleShape),
                             )
                         }
                     }
@@ -381,7 +384,7 @@ private fun ClassBlock(slot: ClassSlot, index: Int) {
             .fillMaxWidth()
             .padding(bottom = 12.dp)
             .squircleCard(16.dp, cs.surfaceVariant)
-            .cardEnter(index),
+            .riseEnter(rememberEnterProgress(index, baseDelayMs = 200L, stepMs = 55L), 60f),
     ) {
         Row(
             Modifier.fillMaxWidth().padding(16.dp),
@@ -449,6 +452,7 @@ private fun EmptyDayCard() {
         Modifier
             .fillMaxWidth()
             .squircleCard(16.dp, cs.surfaceVariant)
+            .riseEnter(rememberEnterProgress(0, baseDelayMs = 200L), 40f)
             .padding(vertical = 32.dp),
         contentAlignment = Alignment.Center,
     ) {
