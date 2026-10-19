@@ -18,6 +18,11 @@ iosApp/*.xcuserstate
 # Kotlin 增量编译缓存（非源码，不应提交）
 .kotlin/
 
+# Release 签名 keystore（敏感！签名密钥永不上 git；口令在 local.properties，同样不入库）
+composeApp/xiaoye.jks
+*.jks
+*.keystore
+
 # 本地智能体工作数据 / 调试截图（本地产物，勿提交到共享仓库）
 .workbuddy/
 /nav_*.png

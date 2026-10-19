@@ -1,4 +1,6 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.io.FileInputStream
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -6,6 +8,15 @@ plugins {
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
 }
+
+// Release 签名（2026-10-19 配置）：口令读根目录 local.properties（已被 .gitignore，永不入库）；
+// keystore 文件放 composeApp/xiaoye.jks（同不入库，见 .gitignore）。缺配置时 assembleRelease 直接报错，
+// 避免静默产出未签名却名为 release 的包。复现步骤见《项目交接文档.md》十八节。
+val keystoreProperties = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) FileInputStream(f).use { load(it) }
+}
+val hasReleaseSigning = keystoreProperties.getProperty("RELEASE_STORE_FILE") != null
 
 kotlin {
     androidTarget {
@@ -90,14 +101,38 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("RELEASE_STORE_FILE"))
+                storePassword = keystoreProperties.getProperty("RELEASE_STORE_PASSWORD")
+                keyAlias = keystoreProperties.getProperty("RELEASE_KEY_ALIAS")
+                keyPassword = keystoreProperties.getProperty("RELEASE_KEY_PASSWORD")
+            }
+        }
+    }
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+// 缺签名配置时 assembleRelease/packageRelease 直接失败并提示补齐，避免静默产出未签名包
+tasks.matching { it.name.startsWith("assembleRelease") || it.name.startsWith("packageRelease") }.configureEach {
+    doFirst {
+        if (!hasReleaseSigning) throw GradleException(
+            "缺少 Release 签名配置：请在根目录 local.properties 补 RELEASE_STORE_FILE / " +
+                "RELEASE_STORE_PASSWORD / RELEASE_KEY_ALIAS / RELEASE_KEY_PASSWORD 四行" +
+                "（keystore 放 composeApp/xiaoye.jks，口令与复现步骤见《项目交接文档.md》十八节）"
+        )
     }
 }
 
