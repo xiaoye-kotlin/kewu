@@ -57,7 +57,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -187,21 +186,6 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 suggestions = listOf("「${first.title}」怎么做？") + suggestions
             }
         }
-    }
-
-    // 下滑收起底部导航栏，回顶/上滑展开（与课堂/任务/我的同款增量判定）
-    LaunchedEffect(listState) {
-        var last = 0
-        snapshotFlow { listState.firstVisibleItemIndex * 100_000 + listState.firstVisibleItemScrollOffset }
-            .collect { cur ->
-                if (listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset <= 0) {
-                    onNavHide(false)
-                } else {
-                    val delta = cur - last
-                    if (delta > 6) onNavHide(true) else if (delta < -6) onNavHide(false)
-                }
-                last = cur
-            }
     }
 
     // 键盘弹起检测：人格区/上下文 chip 自动收起，把空间让给对话列（否则键盘占 830px 对话区被压没）

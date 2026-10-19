@@ -148,6 +148,10 @@ fun LoginScreen(onLogin: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val isDark = !cs.background.isLight() // 近似深浅判定（M3 背景浅=亮色）
     var mode by remember { mutableStateOf(0) } // 0=登录 1=注册
+    // ★ 角色选择（单应用多角色，2026-10-19 教师端）：0=学生 1=教师。
+    //   后端暂无角色字段，登录成功后按 kv 里的角色分流到学生端 / 教师端两套 UI。
+    //   默认记住上次角色（退出登录不清 kewu_role，同账号重登更顺手）。
+    var role by remember { mutableStateOf(if (kvGet("kewu_role") == "teacher") 1 else 0) }
     // ★ 自动记住：首次登录后把账号密码存进 kv，下次启动直接进主界面（App 层读 kewu_logged 决定）。
     //   这里进场即预填，用户无需重输；只有「我的→退出登录」才会清空。
     var account by remember { mutableStateOf(kvGet("kewu_account") ?: "") }
@@ -284,6 +288,14 @@ fun LoginScreen(onLogin: () -> Unit) {
                     val segP = enterProgress(appeared, delayMs = 220)
                     Box(Modifier.alpha(segP)) {
                         Segmented(mode, listOf("登录", "注册")) { mode = it }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    // 角色分段：我是学生 / 我是老师（同款滑块样式；登录成功后按角色进两套 UI）
+                    Box(Modifier.alpha(segP)) {
+                        Segmented(role, listOf("我是学生", "我是老师")) {
+                            role = it
+                            kvSet("kewu_role", if (it == 1) "teacher" else "student")
+                        }
                     }
                     Spacer(Modifier.height(18.dp))
 

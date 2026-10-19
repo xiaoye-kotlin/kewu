@@ -383,7 +383,7 @@ private fun MyHome(
 }
 
 @Composable
-private fun GroupLabel(text: String, modifier: Modifier = Modifier) {
+internal fun GroupLabel(text: String, modifier: Modifier = Modifier) {
     Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
         fontWeight = FontWeight.Medium,
         modifier = modifier.padding(horizontal = 16.dp, vertical = 8.dp))
@@ -392,7 +392,7 @@ private fun GroupLabel(text: String, modifier: Modifier = Modifier) {
 /** 功能行（2026-10-18 换 coui 原生 Card，用户要求：不自造控件）：图标 + 标题 + 副标题 + 右侧箭头。
  *  coui Card 自带 squircle 外形与 COUI 官方按压 Tint 反馈。 */
 @Composable
-private fun FuncRow(
+internal fun FuncRow(
     glyph: Int,
     title: String,
     subtitle: String,
@@ -692,7 +692,7 @@ private fun RecordingRow(item: RecordingItem, onRetry: () -> Unit) {
 // ───────────────────────── 小图标：返回 / 编辑(铅笔) ─────────────────────────
 
 @Composable
-private fun BackGlyph(color: Color, sizeDp: Dp) {
+internal fun BackGlyph(color: Color, sizeDp: Dp) {
     Canvas(Modifier.size(sizeDp)) {
         val s = size.width
         val sw = s * 0.13f
@@ -733,7 +733,7 @@ private fun EditGlyph(color: Color, sizeDp: Dp) {
  * 用户要求用 coui：开关 = coui Switch，行 = coui Card。
  */
 @Composable
-private fun NotificationSettingsPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
+internal fun NotificationSettingsPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val scrollState = rememberScrollState()
 
@@ -912,7 +912,7 @@ private fun PermissionRow(title: String, subtitle: String, granted: Boolean, onA
 
 /** 关于我们：项目介绍 + 团队信息（作者：第一队 · 重庆对外经贸学院）。 */
 @Composable
-private fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
+internal fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     val scrollState = rememberScrollState()
 

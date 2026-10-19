@@ -87,12 +87,13 @@ import kotlinx.coroutines.launch
  * ★ 配色约定（用户要求）：**页面背景一律走 `MaterialTheme.colorScheme`，不允许自己造背景色**
  * （原来每个 tab 一套硬编码渐变已全部去掉）。所以这里只留索引和文字。
  */
-private data class NavItem(
+// internal：教师端 TeacherMainScreen 复用同一套液态玻璃导航（index 决定自绘图标形状）
+internal data class NavItem(
     val index: Int,
     val label: String,
 )
 
-private val NAV_ITEMS = listOf(
+internal val NAV_ITEMS = listOf(
     NavItem(0, "课堂"),
     NavItem(1, "助教"),
     NavItem(2, "任务"),
@@ -417,7 +418,7 @@ private fun TabContent(
 }
 
 @Composable
-private fun AppleLiquidGlassNavBar(
+internal fun AppleLiquidGlassNavBar(
     items: List<NavItem>,
     selected: Int,
     onSelect: (Int) -> Unit,
