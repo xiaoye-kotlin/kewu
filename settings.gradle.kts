@@ -2,6 +2,7 @@ rootProject.name = "kewu"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 include(":composeApp")
+include(":server")
 
 pluginManagement {
     repositories {

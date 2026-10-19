@@ -9,6 +9,8 @@
 .cxx
 local.properties
 composeApp/build
+server/build
+server/uploads
 iosApp/Pods
 iosApp/*.xcuserstate
 *.ipa

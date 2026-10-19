@@ -7,6 +7,8 @@ kotlinxCoroutines = "1.10.2"
 kotlinxSerialization = "1.7.3"
 ktor = "2.3.12"
 coui = "1.1.0"
+lettuce = "6.4.0.RELEASE"
+obs = "3.25.10"
 
 androidxLifecycle = "2.8.4"
 androidxActivityCompose = "1.10.1"
@@ -38,3 +40,6 @@ kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref =
 androidApplication = { id = "com.android.application", version.ref = "agp" }
 composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMultiplatform" }
 composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+
