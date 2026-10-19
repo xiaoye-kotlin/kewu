@@ -24,10 +24,17 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Kewu">
 
-        <!-- adjustResize：窗口随键盘收缩，Compose weight 区自动让位（adjustPan 默认会把整页顶上去） -->
+        <!-- adjustResize：窗口随键盘收缩，Compose weight 区自动让位（adjustPan 默认会把整页顶上去）。
+             configChanges（2026-10-19 加）：旋屏 / 字体缩放 / 暗色模式 / 分屏等配置变更不再重建
+             Activity，由 Compose 自行重组（LocalConfiguration 自动更新）——全 app 各页面的
+             remember 状态（登录表单、聊天记录、录音状态机等）在旋屏后原样保留。
+             修用户报的「首页录音中旋屏，回来录音就结束了」：旧行为 Activity 重建 →
+             Composition 销毁 → UI 状态归零（麦克风还在后台录，见 RecordingManager 注释）。
+             未覆盖的变更（如系统语言切换）仍会重建，属可接受边缘场景。 -->
         <activity
             android:exported="true"
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|navigation|uiMode|density|fontScale|layoutDirection|colorMode|locale"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

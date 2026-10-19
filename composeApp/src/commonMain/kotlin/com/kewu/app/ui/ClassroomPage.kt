@@ -48,13 +48,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
-import androidx.activity.compose.BackHandler
+import com.kewu.app.BackHandler
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -81,18 +81,15 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kewu.app.AttendanceSession
-import com.kewu.app.AudioRecorder
 import com.kewu.app.CourseInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
-import com.kewu.app.RecordingUploadResult
+import com.kewu.app.RecordingManager
+import com.kewu.app.RecordingStatus
 import com.kewu.app.haptic
 import com.kewu.app.hapticClickable
 import com.kewu.app.platformActivity
-import com.kewu.app.platformAppContext
-import com.kewu.app.platformCacheDir
-import com.kewu.app.platformReadFile
 import com.kewu.app.requestAudioPermission
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -841,42 +838,28 @@ private fun MiniStatCard(
 
 // ───────────────────────── 录音浮层（coui 毛玻璃 · 真实录音 + 上传） ─────────────────────────
 
-/** 首页录音状态机：Idle（待录音）/ Uploading（上传中）/ Success / Error。 */
-private sealed class RecState {
-    object Idle : RecState()
-    object Uploading : RecState()
-    data class Success(val recordingId: String) : RecState()
-    data class Error(val msg: String) : RecState()
-}
-
+/**
+ * 首页录音浮层。
+ *
+ * ★ 2026-10-19 修「旋屏后录音中断」：录音引擎与状态全部在进程级单例
+ *   [RecordingManager]（原因与旧版泄漏详见该文件头注释）——旋屏（Activity
+ *   重建）/ 切 tab（本 Composition 销毁）都不再中断录音或丢失状态，本
+ *   Composable 只是观察者 + 发起点，不再持有任何 remember 录音状态。
+ */
 @Composable
 private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseInfo>?) {
     val cs = MaterialTheme.colorScheme
-    val scope = rememberCoroutineScope()
-    // ★ AudioRecorder 需要 Android Context：commonMain 通过 platformAppContext() 取 Application Context
-    val audio = remember { AudioRecorder(platformAppContext()) }
 
     val activeCourse = courseInfos?.firstOrNull()
     val classId = activeCourse?.id
     val courseName = activeCourse?.name ?: "课堂"
 
-    var isRecording by remember { mutableStateOf(false) }
-    var recordingTime by remember { mutableStateOf(0) }
-    var lastDuration by remember { mutableStateOf(0) }
-    var recordedPath by remember { mutableStateOf<String?>(null) }
-    var recState by remember { mutableStateOf<RecState>(RecState.Idle) }
-    var permissionHint by remember { mutableStateOf(false) }
+    // 录音状态单源：单例 StateFlow（旋屏 / 切 tab / 页面销毁均不影响录音进程）
+    val st = RecordingManager.status.collectAsState().value
 
     // 玻璃凝结入场（2026-10-18 动画统一改造）：初始 tint≈0 + 内容透明 = 不可见，
     // 240ms 后从零「长」出来，不再一进场就整卡出现、再突然滑一遍。
     val p = rememberEnterProgress(0, baseDelayMs = 240L)
-
-    // 录音计时器（仅录音中累加）
-    LaunchedEffect(isRecording) {
-        if (isRecording) {
-            while (isRecording) { delay(1000); recordingTime++ }
-        } else recordingTime = 0
-    }
 
     fun fmtTime(s: Int): String {
         val m = s / 60
@@ -884,64 +867,27 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
         return "${if (m < 10) "0$m" else "$m"}:${if (sec < 10) "0$sec" else "$sec"}"
     }
 
-    fun uploadFile(path: String, durationSec: Int) {
-        recState = RecState.Uploading
-        scope.launch {
-            try {
-                val bytes = platformReadFile(path)
-                if (bytes == null) { recState = RecState.Error("录音文件读取失败，请稍后重试"); return@launch }
-                val ts = Clock.System.now().toEpochMilliseconds()
-                val filename = "kewu_${classId ?: "unknown"}_$ts.wav"
-                val res = KewuApi.uploadRecording(bytes, filename, classId ?: "unknown", null, durationSec.toDouble())
-                recState = if (res != null) RecState.Success(res.recordingId)
-                else RecState.Error("录音上传失败，请稍后重试")
-            } catch (e: Exception) {
-                recState = RecState.Error("录音上传失败，请稍后重试")
-            }
-        }
-    }
-
-    fun startRecordingSafe() {
-        scope.launch {
-            val ts = Clock.System.now().toEpochMilliseconds()
-            val out = platformCacheDir() + "/kewu_rec_$ts.pcm"
-            val ok = audio.startRecording(out)
-            if (ok) {
-                isRecording = true
-                recordingTime = 0
-                recordedPath = null
-                recState = RecState.Idle
-                permissionHint = false
-            } else {
-                permissionHint = !audio.hasPermission()
-            }
-        }
-    }
-
     fun onRecordClick() {
         haptic(HapticKind.Medium)
-        if (isRecording) {
-            // 停止 → 生成 WAV → 自动上传
-            val dur = recordingTime
-            isRecording = false
-            lastDuration = dur
-            scope.launch {
-                val path = audio.stopRecording()
-                recordedPath = path
-                if (path == null) recState = RecState.Error("录音文件生成失败，请稍后重试")
-                else uploadFile(path, dur)
-            }
+        if (st is RecordingStatus.Recording) {
+            // 停止 → 生成 WAV → 自动上传（单例负责，与页面生命周期无关）
+            RecordingManager.stopAndUpload()
+            return
+        }
+        val cid = classId
+        if (cid == null) {
+            RecordingManager.showError("暂无可绑定的课程，请先在「我的」绑定课程后再录音")
+            return
+        }
+        if (RecordingManager.hasPermission()) {
+            RecordingManager.start(cid)
         } else {
-            if (classId == null) {
-                recState = RecState.Error("暂无可绑定的课程，请先在「我的」绑定课程后再录音")
-                return
-            }
-            if (audio.hasPermission()) startRecordingSafe()
-            else {
-                val act = platformActivity()
-                if (act != null) requestAudioPermission(act) { granted ->
-                    if (granted) startRecordingSafe() else permissionHint = true
-                } else permissionHint = true
+            val act = platformActivity()
+            if (act != null) requestAudioPermission(act) { granted ->
+                if (granted) RecordingManager.start(cid)
+                else RecordingManager.showError("需要麦克风权限才能录音，请在系统弹窗中允许")
+            } else {
+                RecordingManager.showError("需要麦克风权限才能录音，请在系统弹窗中允许")
             }
         }
     }
@@ -959,7 +905,7 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
     ) {
         Column(Modifier.alpha(p).padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Waveform(active = isRecording)
+                Waveform(active = st is RecordingStatus.Recording)
                 Spacer(Modifier.width(12.dp))
                 Column(Modifier.weight(1f)) {
                     Text(
@@ -967,11 +913,12 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                         color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                     )
                     Spacer(Modifier.height(2.dp))
-                    val sub = when {
-                        isRecording -> "录音中 ${fmtTime(recordingTime)}"
-                        recordedPath != null && recState is RecState.Success -> "已上传 ✓"
-                        recordedPath != null -> "录音完成，正在上传"
-                        else -> "点击右侧按钮开始录音"
+                    val sub = when (st) {
+                        is RecordingStatus.Recording -> "录音中 ${fmtTime(st.elapsedSec)}"
+                        is RecordingStatus.Uploading -> "录音完成，正在上传"
+                        is RecordingStatus.Success -> "已上传 ✓"
+                        is RecordingStatus.Error -> st.msg
+                        RecordingStatus.Idle -> "点击右侧按钮开始录音"
                     }
                     Text(sub, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
                 }
@@ -980,49 +927,43 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                     Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .background(if (isRecording) cs.error else cs.primary)
+                        .background(if (st is RecordingStatus.Recording) cs.error else cs.primary)
                         .hapticClickable { onRecordClick() },
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(if (isRecording) "⏹" else "⏺", color = Color.White, fontSize = 20.sp)
+                    Text(if (st is RecordingStatus.Recording) "⏹" else "⏺", color = Color.White, fontSize = 20.sp)
                 }
             }
 
-            // 权限提示
-            if (permissionHint) {
-                Spacer(Modifier.height(10.dp))
-                Text("需要麦克风权限才能录音，请在系统弹窗中允许", color = cs.error, fontSize = 12.5.sp)
-            }
-
-            // 上传状态
-            when (val st = recState) {
-                is RecState.Uploading -> {
+            // 上传状态（错误态带「重试」，仅当本地文件还在）
+            when (st) {
+                is RecordingStatus.Uploading -> {
                     Spacer(Modifier.height(12.dp))
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = cs.primary)
                     Spacer(Modifier.height(6.dp))
                     Text("上传中…", color = cs.onSurfaceVariant, fontSize = 12.5.sp)
                 }
-                is RecState.Success -> {
+                is RecordingStatus.Success -> {
                     Spacer(Modifier.height(12.dp))
                     StatusTag("已上传 · ${st.recordingId}", KewuGreen.copy(alpha = 0.18f), KewuGreen)
                 }
-                is RecState.Error -> {
+                is RecordingStatus.Error -> {
                     Spacer(Modifier.height(12.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(st.msg, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
-                        if (recordedPath != null && !isRecording) {
+                        if (st.filePath != null) {
                             Spacer(Modifier.width(8.dp))
                             Box(
                                 Modifier
                                     .clip(RoundedCornerShape(10.dp))
                                     .background(cs.error)
-                                    .hapticClickable { haptic(HapticKind.Tick); uploadFile(recordedPath!!, lastDuration) }
+                                    .hapticClickable { haptic(HapticKind.Tick); RecordingManager.retryUpload() }
                                     .padding(horizontal = 14.dp, vertical = 7.dp),
                             ) { Text("重试", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold) }
                         }
                     }
                 }
-                is RecState.Idle -> {}
+                RecordingStatus.Idle, is RecordingStatus.Recording -> {}
             }
         }
     }

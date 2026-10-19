@@ -2,7 +2,9 @@ package com.kewu.app
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import java.io.File
 import java.util.prefs.Preferences
+import kotlin.system.exitProcess
 
 actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp)
 
@@ -16,6 +18,21 @@ actual fun kvGet(key: String): String? = preferences.get(key, null)
 actual fun kvSet(key: String, value: String?) {
     if (value == null) preferences.remove(key) else preferences.put(key, value)
 }
+
+actual fun platformAppContext(): Any = Any()
+
+actual fun platformActivity(): Any? = null
+
+actual fun platformCacheDir(): String =
+    File(System.getProperty("user.home"), ".kewu/cache").apply { mkdirs() }.absolutePath
+
+actual fun platformReadFile(path: String): ByteArray? = try {
+    File(path).readBytes()
+} catch (_: Exception) {
+    null
+}
+
+actual fun requestAudioPermission(activity: Any, onResult: (Boolean) -> Unit) = onResult(true)
 
 actual fun requestCameraPermission(activity: Any, onResult: (Boolean) -> Unit) = onResult(false)
 
