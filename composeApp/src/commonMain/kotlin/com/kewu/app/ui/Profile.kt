@@ -99,6 +99,31 @@ internal fun ProfileGlyph(kind: Int, color: Color, sizeDp: Dp = 22.dp) {
                 }
                 drawPath(arrow, color, style = stroke)
             }
+            5 -> { // 班级 / 加入班级：双人（两个圆头 + 肩弧）
+                drawCircle(color, style = stroke, radius = s * 0.14f, center = Offset(s * 0.36f, s * 0.34f))
+                drawCircle(color, style = stroke, radius = s * 0.14f, center = Offset(s * 0.64f, s * 0.34f))
+                drawArc(color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
+                    topLeft = Offset(s * 0.16f, s * 0.50f), size = Size(s * 0.40f, s * 0.30f), style = stroke)
+                drawArc(color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
+                    topLeft = Offset(s * 0.44f, s * 0.50f), size = Size(s * 0.40f, s * 0.30f), style = stroke)
+            }
+            6 -> { // 新建课程：书本 + 加号
+                val book = Path().apply {
+                    moveTo(s * 0.20f, s * 0.20f)
+                    lineTo(s * 0.46f, s * 0.26f)
+                    lineTo(s * 0.46f, s * 0.74f)
+                    lineTo(s * 0.20f, s * 0.68f)
+                    close()
+                    moveTo(s * 0.80f, s * 0.20f)
+                    lineTo(s * 0.54f, s * 0.26f)
+                    lineTo(s * 0.54f, s * 0.74f)
+                    lineTo(s * 0.80f, s * 0.68f)
+                    close()
+                }
+                drawPath(book, color, style = stroke)
+                drawLine(color, Offset(s * 0.63f, s * 0.40f), Offset(s * 0.77f, s * 0.40f), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
+                drawLine(color, Offset(s * 0.70f, s * 0.33f), Offset(s * 0.70f, s * 0.47f), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
+            }
         }
     }
 }

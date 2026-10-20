@@ -65,6 +65,7 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
+import com.kewu.app.TeacherConsole
 import com.kewu.app.haptic
 import com.kewu.app.hapticClickable
 import com.kewu.app.kvGet
@@ -118,6 +119,8 @@ fun TeacherConsolePage(
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
     var activeSession by remember { mutableStateOf<AttendanceSession?>(null) }
     var activeLoaded by remember { mutableStateOf(false) }
+    // ★ 控制台聚合（2026-10-20 后端第 5 节）：今日课程/待批阅红点/今日签到率一次拿全
+    var console by remember { mutableStateOf<TeacherConsole?>(null) }
     var teacherName by remember {
         mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师")
     }
@@ -126,14 +129,37 @@ fun TeacherConsolePage(
         scope.launch {
             if (KewuApi.currentUser == null) KewuApi.me()
             teacherName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: teacherName
-            // 教师课程：优先已绑定课程，兜底全量课程列表（离线则为空列表，不崩）
-            courses = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+            // ★ 控制台聚合优先：todayCourses 带班级名/学生数/上课状态/今日签到率
+            val c = KewuApi.getTeacherConsole()
+            console = c
+            // 课程列表：聚合今日课程 → 已绑定课程 → 全量课程列表（逐级兜底，离线为空不崩）
+            courses = c?.todayCourses
+                ?.map { CourseInfo(it.courseId, it.courseName, "", teacherName) }
+                ?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.getCourses()
             // 恢复进行中的签到（kv 持久化）；若后端已关闭则清掉
             val sid = kvGet("teacher_active_session")
             if (!sid.isNullOrBlank()) {
                 val s = KewuApi.getAttendance(sid)
                 if (s != null && s.state != "closed") activeSession = s
                 else kvSet("teacher_active_session", "")
+            }
+            // 无本地会话但后端课堂状态 ON（别处在上课/上次杀进程丢 kv）→ 提示仍在上课
+            if (activeSession == null && sid.isNullOrBlank()) {
+                val onCourseId = c?.todayCourses?.firstOrNull { it.state == "ON" }?.courseId
+                    ?: courses?.firstNotNullOfOrNull { co ->
+                        KewuApi.getClassState(co.id)?.takeIf { it.state == "ON" }?.let { co.id }
+                    }
+                if (onCourseId != null) {
+                    // 找到该课今天的 OPEN 签到会话，恢复上课中面板
+                    KewuApi.getAttendances(onCourseId)
+                        ?.firstOrNull { it.state == "OPEN" || it.state == "open" }
+                        ?.let { s ->
+                            activeSession = s
+                            kvSet("teacher_active_session", s.id)
+                        }
+                }
             }
             activeLoaded = true
         }
@@ -176,6 +202,7 @@ fun TeacherConsolePage(
                     scrollState = scrollState,
                     teacherName = teacherName,
                     courses = courses,
+                    console = console,
                     activeSession = activeSession,
                     activeLoaded = activeLoaded,
                     onGoToTab = onGoToTab,
@@ -214,6 +241,7 @@ private fun ConsoleHome(
     scrollState: androidx.compose.foundation.ScrollState,
     teacherName: String,
     courses: List<CourseInfo>?,
+    console: TeacherConsole?,
     activeSession: AttendanceSession?,
     activeLoaded: Boolean,
     onGoToTab: (Int) -> Unit,
@@ -251,6 +279,7 @@ private fun ConsoleHome(
                 courseCount = courses?.size ?: 0,
                 live = activeSession,
                 loading = !activeLoaded,
+                console = console,
                 onAssistant = { onGoToTab(1) },
                 onTask = { onGoToTab(2) },
             )
@@ -280,7 +309,7 @@ private fun ConsoleHome(
                     strokeWidth = 3.dp, modifier = Modifier.size(24.dp))
             }
             courses.isEmpty() -> Text(
-                "暂无课程，可先到「我的 → 课程绑定」绑定",
+                "暂无课程，可先到「我的 → 新建课程」创建",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
@@ -332,6 +361,7 @@ private fun TeacherStatusSection(
     courseCount: Int,
     live: AttendanceSession?,
     loading: Boolean,
+    console: TeacherConsole?,
     onAssistant: () -> Unit,
     onTask: () -> Unit,
 ) {
@@ -409,17 +439,19 @@ private fun TeacherStatusSection(
         }
 
         // 右侧两张堆叠小卡（点进助教 / 作业 tab）
+        // ★ 数据走控制台聚合：今日签到率（todayCheckRate）+ 待批阅（pendingReview，hasPending 挂红点）
         Column(Modifier.weight(1f).fillMaxHeight()) {
             TeacherMiniStatCard(
-                label = "进行中签到",
-                value = if (live != null) "1" else "0",
+                label = "今日签到率",
+                value = console?.let { "${(it.todayCheckRate * 100).toInt()}%" } ?: "—",
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 onClick = onAssistant,
             )
             Spacer(Modifier.height(12.dp))
             TeacherMiniStatCard(
-                label = "我的课程",
-                value = "$courseCount",
+                label = "待批阅作业",
+                value = console?.pendingReview?.toString() ?: "—",
+                badge = console?.hasPending == true,
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 onClick = onTask,
             )
@@ -427,12 +459,13 @@ private fun TeacherStatusSection(
     }
 }
 
-/** 与学生端 [MiniStatCard]（ClassroomPage，private）同款的堆叠小卡：标签 + 大数值 + 可点箭头。 */
+/** 与学生端 [MiniStatCard]（ClassroomPage，private）同款的堆叠小卡：标签 + 大数值 + 可点箭头 + 可选红点。 */
 @Composable
 private fun TeacherMiniStatCard(
     label: String,
     value: String,
     modifier: Modifier = Modifier,
+    badge: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -446,7 +479,13 @@ private fun TeacherMiniStatCard(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                        if (badge) {
+                            Spacer(Modifier.width(5.dp))
+                            Box(Modifier.size(7.dp).clip(CircleShape).background(cs.error))
+                        }
+                    }
                     Spacer(Modifier.height(2.dp))
                     Text(value, color = cs.onSurface, fontSize = 20.sp,
                         fontWeight = FontWeight.Bold, maxLines = 1)
@@ -584,6 +623,9 @@ private fun QuickStartCard(
                             starting = false
                             if (s != null) {
                                 haptic(HapticKind.Light)
+                                // ★ 同步开课状态到后端（POST /api/teacher/class-state START）；
+                                //   失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
+                                scope.launch { KewuApi.setClassState(cid, "START") }
                                 onStarted(s)
                             } else {
                                 error = "发起失败，请检查网络后重试"
@@ -726,6 +768,8 @@ private fun LiveSessionCard(
                             closing = true
                             scope.launch {
                                 KewuApi.closeAttendance(session.id)
+                                // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
+                                KewuApi.setClassState(session.courseId, "END")
                                 closing = false
                                 onClosed()
                             }

@@ -107,12 +107,23 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
     var assignments by remember { mutableStateOf<List<AssignmentInfo>?>(null) }
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
     var courseFilter by remember { mutableStateOf<String?>(null) }
+    // ★ 跨课程「待批阅」聚合（2026-10-21）：文档 5.6 的 /api/teacher/assignments/pending 尚未上线，
+    //   先用现有接口交叉（每份作业的 submissions 过滤 PENDING）；接口上线后在此替换即可。
+    var pendingSubs by remember { mutableStateOf<List<Pair<AssignmentInfo, SubmissionInfo>>?>(null) }
 
     fun reload() {
         scope.launch {
             if (KewuApi.currentUser == null) KewuApi.me()
             courses = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
-            assignments = KewuApi.getAssignments(courseFilter)
+            val list = KewuApi.getAssignments(courseFilter)
+            assignments = list
+            val acc = mutableListOf<Pair<AssignmentInfo, SubmissionInfo>>()
+            list?.forEach { a ->
+                KewuApi.getSubmissions(a.id)?.let { subs ->
+                    subs.filter { it.status == "PENDING" }.forEach { acc += a to it }
+                }
+            }
+            pendingSubs = acc
         }
     }
     LaunchedEffect(courseFilter) { reload() }
@@ -152,8 +163,10 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                     assignments = assignments,
                     courses = courses,
                     courseFilter = courseFilter,
+                    pendingSubs = pendingSubs,
                     onFilter = { courseFilter = it },
                     onOpen = { drill = TaskDrill.DETAIL(it) },
+                    onOpenPending = { drill = TaskDrill.REVIEW(it) },
                     onPublish = { courseId -> drill = TaskDrill.PUBLISH(courseId) },
                 )
                 is TaskDrill.DETAIL -> TeacherAssignmentDetail(
@@ -185,8 +198,10 @@ private fun TeacherAssignmentList(
     assignments: List<AssignmentInfo>?,
     courses: List<CourseInfo>?,
     courseFilter: String?,
+    pendingSubs: List<Pair<AssignmentInfo, SubmissionInfo>>?,
     onFilter: (String?) -> Unit,
     onOpen: (String) -> Unit,
+    onOpenPending: (String) -> Unit,
     onPublish: (String) -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
@@ -228,6 +243,51 @@ private fun TeacherAssignmentList(
                     Text("发布新作业", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(2.dp))
                     Text("一键推送到所有学生的任务页", color = cs.onSurfaceVariant, fontSize = 12.5.sp)
+                }
+            }
+        }
+
+        // ★ 待批阅聚合卡（跨课程，老师一进作业 tab 直接批）
+        val pd = pendingSubs
+        if (!pd.isNullOrEmpty()) {
+            val pp = rememberEnterProgress(1)
+            Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp).riseEnter(pp, 24f)) {
+                Box(Modifier.fillMaxWidth().squircleCard(18.dp, cs.surface).padding(14.dp)) {
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("待批阅", color = cs.error, fontSize = 14.5.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(6.dp))
+                            Box(Modifier.clip(RoundedCornerShape(8.dp)).background(cs.error.copy(alpha = 0.14f)).padding(horizontal = 7.dp, vertical = 2.dp)) {
+                                Text("${pd.size} 份", color = cs.error, fontSize = 11.5.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.weight(1f))
+                            Text("点任意一条直接批阅", color = cs.onSurfaceVariant, fontSize = 11.5.sp)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        pd.take(3).forEach { (a, s) ->
+                            Box(
+                                Modifier.fillMaxWidth().padding(bottom = 6.dp)
+                                    .squircleCard(12.dp, cs.surfaceVariant)
+                                    .hapticClickable { haptic(HapticKind.Tick); onOpenPending(s.id) }
+                                    .padding(10.dp),
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(s.studentName, color = cs.onSurface, fontSize = 13.5.sp,
+                                            fontWeight = FontWeight.Medium, maxLines = 1)
+                                        Spacer(Modifier.height(1.dp))
+                                        Text("${a.title} · ${courses?.firstOrNull { it.id == a.courseId }?.name ?: a.courseId}",
+                                            color = cs.onSurfaceVariant, fontSize = 11.5.sp, maxLines = 1)
+                                    }
+                                    Text("去批阅 ›", color = cs.primary, fontSize = 12.sp)
+                                }
+                            }
+                        }
+                        if (pd.size > 3) {
+                            Text("还有 ${pd.size - 3} 份，到对应作业详情里批阅",
+                                color = cs.onSurfaceVariant, fontSize = 11.5.sp)
+                        }
+                    }
                 }
             }
         }

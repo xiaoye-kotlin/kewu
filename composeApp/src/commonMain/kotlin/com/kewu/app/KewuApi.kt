@@ -42,7 +42,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 // ───────────────────────── 数据模型（手搓，无 @Serializable） ─────────────────────────
 
-data class UserInfo(val id: String, val username: String, val nickname: String?)
+data class UserInfo(val id: String, val username: String, val nickname: String?, val role: String = "")
 data class CourseInfo(
     val id: String, val name: String, val description: String, val teacher: String,
 )
@@ -141,6 +141,47 @@ data class AttendanceRealtime(
 )
 data class AttendanceRealtimeItem(
     val studentName: String, val secondsAfterStart: Long, val status: String,
+)
+
+// ── 教师端（文档第 5 节：角色体系 + 建课建班 + 控制台聚合 + 开课下课） ──
+
+/** 需要同时拿「数据 + 失败文案」的接口用这个包一层（建课/建班/入班/开课下课）。 */
+class ApiResult<T>(val data: T?, val error: String?)
+
+/** 班级（含邀请码）。 */
+data class ClassRoomInfo(
+    val id: String, val name: String, val courseId: String, val courseName: String,
+    val teacherName: String, val term: String, val inviteCode: String,
+    val studentCount: Int, val createdAt: String,
+)
+
+/** 我教了哪些班（顶部概览三数 + 班级列表）。 */
+data class TeacherOverview(
+    val teacherId: String, val teacherName: String,
+    val classCount: Int, val studentCount: Int, val courseCount: Int,
+    val classes: List<ClassRoomInfo>,
+)
+
+data class ClassStudent(val studentId: String, val name: String)
+
+/** 控制台聚合里的今日课程项（state: ON=上课中 / OFF=未开课；todayCheckRate 可能为 null=今日未发签到）。 */
+data class TeacherTodayCourse(
+    val courseId: String, val courseName: String, val classId: String, val className: String,
+    val studentCount: Int, val state: String, val startedAt: String, val todayCheckRate: Double?,
+)
+
+/** 控制台聚合（教师端首屏一次返回：今日课程 + 待批阅红点 + 今日签到率）。 */
+data class TeacherConsole(
+    val teacherId: String, val teacherName: String, val date: String,
+    val todayCourses: List<TeacherTodayCourse>,
+    val pendingReview: Int, val hasPending: Boolean, val todayCheckRate: Double,
+    val todaySessionCount: Int, val checkedToday: Int, val expectedToday: Int,
+)
+
+/** 课堂上课状态（state: ON / OFF）。 */
+data class ClassState(
+    val courseId: String, val courseName: String, val state: String,
+    val startedAt: String?, val endedAt: String?,
 )
 
 // ───────────────────────── 解析辅助 ─────────────────────────
@@ -270,7 +311,9 @@ object KewuApi {
 
     // ── 用户模块 ──
 
-    /** 登录：成功返回 null，失败返回适合直接展示的 message。 */
+    /** 登录：成功返回 null，失败返回适合直接展示的 message。
+     *  后端 2026-10-20 起在响应里返回 `role`（顶层与 user 内都有，TEACHER/STUDENT），
+     *  成功时落 kv `kewu_role`（小写 teacher/student），App.kt 据此分流教师端/学生端。 */
     suspend fun login(username: String, password: String): String? = try {
         val el = postJson(
             "$BASE_URL/api/user/login",
@@ -284,17 +327,22 @@ object KewuApi {
         currentUser = null
         kvSet("kewu_token", token)
         kvSet("kewu_username", username)
+        // 服务端角色为准（登录页的角色选择只是注册默认值，见 5.1）
+        val role = data["role"].str().ifEmpty { (data["user"] as? JsonObject)?.get("role").str() }
+        if (role.isNotBlank()) kvSet("kewu_role", role.lowercase())
         null
     } catch (e: CancellationException) { throw e }
     catch (e: ApiException) { officialAuthMessage(e.message, isRegister = false) }
     catch (e: Exception) { networkErrorMessage(e) }
 
-    /** 注册：成功返回 null，失败返回 message。注册后不会返回 token，需再调 login。 */
-    suspend fun register(username: String, password: String, nickname: String): String? = try {
-        val el = postJson(
-            "$BASE_URL/api/user/register",
-            mapOf("username" to username, "password" to password, "nickname" to nickname),
+    /** 注册：成功返回 null，失败返回 message。注册后不会返回 token，需再调 login。
+     *  [role] 传 "TEACHER"/"STUDENT"（后端 2026-10-20 新增，不传默认 STUDENT）。 */
+    suspend fun register(username: String, password: String, nickname: String, role: String = ""): String? = try {
+        val body = mutableMapOf<String, Any?>(
+            "username" to username, "password" to password, "nickname" to nickname,
         )
+        if (role.isNotBlank()) body["role"] = role
+        val el = postJson("$BASE_URL/api/user/register", body)
         el.asDataOrThrow()
         null
     } catch (e: CancellationException) { throw e }
@@ -359,7 +407,7 @@ object KewuApi {
         val courses = (data["courses"] as? JsonArray)?.mapNotNull { c -> c as? JsonObject }.orEmpty()
             .map { CourseInfo(it["id"].str(), it["name"].str(), it["description"].str(), it["teacher"].str()) }
         currentUser = UserMe(
-            user = u?.let { UserInfo(it["id"].str(), it["username"].str(), it["nickname"].strOrNull()) },
+            user = u?.let { UserInfo(it["id"].str(), it["username"].str(), it["nickname"].strOrNull(), it["role"].str()) },
             courses = courses,
         )
         null
@@ -796,6 +844,152 @@ object KewuApi {
             startedAt = el["startedAt"].str(), state = el["state"].str(),
         )
     } catch (_: Exception) { null }
+
+    // ── 教师端（文档第 5 节，2026-10-20 新增） ──
+    //
+    // teacherId 约定：后端「可以传用户 id 也可以传用户名」，前端统一传 username（稳定可读）。
+
+    /** 当前用户的教师标识（id 或 username 后端都认）。 */
+    fun teacherId(): String = username ?: currentUser?.user?.id ?: ""
+
+    /** 老师新建课程：成功 data 为课程对象（立刻出现在 /api/courses）。 */
+    suspend fun createTeacherCourse(name: String, description: String, teacherId: String = teacherId()): ApiResult<CourseInfo> = try {
+        val el = postJson(
+            "$BASE_URL/api/teacher/courses",
+            mapOf(
+                "name" to name, "description" to description,
+                "teacher" to (currentUser?.user?.nickname ?: username ?: ""),
+                "teacherId" to teacherId,
+            ),
+        )
+        val o = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        ApiResult(CourseInfo(o["id"].str(), o["name"].str(), o["description"].str(), o["teacher"].str()), null)
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { ApiResult(null, e.message) }
+    catch (e: Exception) { ApiResult(null, networkErrorMessage(e)) }
+
+    /** 老师开班级（自动生成 6 位邀请码；仅 TEACHER 角色，非老师会失败并返回后端文案）。 */
+    suspend fun createTeacherClass(courseId: String, name: String, term: String, teacherId: String = teacherId()): ApiResult<ClassRoomInfo> = try {
+        val el = postJson(
+            "$BASE_URL/api/teacher/classes",
+            mapOf("courseId" to courseId, "name" to name, "term" to term, "teacherId" to teacherId),
+        )
+        val o = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        ApiResult(parseClassRoom(o), null)
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { ApiResult(null, e.message) }
+    catch (e: Exception) { ApiResult(null, networkErrorMessage(e)) }
+
+    /** 我教了哪些班哪些课（班数/学生数/课程数概览 + 班级列表）。失败返回 null。 */
+    suspend fun getTeacherClasses(teacherId: String = teacherId()): TeacherOverview? = try {
+        val el = getJson(queryUrl("$BASE_URL/api/teacher/classes", "teacherId", teacherId))
+        val o = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        TeacherOverview(
+            teacherId = o["teacherId"].str(),
+            teacherName = o["teacherName"].str(),
+            classCount = o["classCount"].int(),
+            studentCount = o["studentCount"].int(),
+            courseCount = o["courseCount"].int(),
+            classes = (o["classes"] as? JsonArray)?.mapNotNull { it as? JsonObject }?.map { parseClassRoom(it) }.orEmpty(),
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 班级学生名单。失败返回 null。 */
+    suspend fun getClassStudents(classId: String): List<ClassStudent>? = try {
+        val el = getJson("$BASE_URL/api/teacher/classes/${pathSegment(classId)}/students")
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }
+            .map { ClassStudent(it["studentId"].str(), it["name"].str()) }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 学生用邀请码加入班级（成功后自动把课程绑到学生名下）。data=后端成功文案（如「已加入《云计算 1 班》」）。 */
+    suspend fun joinClassByInvite(inviteCode: String, studentId: String = teacherId()): ApiResult<String> = try {
+        val el = postJson(
+            "$BASE_URL/api/classes/join",
+            mapOf("studentId" to studentId, "inviteCode" to inviteCode.trim().uppercase()),
+        )
+        el.asDataOrThrow()
+        ApiResult((el as? JsonObject)?.get("message").str().ifEmpty { "已加入班级" }, null)
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { ApiResult(null, e.message) }
+    catch (e: Exception) { ApiResult(null, networkErrorMessage(e)) }
+
+    /** 控制台聚合：教师端首屏一次拿全（今日课程 + 待批阅红点 + 今日签到率）。失败返回 null。 */
+    suspend fun getTeacherConsole(teacherId: String = teacherId()): TeacherConsole? = try {
+        val el = getJson(queryUrl("$BASE_URL/api/teacher/console", "teacherId", teacherId))
+        val o = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        TeacherConsole(
+            teacherId = o["teacherId"].str(),
+            teacherName = o["teacherName"].str(),
+            date = o["date"].str(),
+            todayCourses = (o["todayCourses"] as? JsonArray)?.mapNotNull { it as? JsonObject }?.map { c ->
+                TeacherTodayCourse(
+                    courseId = c["courseId"].str(),
+                    courseName = c["courseName"].str(),
+                    classId = c["classId"].str(),
+                    className = c["className"].str(),
+                    studentCount = c["studentCount"].int(),
+                    state = c["state"].str(),
+                    startedAt = c["startedAt"].str(),
+                    todayCheckRate = (c["todayCheckRate"] as? JsonPrimitive)?.content?.toDoubleOrNull(),
+                )
+            }.orEmpty(),
+            pendingReview = o["pendingReview"].int(),
+            hasPending = o["hasPending"].bool(),
+            todayCheckRate = o["todayCheckRate"].num(),
+            todaySessionCount = o["todaySessionCount"].int(),
+            checkedToday = o["checkedToday"].int(),
+            expectedToday = o["expectedToday"].int(),
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 开课/下课（action: START / END）。成功 data 为最新课堂状态。 */
+    suspend fun setClassState(courseId: String, action: String, teacherId: String = teacherId()): ApiResult<ClassState> = try {
+        val el = postJson(
+            "$BASE_URL/api/teacher/class-state",
+            mapOf("courseId" to courseId, "action" to action, "teacherId" to teacherId),
+        )
+        val o = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        ApiResult(parseClassState(o), null)
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { ApiResult(null, e.message) }
+    catch (e: Exception) { ApiResult(null, networkErrorMessage(e)) }
+
+    /** 查某门课当前是否在上课（没开过课返回 state=OFF，不会 404）。失败返回 null。 */
+    suspend fun getClassState(courseId: String): ClassState? = try {
+        val el = getJson(queryUrl("$BASE_URL/api/teacher/class-state", "courseId", courseId))
+        val o = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        parseClassState(o)
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    private fun parseClassRoom(o: JsonObject) = ClassRoomInfo(
+        id = o["id"].str(),
+        name = o["name"].str(),
+        courseId = o["courseId"].str(),
+        courseName = o["courseName"].str(),
+        teacherName = o["teacherName"].str(),
+        term = o["term"].str(),
+        inviteCode = o["inviteCode"].str(),
+        studentCount = o["studentCount"].int(),
+        createdAt = o["createdAt"].str(),
+    )
+
+    private fun parseClassState(o: JsonObject) = ClassState(
+        courseId = o["courseId"].str(),
+        courseName = o["courseName"].str(),
+        state = o["state"].str(),
+        startedAt = o["startedAt"].strOrNull(),
+        endedAt = o["endedAt"].strOrNull(),
+    )
 
     private fun parseAttendanceSession(o: JsonObject): AttendanceSession {
         val q = (o["quiz"] as? JsonObject)?.let { AttendanceQuiz(it["question"].str(), it["hint"].str(), it["sourceNoteTitle"].str()) }

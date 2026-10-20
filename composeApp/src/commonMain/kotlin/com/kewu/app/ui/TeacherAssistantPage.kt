@@ -37,7 +37,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.ZeroCornerRadius
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
@@ -329,7 +328,7 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Box(
                 Modifier
-                    .clip(RoundedCornerShape(18.dp).copy(bottomEnd = ZeroCornerRadius))
+                    .clip(RoundedCornerShape(18.dp))
                     .background(KewuBlue)
                     .padding(horizontal = 14.dp, vertical = 10.dp),
             ) {

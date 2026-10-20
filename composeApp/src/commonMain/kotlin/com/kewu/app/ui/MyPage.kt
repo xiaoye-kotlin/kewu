@@ -156,6 +156,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     onEdit = { screen = 1 },
                     onRecording = { screen = 2 },
                     onBindCourse = { screen = 3 },
+                    onJoinClass = { screen = 4 },
                     onNotification = { screen = 6 },
                     onAbout = { screen = 7 },
                     onLogout = onLogout,
@@ -167,6 +168,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 )
                 2 -> RecordingManagePage(pageBackdrop, onBack = { screen = 0 })
                 3 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
+                4 -> JoinClassScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
             }
@@ -213,6 +215,7 @@ private fun MyHome(
     onEdit: () -> Unit,
     onRecording: () -> Unit,
     onBindCourse: () -> Unit,
+    onJoinClass: () -> Unit,
     onNotification: () -> Unit,
     onAbout: () -> Unit,
     onLogout: () -> Unit,
@@ -323,6 +326,7 @@ private fun MyHome(
         GroupLabel("校园功能", Modifier.myEnter(3))
         // 功能列表（coui 原生 Card 行，可点进子页）
         FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onBindCourse, modifier = Modifier.myEnter(4))
+        FuncRow(5, "加入班级", "输入老师发的 6 位邀请码加入班级", backdrop, onClick = onJoinClass, modifier = Modifier.myEnter(9))
         FuncRow(1, "录音管理", "查看本地录音、手动重传", backdrop, onClick = onRecording, modifier = Modifier.myEnter(5))
         FuncRow(2, "通知设置", "签到提醒、纪要推送与权限管理", backdrop, onClick = onNotification, modifier = Modifier.myEnter(6))
         FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout, modifier = Modifier.myEnter(7))

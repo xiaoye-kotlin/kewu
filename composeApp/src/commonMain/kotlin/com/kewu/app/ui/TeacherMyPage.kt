@@ -56,7 +56,7 @@ import io.github.suqi8.coui.kmp.blur.layerBackdrop
 
 @Composable
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
-    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 6=通知设置 7=关于我们（编号与学生端对齐）
+    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们（编号与学生端对齐）
     var screen by remember { mutableStateOf(0) }
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
@@ -110,6 +110,8 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                     onBindCourse = { screen = 1 },
                     onCreateAttendance = { screen = 2 },
                     onPostNote = { screen = 3 },
+                    onCreateCourse = { screen = 4 },
+                    onClasses = { screen = 5 },
                     onNotification = { screen = 6 },
                     onAbout = { screen = 7 },
                     onLogout = onLogout,
@@ -117,6 +119,8 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 1 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
                 2 -> CreateAttendanceScreen(pageBackdrop, onBack = { screen = 0 })
                 3 -> PostNoteScreen(pageBackdrop, onBack = { screen = 0 })
+                4 -> CreateCourseScreen(pageBackdrop, onBack = { screen = 0 })
+                5 -> TeacherClassesScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
             }
@@ -133,6 +137,8 @@ private fun TeacherMyHome(
     onBindCourse: () -> Unit,
     onCreateAttendance: () -> Unit,
     onPostNote: () -> Unit,
+    onCreateCourse: () -> Unit,
+    onClasses: () -> Unit,
     onNotification: () -> Unit,
     onAbout: () -> Unit,
     onLogout: () -> Unit,
@@ -196,12 +202,16 @@ private fun TeacherMyHome(
         }
 
         GroupLabel("教学管理", Modifier.riseEnter(rememberEnterProgress(1)))
-        FuncRow(0, "课程绑定", "绑定课程后可发起签到、发布笔记与作业", backdrop,
-            onClick = onBindCourse, modifier = Modifier.riseEnter(rememberEnterProgress(2)))
+        FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop,
+            onClick = onCreateCourse, modifier = Modifier.riseEnter(rememberEnterProgress(2)))
+        FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop,
+            onClick = onClasses, modifier = Modifier.riseEnter(rememberEnterProgress(3)))
+        FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop,
+            onClick = onBindCourse, modifier = Modifier.riseEnter(rememberEnterProgress(4)))
         FuncRow(1, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop,
-            onClick = onCreateAttendance, modifier = Modifier.riseEnter(rememberEnterProgress(3)))
+            onClick = onCreateAttendance, modifier = Modifier.riseEnter(rememberEnterProgress(5)))
         FuncRow(2, "发布笔记", "记录课堂要点，学生端即时可见", backdrop,
-            onClick = onPostNote, modifier = Modifier.riseEnter(rememberEnterProgress(4)))
+            onClick = onPostNote, modifier = Modifier.riseEnter(rememberEnterProgress(6)))
 
         GroupLabel("通用", Modifier.riseEnter(rememberEnterProgress(5)))
         FuncRow(2, "通知设置", "签到提醒、作业提醒与权限管理", backdrop,

@@ -366,6 +366,7 @@ fun LoginScreen(onLogin: () -> Unit) {
                             account = account,
                             pwd = pwd,
                             name = name,
+                            role = role, // 注册时带给后端（后端 2026-10-20 起支持 role 参数）
                             enabled = enabled,
                             label = if (mode == 0) "登录" else "注册并登录",
                             onError = { loginError = it },
@@ -507,6 +508,7 @@ private fun LoginButton(
     account: String,
     pwd: String,
     name: String,
+    role: Int, // 0=学生 1=老师；注册时传给后端（STUDENT/TEACHER），登录时后端返回的角色为准
     enabled: Boolean,
     label: String,
     onError: (String) -> Unit,
@@ -568,10 +570,11 @@ private fun LoginButton(
                 state = 1
                 scope.launch {
                     // ★ 真实请求：登录 / 注册（注册成功后自动登录拿 token）
+                    // 注册把分段选的角色带给后端；登录成功后 KewuApi.login 会用响应里的 role 覆写 kv
                     val msg = if (mode == 0) {
                         KewuApi.login(account, pwd)
                     } else {
-                        val r = KewuApi.register(account, pwd, name)
+                        val r = KewuApi.register(account, pwd, name, if (role == 1) "TEACHER" else "STUDENT")
                         if (r == null) KewuApi.login(account, pwd) else r
                     }
                     if (msg == null) {
