@@ -355,9 +355,13 @@ internal fun ThreeQuarterCheck(
 }
 
 /**
- * 警示感叹号水印（未上课态用）：大半圆弧 + 中央"!"，配琥珀黄。
+ * 警示感叹号水印（上课态用）：大半圆弧 + 中央"!"，配琥珀黄。
  * 与 [ThreeQuarterCheck] 同尺寸、同右下偏移布局、同款「先画圆再画符号」描绘动效，
  * 可直接替换状态块水印。
+ *
+ * 2026-10-21 用户反馈：「!」下面的点显示不出来。原因：旧点半径仅 sw*0.62（≈7.6dp@170dp）
+ * 且调用处 alpha=0.30，点在琥珀 tinted 卡上对比度不足 → 视觉缺失。现把竖加粗、点放大近一倍，
+ * 动画节奏不变（竖 → 点，圆仍最先扫出）。
  */
 @Composable
 internal fun ExclaimMark(
@@ -395,21 +399,23 @@ internal fun ExclaimMark(
         val t = markP.value
         if (t <= 0f) return@Canvas
         val cx = s * 0.5f
-        val mw = sw * 1.25f
+        val mw = sw * 1.35f
         val style = Stroke(width = mw, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        // ② "!" = 两笔：上竖线一笔写出（前半进度）+ 底部圆点（后半进度，半径生长）
-        val barP = (t * 2f).coerceIn(0f, 1f)
+        // ② "!" 两笔：**先写竖（前 55% 进度），再落点（后 45% 进度，半径生长）**。
+        //    竖更粗、点更大（半径 sw*0.80 ≈ 13.6dp@170dp），保证 tinted 卡上清晰可辨。
+        val barP = (t / 0.55f).coerceIn(0f, 1f)
         if (barP > 0f) {
-            val bar = Path().apply { moveTo(cx, s * 0.34f); lineTo(cx, s * 0.60f) }
+            val bar = Path().apply { moveTo(cx, s * 0.30f); lineTo(cx, s * 0.56f) }
             val measure = PathMeasure().apply { setPath(bar, false) }
             val seg = Path()
             if (measure.getSegment(0f, measure.length * barP, seg, true)) {
                 drawPath(seg, c, style = style)
             }
         }
-        val dotP = ((t - 0.5f) * 2f).coerceIn(0f, 1f)
+        // 点：圆心落在竖的正下方，与竖端留一目距；圆头端帽会自然过渡
+        val dotP = ((t - 0.55f) / 0.45f).coerceIn(0f, 1f)
         if (dotP > 0f) {
-            drawCircle(color = c, radius = sw * 0.62f * dotP, center = Offset(cx, s * 0.70f))
+            drawCircle(color = c, radius = sw * 0.80f * dotP, center = Offset(cx, s * 0.70f))
         }
     }
 }
@@ -733,7 +739,8 @@ private fun StatusSection(
                         // 无课 → 品牌绿大半圆+勾；正在上课 → 琥珀黄大半圆+「!」（用户 2026-10-19 要求）
                         // 水印绿用深绿（2026-10-19 用户反馈：品牌荧光绿 α0.30 太浅，看不清）
                         if (live != null) {
-                            ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.30f)
+                            // ★ 2026-10-21：alpha 0.30→0.45 —— 点在琥珀 tinted 卡上太浅看不清（用户反馈）
+                            ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.45f)
                         } else {
                             ThreeQuarterCheck(size = 170.dp, color = WatermarkGreen, alpha = 0.55f)
                         }

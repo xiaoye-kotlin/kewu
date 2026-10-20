@@ -420,7 +420,8 @@ private fun TeacherStatusSection(
                         contentAlignment = Alignment.BottomEnd,
                     ) {
                         if (live != null) {
-                            ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.30f)
+                            // ★ 2026-10-21：alpha 0.30→0.45 —— 点在琥珀 tinted 卡上太浅看不清（用户反馈）
+                            ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.45f)
                         } else {
                             ThreeQuarterCheck(size = 170.dp, color = watermarkGreen, alpha = 0.55f)
                         }
