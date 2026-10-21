@@ -21,8 +21,12 @@ fun Routing.classroomRoutes() {
     post("/api/notes") {
         val note = call.receive<ClassNote>()
         val stamped = if (note.updatedAt.isBlank()) note.copy(updatedAt = Instant.now().toString()) else note
-        services.redis.cacheClassNotes(stamped.classId, stamped.content)
-        call.respond(mapOf("ok" to true))
+        // Redis 真写进去了才说 ok；连不上就如实报降级，别假成功让前端以为存好了
+        if (services.redis.cacheClassNotes(stamped.classId, stamped.content)) {
+            call.respond(mapOf("ok" to true))
+        } else {
+            call.respond(HttpStatusCode.ServiceUnavailable, mapOf("ok" to false, "degraded" to true, "error" to "redis unavailable, note not persisted"))
+        }
     }
 
     get("/api/notes/{classId}") {
@@ -35,8 +39,11 @@ fun Routing.classroomRoutes() {
     post("/api/checkin") {
         val r = call.receive<CheckInRecord>()
         val stamped = if (r.at.isBlank()) r.copy(at = Instant.now().toString()) else r
-        services.redis.setCheckIn(stamped.classId, stamped.studentId, stamped.status)
-        call.respond(mapOf("ok" to true))
+        if (services.redis.setCheckIn(stamped.classId, stamped.studentId, stamped.status)) {
+            call.respond(mapOf("ok" to true))
+        } else {
+            call.respond(HttpStatusCode.ServiceUnavailable, mapOf("ok" to false, "degraded" to true, "error" to "redis unavailable, check-in not persisted"))
+        }
     }
 
     get("/api/checkin/{classId}") {
@@ -47,8 +54,11 @@ fun Routing.classroomRoutes() {
     post("/api/sessions") {
         val s = call.receive<ClassroomSession>()
         val stamped = if (s.startedAt.isBlank()) s.copy(startedAt = Instant.now().toString()) else s
-        services.redis.saveSession(stamped)
-        call.respond(HttpStatusCode.Created, mapOf("ok" to true))
+        if (services.redis.saveSession(stamped)) {
+            call.respond(HttpStatusCode.Created, mapOf("ok" to true))
+        } else {
+            call.respond(HttpStatusCode.ServiceUnavailable, mapOf("ok" to false, "degraded" to true, "error" to "redis unavailable, session not persisted"))
+        }
     }
 
     get("/api/sessions/{id}") {
