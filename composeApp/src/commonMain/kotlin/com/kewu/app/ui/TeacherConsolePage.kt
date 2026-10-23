@@ -6,12 +6,12 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -28,11 +28,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,14 +39,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
@@ -65,19 +58,34 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
+import com.kewu.app.RecordingManager
+import com.kewu.app.RecordingStatus
 import com.kewu.app.TeacherConsole
 import com.kewu.app.haptic
-import com.kewu.app.hapticClickable
 import com.kewu.app.kvGet
 import com.kewu.app.kvSet
+import com.kewu.app.platformActivity
+import com.kewu.app.requestAudioPermission
+import com.kewu.app.todayCn
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
-import io.github.suqi8.coui.kmp.basic.Button
+import io.github.suqi8.coui.kmp.basic.Badge
 import io.github.suqi8.coui.kmp.basic.ButtonDefaults
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.Chip
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.LinearProgressIndicator
+import io.github.suqi8.coui.kmp.basic.ProgressIndicatorDefaults
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.basic.TextButton
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
+import io.github.suqi8.coui.kmp.icon.extended.Mic
+import io.github.suqi8.coui.kmp.preference.RadioButtonPreference
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -86,14 +94,15 @@ import kotlinx.coroutines.launch
 // 版式延续学生端首页的 Mishka 语言（2026-10-19 用户要求）：
 //   问候栏 → 状态区（**左一大卡 + 右两张堆叠小卡**，大卡带 170dp「大半圆+勾」超大水印）→
 //   一键开课/上课中面板 → 课后报告 → 我的课程。
-// 教师端三态（学生端「无课/正在上课」的基础上加「即将上课」）：
+// 教师三态（学生端「无课/正在上课」的基础上加「即将上课」）：
 //   正在上课 = 有进行中的签到（琥珀「!」）；即将上课 = 有课程但未开课（品牌蓝勾）；
 //   无课 = 一门课都没有（品牌绿勾）。圆圈勾勾复用 [ThreeQuarterCheck]，仅换色与文案。
-// 上下课闭环：一键发起签到（createAttendance）→ 动态二维码 + 实时看板 → 结束课程（closeAttendance），
-// 进行中会话持久化 kv（teacher_active_session）。
+// 上下课闭环：一键发起签到（createAttendance）→ 建 8081 课堂协同录音会话（createSession）→
+// 动态二维码 + 实时看板 + 课堂录音 → 结束课程（closeAttendance），进行中会话持久化 kv（teacher_active_session）。
 //
-// 组件约定（2026-10-19 重构）：除液态玻璃（KewuGlassCard）外一律用 coui 原生组件
-// （Button / Chip / Card 的按压反馈全走 COUI 原生 Tint + Scale），不再自造 Box 按钮。
+// 组件约定（2026-10-23 全局 coui 化）：除液态玻璃（KewuGlassCard）与标志性绘制
+// （ThreeQuarterCheck / ExclaimMark 描绘动画、QrCodeView 动态码）外，卡片 / 按钮 / 设置行 / 角标 /
+// 进度 / 标签 / 弹窗 / 文字一律 coui 原生件，颜色一律读 COUITheme.colorScheme。
 
 /** 控制台根下钻：NONE=主页 / SESSIONS=课程签到历史 / DETAIL=签到详情（复用 AttendanceHub）。 */
 private sealed class ConsoleDrill {
@@ -107,8 +116,9 @@ fun TeacherConsolePage(
     onGoToTab: (Int) -> Unit = {},
     onNavHide: (Boolean) -> Unit = {},
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
 
@@ -184,7 +194,7 @@ fun TeacherConsolePage(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.background),
+                .background(cs.surface),
         )
         AnimatedContent(
             targetState = drill,
@@ -209,6 +219,17 @@ fun TeacherConsolePage(
                     onStarted = { s ->
                         activeSession = s
                         kvSet("teacher_active_session", s.id)
+                        // ★ 开课后的两件附带事放在页面级 scope 里做：QuickStartCard 会随 activeSession
+                        //   非空立刻离开组合，它自己的 rememberCoroutineScope 跟着取消，请求可能被掐断。
+                        scope.launch {
+                            // 同步开课状态到后端（POST /api/teacher/class-state START）；
+                            // 失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
+                            KewuApi.setClassState(s.courseId, "START")
+                            // ★ 建 8081 课堂协同录音会话（10.5）：同课同日的教师端 / 学生端录音归到同一会话，
+                            //   下课后才能多端择优融合。失败（如 Redis 降级）只提示，不影响上课。
+                            KewuApi.createSession(KewuApi.classSessionId(s.courseId, todayCn()), s.courseId)
+                                ?.let { err -> snackbar.toast("课堂录音会话创建失败：$err（不影响签到）") }
+                        }
                     },
                     onClosed = {
                         activeSession = null
@@ -249,6 +270,7 @@ private fun ConsoleHome(
     onClosed: () -> Unit,
     onOpenCourse: (CourseInfo) -> Unit,
 ) {
+    val cs = COUITheme.colorScheme
     Column(
         Modifier
             .fillMaxSize()
@@ -264,9 +286,8 @@ private fun ConsoleHome(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
-                    Text(rememberGreeting(), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 13.sp, maxLines = 1)
-                    Text(teacherName, color = MaterialTheme.colorScheme.onSurface, fontSize = 20.sp,
+                    Text(rememberGreeting(), color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    Text(teacherName, color = cs.onSurface, fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
                 TeacherAvatar(teacherName) { onGoToTab(3) }
@@ -285,14 +306,11 @@ private fun ConsoleHome(
             )
         }
 
-        // ── 一键开课 / 上课中面板（与状态区统一的 squircle 白卡，非玻璃） ──
+        // ── 一键开课 / 上课中面板（coui 白卡，非玻璃） ──
         val p1 = rememberEnterProgress(1, baseDelayMs = 200L)
         Box(Modifier.riseEnter(p1, 30f)) {
             if (!activeLoaded) {
-                Box(Modifier.fillMaxWidth().padding(30.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary,
-                        strokeWidth = 3.dp, modifier = Modifier.size(26.dp))
-                }
+                KewuLoading()
             } else if (activeSession == null) {
                 QuickStartCard(courses = courses, onStarted = onStarted)
             } else {
@@ -302,17 +320,10 @@ private fun ConsoleHome(
 
         // ── 我的课程（点进看签到历史；与学生端首页「课程列表」同位置） ──
         val p4 = rememberEnterProgress(4, baseDelayMs = 380L)
-        GroupLabel("我的课程", Modifier.riseEnter(p4))
+        KewuSectionTitle("我的课程", Modifier.riseEnter(p4))
         when {
-            courses == null -> Box(Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary,
-                    strokeWidth = 3.dp, modifier = Modifier.size(24.dp))
-            }
-            courses.isEmpty() -> Text(
-                "暂无课程，可先到「我的 → 新建课程」创建",
-                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
+            courses == null -> KewuLoading()
+            courses.isEmpty() -> KewuEmpty("暂无课程，可先到「我的 → 新建课程」创建")
             else -> courses.forEachIndexed { i, c ->
                 val pc = rememberEnterProgress(5 + i, baseDelayMs = 440L, stepMs = 50L)
                 // ★ 控制台聚合富信息：班级名 / 学生数 / 上课状态 / 今日签到率（文档 5.11 建议的课程卡片）
@@ -321,21 +332,25 @@ private fun ConsoleHome(
                     Card(
                         onClick = { haptic(HapticKind.Tick); onOpenCourse(c) },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp),
+                        cornerRadius = 16.dp,
+                        insideMargin = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                        colors = kewuCardColors(),
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier
-                                    .size(40.dp)
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(MaterialTheme.colorScheme.primaryContainer),
-                                contentAlignment = Alignment.Center,
+                            Surface(
+                                modifier = Modifier.size(40.dp),
+                                shape = RoundedCornerShape(10.dp),
+                                color = cs.tertiaryContainer,
                             ) {
-                                Text(c.name.take(2), color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    Text(c.name.take(2), color = cs.onTertiaryContainer,
+                                        fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                                }
                             }
                             Spacer(Modifier.width(12.dp))
                             Column(Modifier.weight(1f)) {
-                                Text(c.name, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                                Text(c.name, color = cs.onSurface, fontSize = 14.5.sp,
+                                    fontWeight = FontWeight.Medium, maxLines = 1)
                                 Spacer(Modifier.height(2.dp))
                                 Text(
                                     tc?.let {
@@ -352,22 +367,24 @@ private fun ConsoleHome(
                                             if (isEmpty()) append("ID: ${c.id}")
                                         }
                                     } ?: "ID: ${c.id}",
-                                    fontSize = 12.sp, maxLines = 1,
+                                    color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1,
                                 )
                             }
                             // 上课状态胶囊（ON=上课中琥珀 / OFF=未开课灰）
                             tc?.let {
                                 Spacer(Modifier.width(8.dp))
-                                StatusTag(
+                                KewuTag(
                                     if (it.state == "ON") "上课中" else "未开课",
                                     if (it.state == "ON") Color(0xFFFFB300).copy(alpha = 0.18f)
-                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                    else cs.secondaryContainer,
                                     if (it.state == "ON") Color(0xFF8A5A00)
-                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    else cs.onSurfaceSecondary,
                                 )
                             }
                             Spacer(Modifier.width(8.dp))
-                            Text("签到 ›", fontSize = 13.sp)
+                            Text("签到", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                            Icon(COUIIcons.ChevronForward, contentDescription = null,
+                                tint = cs.onSurfaceVariantSummary, modifier = Modifier.size(16.dp))
                         }
                     }
                 }
@@ -385,6 +402,7 @@ private fun ConsoleHome(
  * - 即将上课：有课程但还没开课 → 品牌蓝勾（[ThreeQuarterCheck] 蓝色变体），标题「即将上课」；
  * - 无课：一门课都没有 → 品牌绿勾（与学生端「无课」同语言）。
  * 左大卡（170dp 超大水印，右下角裁切）+ 右两张堆叠小卡，与学生端 [StatusSection] 同一套结构。
+ * 2026-10-23：白卡改 coui [Card]（squircleSurface 自带按圆角裁剪子内容，水印不会溢出圆角）。
  */
 @Composable
 private fun TeacherStatusSection(
@@ -395,7 +413,7 @@ private fun TeacherStatusSection(
     onAssistant: () -> Unit,
     onTask: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val watermarkGreen = Color(0xFF0B8A54) // 与学生端 WatermarkGreen 同款深绿（ private，本地复写）
 
     val statusTint: Color
@@ -438,39 +456,40 @@ private fun TeacherStatusSection(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 左侧大状态卡（与学生端同结构：软阴影兄弟层 + 卡片层 + 内容裁剪层 + 超大水印）
-        Box(Modifier.weight(1f).fillMaxHeight()) {
-            Box(Modifier.fillMaxSize().squircleShadow(22.dp))
-            Box(Modifier.fillMaxSize().squircleCard(22.dp, cs.surface, clip = false)) {
-                Box(Modifier.fillMaxSize().clipToBounds()) {
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
-                        contentAlignment = Alignment.BottomEnd,
-                    ) {
-                        if (live != null) {
-                            // ★ 2026-10-21：alpha 0.30→0.45 —— 点在琥珀 tinted 卡上太浅看不清（用户反馈）
-                            ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.45f)
-                        } else {
-                            ThreeQuarterCheck(size = 170.dp, color = watermarkGreen, alpha = 0.55f)
-                        }
+        // 左侧大状态卡（coui Card + 内容裁剪层 + 超大水印）
+        Card(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            cornerRadius = 22.dp,
+            colors = kewuCardColors(),
+        ) {
+            Box(Modifier.fillMaxSize().clipToBounds()) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    if (live != null) {
+                        // ★ 2026-10-21：alpha 0.30→0.45 —— 点在琥珀 tinted 卡上太浅看不清（用户反馈）
+                        ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.45f)
+                    } else {
+                        ThreeQuarterCheck(size = 170.dp, color = watermarkGreen, alpha = 0.55f)
                     }
-                    Column(Modifier.fillMaxSize().padding(16.dp)) {
-                        Text(title, color = statusTint, fontSize = 20.sp,
-                            fontWeight = FontWeight.SemiBold, maxLines = 1)
-                        Spacer(Modifier.height(2.dp))
-                        Text(line2, color = cs.onSurfaceVariant, fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium, maxLines = 1)
-                        Text(line3, color = cs.onSurfaceVariant, fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium, maxLines = 1)
-                    }
+                }
+                Column(Modifier.fillMaxSize().padding(16.dp)) {
+                    Text(title, color = statusTint, fontSize = 20.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Spacer(Modifier.height(2.dp))
+                    Text(line2, color = cs.onSurfaceSecondary, fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium, maxLines = 1)
+                    Text(line3, color = cs.onSurfaceSecondary, fontSize = 14.sp,
+                        fontWeight = FontWeight.Medium, maxLines = 1)
                 }
             }
         }
 
         // 右侧两张堆叠小卡（点进助教 / 作业 tab）
-        // ★ 数据走控制台聚合：今日签到率（todayCheckRate）+ 待批阅（pendingReview，hasPending 挂红点）
+        // ★ 数据走控制台聚合：今日签到率（todayCheckRate）+ 待批阅（pendingReview，hasPending 挂 coui 红点）
         Column(Modifier.weight(1f).fillMaxHeight()) {
             TeacherMiniStatCard(
                 label = "今日签到率",
@@ -490,7 +509,7 @@ private fun TeacherStatusSection(
     }
 }
 
-/** 与学生端 [MiniStatCard]（ClassroomPage，private）同款的堆叠小卡：标签 + 大数值 + 可点箭头 + 可选红点。 */
+/** 与学生端 MiniStatCard（ClassroomPage，private）同款的堆叠小卡：标签 + 大数值 + 可点箭头 + 可选红点（coui Card + Badge）。 */
 @Composable
 private fun TeacherMiniStatCard(
     label: String,
@@ -499,22 +518,21 @@ private fun TeacherMiniStatCard(
     badge: Boolean = false,
     onClick: (() -> Unit)? = null,
 ) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        modifier.then(if (onClick != null) Modifier.hapticClickable { onClick() } else Modifier),
+    val cs = COUITheme.colorScheme
+    Card(
+        modifier = modifier,
+        cornerRadius = 22.dp,
+        colors = kewuCardColors(),
+        onClick = onClick?.let { cb -> { haptic(HapticKind.Tick); cb() } },
     ) {
-        Box(Modifier.fillMaxSize().squircleShadow(22.dp))
-        Box(
-            Modifier.fillMaxSize().squircleCard(22.dp, cs.surface).padding(16.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
+        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.CenterStart) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                        Text(label, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
                         if (badge) {
                             Spacer(Modifier.width(5.dp))
-                            Box(Modifier.size(7.dp).clip(CircleShape).background(cs.error))
+                            Badge()
                         }
                     }
                     Spacer(Modifier.height(2.dp))
@@ -523,35 +541,29 @@ private fun TeacherMiniStatCard(
                 }
                 if (onClick != null) {
                     Spacer(Modifier.width(6.dp))
-                    Canvas(Modifier.size(13.dp)) {
-                        val sw = size.width * 0.14f
-                        val p = Path().apply {
-                            moveTo(size.width * 0.35f, size.height * 0.2f)
-                            lineTo(size.width * 0.65f, size.height * 0.5f)
-                            lineTo(size.width * 0.35f, size.height * 0.8f)
-                        }
-                        drawPath(p, cs.onSurfaceVariant,
-                            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round))
-                    }
+                    Icon(COUIIcons.ChevronForward, contentDescription = null,
+                        tint = cs.onSurfaceVariantSummary, modifier = Modifier.size(16.dp))
                 }
             }
         }
     }
 }
 
+/** 问候栏头像（coui [Surface] 可点圆形，点进「我的」）。 */
 @Composable
 private fun TeacherAvatar(name: String, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-            .background(cs.secondaryContainer)
-            .hapticClickable { onClick() },
-        contentAlignment = Alignment.Center,
+    val cs = COUITheme.colorScheme
+    Surface(
+        onClick = { haptic(HapticKind.Tick); onClick() },
+        modifier = Modifier.size(36.dp),
+        shape = CircleShape,
+        color = cs.secondaryContainer,
+        contentColor = cs.onSecondaryVariant,
     ) {
-        Text(name.firstOrNull()?.toString() ?: "教", color = cs.onSecondaryContainer,
-            fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(name.firstOrNull()?.toString() ?: "教", color = cs.onSecondaryVariant,
+                fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        }
     }
 }
 
@@ -567,14 +579,14 @@ private fun rememberGreeting(): String {
     }
 }
 
-// ───────────────────────── 一键开课卡（与状态区统一的 squircle 白卡） ─────────────────────────
+// ───────────────────────── 一键开课卡（coui Card + 单选设置行 + Chip） ─────────────────────────
 
 @Composable
 private fun QuickStartCard(
     courses: List<CourseInfo>?,
     onStarted: (AttendanceSession) -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
     var selectedId by remember { mutableStateOf<String?>(null) }
@@ -582,50 +594,44 @@ private fun QuickStartCard(
     var starting by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
-        // 底层：软阴影（白卡层次感，与状态区同款）
-        Box(Modifier.fillMaxSize().squircleShadow(22.dp))
-        // 上层：squircle 白卡
-        Box(Modifier.fillMaxSize().squircleCard(22.dp, cs.surface)) {
-            Column(Modifier.padding(18.dp)) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp),
+        cornerRadius = 22.dp,
+        colors = kewuCardColors(),
+    ) {
+        Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp)) {
             Text("一键开课", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text("发起签到即开课，学生扫码 / 暗号打卡", color = cs.onSurfaceVariant, fontSize = 13.sp)
+            Text("发起签到即开课，学生扫码 / 暗号打卡", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(14.dp))
-            if (!expanded) {
-                Button(
-                    onClick = {
-                        if (courses.isNullOrEmpty()) {
-                            error = "暂无课程，请先在「我的」绑定课程"
-                        } else {
-                            expanded = true
-                            if (selectedId == null) selectedId = courses.firstOrNull()?.id
-                        }
-                    },
-                    colors = ButtonDefaults.buttonColors(color = KewuBlue, contentColor = Color.White),
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("开始上课", fontWeight = FontWeight.Bold)
-                }
-            } else {
-                Text("选择课程", color = cs.onSurfaceVariant, fontSize = 12.5.sp)
-                Spacer(Modifier.height(6.dp))
-                courses?.forEach { c ->
-                    val sel = selectedId == c.id
-                    Card(
-                        onClick = { haptic(HapticKind.Tick); selectedId = c.id },
-                        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
-                    ) {
-                        Text(
-                            c.name,
-                            fontSize = 14.sp,
-                            fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal,
-                            maxLines = 1,
-                        )
+        }
+        if (!expanded) {
+            KewuPrimaryButton(
+                text = "开始上课",
+                onClick = {
+                    if (courses.isNullOrEmpty()) {
+                        error = "暂无课程，请先在「我的」绑定课程"
+                    } else {
+                        expanded = true
+                        if (selectedId == null) selectedId = courses.firstOrNull()?.id
                     }
-                }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+            )
+        } else {
+            Text("选择课程", color = cs.onSurfaceSecondary, fontSize = 12.5.sp,
+                modifier = Modifier.padding(horizontal = 18.dp))
+            // 课程单选：coui 单选设置行（整行可点，COUI 原生按压反馈）
+            courses?.forEach { c ->
+                RadioButtonPreference(
+                    title = c.name,
+                    selected = selectedId == c.id,
+                    onClick = { haptic(HapticKind.Tick); selectedId = c.id },
+                )
+            }
+            Column(Modifier.padding(horizontal = 18.dp)) {
                 Spacer(Modifier.height(4.dp))
-                Text("签到时长（分钟）", color = cs.onSurfaceVariant, fontSize = 12.5.sp)
+                Text("签到时长（分钟）", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
                 Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("5", "10", "15").forEach { d ->
@@ -637,10 +643,12 @@ private fun QuickStartCard(
                     }
                 }
                 Spacer(Modifier.height(14.dp))
-                Button(
+                TextButton(
+                    text = if (starting) "正在发起…" else "发起签到并开课",
                     onClick = {
-                        val cid = selectedId ?: return@Button
+                        val cid = selectedId ?: return@TextButton
                         val cname = courses?.firstOrNull { it.id == cid }?.name ?: "课堂"
+                        haptic(HapticKind.Light)
                         scope.launch {
                             starting = true
                             error = null
@@ -654,9 +662,7 @@ private fun QuickStartCard(
                             starting = false
                             if (s != null) {
                                 haptic(HapticKind.Light)
-                                // ★ 同步开课状态到后端（POST /api/teacher/class-state START）；
-                                //   失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
-                                scope.launch { KewuApi.setClassState(cid, "START") }
+                                // class-state START 与 8081 协同会话由页面级 onStarted 负责（见 TeacherConsolePage）
                                 onStarted(s)
                             } else {
                                 error = "发起失败，请检查网络后重试"
@@ -664,34 +670,40 @@ private fun QuickStartCard(
                         }
                     },
                     enabled = selectedId != null && !starting,
-                    colors = ButtonDefaults.buttonColors(color = KewuGreen, contentColor = Color(0xFF0B3B26)),
+                    colors = ButtonDefaults.textButtonColorsPrimary(
+                        color = KewuGreen,
+                        disabledColor = KewuGreen.copy(alpha = 0.35f),
+                        textColor = Color(0xFF0B3B26),
+                        disabledTextColor = Color(0xFF0B3B26).copy(alpha = 0.5f),
+                    ),
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text(if (starting) "正在发起…" else "发起签到并开课", fontWeight = FontWeight.Bold)
-                }
+                )
             }
+        }
+        Column(Modifier.padding(horizontal = 18.dp).padding(bottom = 18.dp)) {
             error?.let {
                 Spacer(Modifier.height(8.dp))
                 Text(it, color = cs.error, fontSize = 12.5.sp)
-            }
             }
         }
     }
 }
 
-// ───────────────────────── 上课中面板（二维码 + 实时看板 + 结束课程） ─────────────────────────
+// ───────────────────────── 上课中面板（二维码 + 实时看板 + 课堂录音 + 结束课程） ─────────────────────────
 
 @Composable
 private fun LiveSessionCard(
     session: AttendanceSession,
     onClosed: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
     var code by remember { mutableStateOf<AttendanceCode?>(null) }
     var remaining by remember { mutableStateOf(0) }
     var realtime by remember { mutableStateOf<AttendanceRealtime?>(null) }
     var stats by remember { mutableStateOf<AttendanceStats?>(null) }
+    // 8081 简易签到缓存里的到场人数（录音端同步口径，10.5）；拿不到就不显示
+    var syncedCount by remember { mutableStateOf<Int?>(null) }
     var closing by remember { mutableStateOf(false) }
     var confirmClose by remember { mutableStateOf(false) }
 
@@ -708,20 +720,21 @@ private fun LiveSessionCard(
             }
         }
     }
-    // 实时看板：5s 轮询
+    // 实时看板：5s 轮询（顺带拉 8081 签到缓存人数；失败保留上次值，首次失败则不显示）
     LaunchedEffect(session.id) {
         while (true) {
             KewuApi.getAttendanceRealtime(session.id)?.let { realtime = it }
             KewuApi.getAttendanceStats(session.id)?.let { stats = it }
+            KewuApi.getCheckins(session.courseId)?.let { syncedCount = it.size }
             delay(5000)
         }
     }
 
-    Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
-        // 底层：软阴影（与状态区/一键开课卡同款白卡层次）
-        Box(Modifier.fillMaxSize().squircleShadow(22.dp))
-        // 上层：squircle 白卡
-        Box(Modifier.fillMaxSize().squircleCard(22.dp, cs.surface)) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp),
+        cornerRadius = 22.dp,
+        colors = kewuCardColors(),
+    ) {
         Column(Modifier.padding(18.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             // 状态行：绿点 + 上课中
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -740,99 +753,236 @@ private fun LiveSessionCard(
                     Modifier
                         .clip(RoundedCornerShape(14.dp))
                         .background(Color.White)
+                        .border(1.dp, cs.dividerLine, RoundedCornerShape(14.dp))
                         .padding(14.dp),
                 ) {
                     QrCodeView(text = qrContent, modifier = Modifier.size(180.dp), dark = Color.Black, light = Color.White)
                 }
                 Spacer(Modifier.height(10.dp))
             }
-            Text("暗号", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Text("暗号", color = cs.onSurfaceSecondary, fontSize = 12.sp)
             Text(code?.code ?: "…", color = KewuBlue, fontSize = 32.sp, fontWeight = FontWeight.Bold,
                 textAlign = TextAlign.Center)
             Spacer(Modifier.height(4.dp))
-            Text("${remaining}s 后自动刷新", color = cs.onSurfaceVariant, fontSize = 12.sp)
+            Text("${remaining}s 后自动刷新", color = cs.onSurfaceSecondary, fontSize = 12.sp)
             Spacer(Modifier.height(16.dp))
 
             // 实时签到看板
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 val rt = realtime
-                LiveStat("已签", "${rt?.checked ?: stats?.checked ?: 0}", cs.primaryContainer, cs.onPrimaryContainer)
-                LiveStat("应到", "${rt?.expected ?: stats?.expected ?: 0}", cs.surfaceVariant, cs.onSurface)
+                LiveStat("已签", "${rt?.checked ?: stats?.checked ?: 0}", cs.tertiaryContainer, cs.onTertiaryContainer)
+                LiveStat("应到", "${rt?.expected ?: stats?.expected ?: 0}", cs.secondaryContainer, cs.onSurface)
                 LiveStat("签到率", "${(((rt?.checkRate ?: stats?.checkRate) ?: 0.0) * 100).toInt()}%",
                     KewuGreen.copy(alpha = 0.16f), KewuGreen)
             }
-            // 签到率进度条
+            // 签到率进度条（coui 线性进度）
             val rate = ((realtime?.checkRate ?: stats?.checkRate) ?: 0.0).toFloat().coerceIn(0f, 1f)
             Spacer(Modifier.height(10.dp))
-            Box(Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(4.dp)).background(cs.surfaceVariant)) {
-                Box(Modifier.fillMaxWidth(rate).height(8.dp).clip(RoundedCornerShape(4.dp)).background(KewuGreen))
+            LinearProgressIndicator(
+                progress = rate,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ProgressIndicatorDefaults.progressIndicatorColors(foregroundColor = KewuGreen),
+            )
+            syncedCount?.let {
+                Spacer(Modifier.height(8.dp))
+                Text("录音端已同步到场 $it 人", color = cs.onSurfaceVariantSummary, fontSize = 12.sp,
+                    modifier = Modifier.fillMaxWidth())
             }
             realtime?.latest?.takeIf { it.isNotEmpty() }?.let { latest ->
                 Spacer(Modifier.height(10.dp))
                 Column(Modifier.fillMaxWidth()) {
                     latest.take(4).forEach {
                         Text("· ${it.studentName} 已签到（${it.secondsAfterStart}s）",
-                            color = cs.onSurfaceVariant, fontSize = 12.5.sp)
+                            color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
                     }
                 }
             }
             Spacer(Modifier.height(16.dp))
 
-            // 结束课程（二次确认防误触；coui 原生按钮）
-            if (!confirmClose) {
-                Button(
-                    onClick = { confirmClose = true },
-                    colors = ButtonDefaults.buttonColors(color = cs.error, contentColor = Color.White),
-                    modifier = Modifier.fillMaxWidth(),
-                ) { Text("结束课程", fontWeight = FontWeight.Bold) }
+            // ★ 课堂录音（教师端以 role=teacher 上传并带协同会话 ID，多端融合时教师端优先）
+            TeacherRecordingPanel(courseId = session.courseId)
+            Spacer(Modifier.height(16.dp))
+
+            // 结束课程（coui 确认弹窗二次确认防误触）
+            KewuPrimaryButton(
+                text = if (closing) "正在结束…" else "结束课程",
+                onClick = { if (!closing) confirmClose = true },
+                enabled = !closing,
+                danger = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+
+    KewuConfirmDialog(
+        show = confirmClose,
+        title = "结束本节课？",
+        summary = "将关闭签到并同步下课状态；若课堂录音仍在进行，会先停止并上传。",
+        confirmText = "确认结束",
+        cancelText = "再想想",
+        onConfirm = {
+            confirmClose = false
+            if (closing) return@KewuConfirmDialog
+            closing = true
+            // 下课时录音还开着 → 先停并上传，避免麦克风常驻（上传由单例负责，不随页面销毁）
+            if (RecordingManager.isRecording) RecordingManager.stopAndUpload()
+            scope.launch {
+                KewuApi.closeAttendance(session.id)
+                // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
+                KewuApi.setClassState(session.courseId, "END")
+                closing = false
+                onClosed()
+            }
+        },
+        onDismiss = { confirmClose = false },
+    )
+}
+
+/**
+ * 上课中面板里的课堂录音控制（2026-10-23）：状态单源 = [RecordingManager.status]（进程级单例，
+ * 旋屏 / 切 tab 不中断录音）。麦克风权限做法与学生端 ClassroomPage.RecordingOverlay 一致。
+ * RecordingManager 按 kv 角色自动以 role=teacher 上传，并带同课同日协同会话 ID（classSessionId）。
+ */
+@Composable
+private fun TeacherRecordingPanel(courseId: String) {
+    val cs = COUITheme.colorScheme
+    val st = RecordingManager.status.collectAsState().value
+    val recording = st is RecordingStatus.Recording
+
+    fun fmtTime(s: Int): String {
+        val m = s / 60
+        val sec = s % 60
+        return "${if (m < 10) "0$m" else "$m"}:${if (sec < 10) "0$sec" else "$sec"}"
+    }
+
+    fun onRecordClick() {
+        haptic(HapticKind.Medium)
+        if (st is RecordingStatus.Recording) {
+            // 停止 → 生成 WAV → 自动上传（单例负责，与页面生命周期无关）
+            RecordingManager.stopAndUpload()
+            return
+        }
+        if (RecordingManager.hasPermission()) {
+            RecordingManager.start(courseId)
+        } else {
+            val act = platformActivity()
+            if (act != null) requestAudioPermission(act) { granted ->
+                if (granted) RecordingManager.start(courseId)
+                else RecordingManager.showError("需要麦克风权限才能录音，请在系统弹窗中允许")
             } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Button(
-                        onClick = { confirmClose = false },
-                        colors = ButtonDefaults.buttonColors(
-                            color = cs.surfaceVariant, contentColor = cs.onSurfaceVariant),
-                        modifier = Modifier.weight(1f),
-                    ) { Text("再想想") }
-                    Button(
-                        onClick = {
-                            if (closing) return@Button
-                            closing = true
-                            scope.launch {
-                                KewuApi.closeAttendance(session.id)
-                                // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
-                                KewuApi.setClassState(session.courseId, "END")
-                                closing = false
-                                onClosed()
-                            }
-                        },
-                        colors = ButtonDefaults.buttonColors(color = cs.error, contentColor = Color.White),
-                        modifier = Modifier.weight(1f),
-                    ) { Text(if (closing) "正在结束…" else "确认结束", fontWeight = FontWeight.Bold) }
-                }
+                RecordingManager.showError("需要麦克风权限才能录音，请在系统弹窗中允许")
             }
         }
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = cs.surface,
+    ) {
+        Column(Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    modifier = Modifier.size(38.dp),
+                    shape = CircleShape,
+                    color = if (recording) cs.error.copy(alpha = 0.14f) else cs.tertiaryContainer,
+                ) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(COUIIcons.Mic, contentDescription = null,
+                            tint = if (recording) cs.error else cs.onTertiaryContainer,
+                            modifier = Modifier.size(20.dp))
+                    }
+                }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("课堂录音", color = cs.onSurface, fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    Spacer(Modifier.height(1.dp))
+                    val sub = when (st) {
+                        is RecordingStatus.Recording -> "录音中 ${fmtTime(st.elapsedSec)}"
+                        is RecordingStatus.Uploading -> "录音完成，正在上传"
+                        is RecordingStatus.Success -> "已上传，下课后自动参与多端融合"
+                        is RecordingStatus.Error -> "录音未完成"
+                        RecordingStatus.Idle -> "教师端录音融合时优先采用"
+                    }
+                    Text(sub, color = if (recording) cs.error else cs.onSurfaceSecondary,
+                        fontSize = 12.5.sp, maxLines = 1)
+                }
+                Spacer(Modifier.width(8.dp))
+                TextButton(
+                    text = when (st) {
+                        is RecordingStatus.Recording -> "停止并上传"
+                        is RecordingStatus.Uploading -> "上传中…"
+                        else -> "开始录音"
+                    },
+                    onClick = { onRecordClick() },
+                    enabled = st !is RecordingStatus.Uploading,
+                    minHeight = 36.dp,
+                    minWidth = ButtonDefaults.MinWidthSmall,
+                    insideMargin = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    colors = if (recording) ButtonDefaults.textButtonColorsPrimary(color = cs.error)
+                        else ButtonDefaults.textButtonColorsPrimary(),
+                )
+            }
+
+            // 上传状态（错误态带「重试」，仅当本地文件还在）
+            when (st) {
+                is RecordingStatus.Uploading -> {
+                    Spacer(Modifier.height(12.dp))
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                is RecordingStatus.Success -> {
+                    Spacer(Modifier.height(10.dp))
+                    KewuTag("已上传 · ${st.recordingId}", KewuGreen.copy(alpha = 0.18f), KewuGreen)
+                }
+                is RecordingStatus.Error -> {
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(st.msg, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
+                        if (st.filePath != null) {
+                            Spacer(Modifier.width(8.dp))
+                            TextButton(
+                                text = "重试",
+                                onClick = { haptic(HapticKind.Tick); RecordingManager.retryUpload() },
+                                minHeight = ButtonDefaults.MinHeightSmall,
+                                minWidth = ButtonDefaults.MinWidthSmall,
+                                insideMargin = ButtonDefaults.InsideMarginSmall,
+                                colors = ButtonDefaults.textButtonColorsPrimary(color = cs.error),
+                            )
+                        }
+                    }
+                }
+                RecordingStatus.Idle, is RecordingStatus.Recording -> {}
+            }
         }
     }
 }
 
 @Composable
 private fun RowScope.LiveStat(value: String, label: String, bg: Color, fg: Color) {
-    Column(
-        Modifier.clip(RoundedCornerShape(12.dp)).background(bg).padding(vertical = 10.dp).weight(1f),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    Surface(
+        modifier = Modifier.weight(1f),
+        shape = RoundedCornerShape(12.dp),
+        color = bg,
+        contentColor = fg,
     ) {
-        Text(value, color = fg, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(2.dp))
-        Text(label, color = fg.copy(alpha = 0.75f), fontSize = 11.sp)
+        Column(
+            Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(value, color = fg, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(2.dp))
+            Text(label, color = fg.copy(alpha = 0.75f), fontSize = 11.sp)
+        }
     }
 }
 
 // ───────────────────────── 课后报告卡片 ─────────────────────────
 
-/** 学情画像摘要卡：真实接口 getAnalytics（掌握度条 + 薄弱知识点）。 */
+/** 学情画像摘要卡：真实接口 getAnalytics（掌握度条 + 薄弱知识点）。玻璃本体保留，内部件 coui。 */
 @Composable
 private fun AnalyticsSummaryCard(backdrop: LayerBackdrop, analytics: Analytics?) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(18.dp),
@@ -841,21 +991,21 @@ private fun AnalyticsSummaryCard(backdrop: LayerBackdrop, analytics: Analytics?)
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(18.dp)),
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(18.dp)),
     ) {
         Column(Modifier.padding(16.dp)) {
             Text("知识点掌握度", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             if (analytics == null) {
-                Text("暂无学情数据（发布作业并批阅后生成）", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                Text("暂无学情数据（发布作业并批阅后生成）", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             } else {
                 if (analytics.weakPoints.isNotEmpty()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text("薄弱点", color = cs.onSurfaceVariant, fontSize = 12.sp,
+                        Text("薄弱点", color = cs.onSurfaceSecondary, fontSize = 12.sp,
                             modifier = Modifier.padding(top = 3.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             analytics.weakPoints.take(3).forEach {
-                                StatusTag(it, cs.errorContainer, cs.onErrorContainer)
+                                KewuTag(it, cs.errorContainer, cs.onErrorContainer)
                             }
                         }
                     }
@@ -864,10 +1014,11 @@ private fun AnalyticsSummaryCard(backdrop: LayerBackdrop, analytics: Analytics?)
                 analytics.knowledgeMastery.take(4).forEach { m ->
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
                         Text(m.point, color = cs.onSurface, fontSize = 13.sp, modifier = Modifier.width(88.dp), maxLines = 1)
-                        Box(Modifier.weight(1f).height(10.dp).clip(RoundedCornerShape(5.dp)).background(cs.surfaceVariant)) {
-                            Box(Modifier.fillMaxWidth(m.avgScoreRate.toFloat().coerceIn(0f, 1f))
-                                .height(10.dp).clip(RoundedCornerShape(5.dp)).background(KewuGreen))
-                        }
+                        LinearProgressIndicator(
+                            progress = m.avgScoreRate.toFloat().coerceIn(0f, 1f),
+                            modifier = Modifier.weight(1f),
+                            colors = ProgressIndicatorDefaults.progressIndicatorColors(foregroundColor = KewuGreen),
+                        )
                         Spacer(Modifier.width(8.dp))
                         Text("${(m.avgScoreRate * 100).toInt()}%", color = cs.onSurface,
                             fontSize = 12.sp, modifier = Modifier.width(36.dp))
@@ -881,7 +1032,7 @@ private fun AnalyticsSummaryCard(backdrop: LayerBackdrop, analytics: Analytics?)
 /** AI 纪要状态卡：后端纪要/融合接口尚未接 UI（见交接文档第八节），这里做状态占位展示。 */
 @Composable
 private fun AiSummaryCard(backdrop: LayerBackdrop, hasLive: Boolean) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(18.dp),
@@ -890,7 +1041,7 @@ private fun AiSummaryCard(backdrop: LayerBackdrop, hasLive: Boolean) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp)
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(18.dp)),
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(18.dp)),
     ) {
         Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -899,13 +1050,13 @@ private fun AiSummaryCard(backdrop: LayerBackdrop, hasLive: Boolean) {
                 Text(
                     if (hasLive) "正在进行多源录音采集，结束后自动生成纪要"
                     else "下课结束后，AI 自动融合多端录音生成纪要",
-                    color = cs.onSurfaceVariant, fontSize = 12.5.sp, lineHeight = 18.sp,
+                    color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp,
                 )
             }
-            StatusTag(
+            KewuTag(
                 if (hasLive) "采集中" else "待生成",
-                if (hasLive) KewuGreen.copy(alpha = 0.16f) else cs.surfaceVariant,
-                if (hasLive) KewuGreen else cs.onSurfaceVariant,
+                if (hasLive) KewuGreen.copy(alpha = 0.16f) else cs.secondaryContainer,
+                if (hasLive) KewuGreen else cs.onSurfaceSecondary,
             )
         }
     }
@@ -920,36 +1071,37 @@ private fun CourseSessionsScreen(
     onBack: () -> Unit,
     onOpenSession: (String) -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     var sessions by remember { mutableStateOf<List<AttendanceSession>?>(null) }
     LaunchedEffect(course.id) { sessions = KewuApi.getAttendances(course.id) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
-        HubTopBar("${course.name} · 签到记录", onBack)
+        KewuTopBar("${course.name} · 签到记录", onBack = onBack)
         Spacer(Modifier.height(4.dp))
+        val list = sessions
         when {
-            sessions == null -> Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = cs.primary, strokeWidth = 3.dp, modifier = Modifier.size(26.dp))
-            }
-            sessions!!.isEmpty() -> Text(
-                "暂无签到记录", color = cs.onSurfaceVariant, fontSize = 13.sp,
-                modifier = Modifier.padding(horizontal = 16.dp),
-            )
-            else -> sessions!!.forEach { s ->
+            list == null -> KewuLoading()
+            list.isEmpty() -> KewuEmpty("暂无签到记录")
+            else -> list.forEach { s ->
                 Card(
                     onClick = { haptic(HapticKind.Tick); onOpenSession(s.id) },
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp),
+                    cornerRadius = 16.dp,
+                    insideMargin = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                    colors = kewuCardColors(),
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Column(Modifier.weight(1f)) {
-                            Text(s.title, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                            Text(s.title, color = cs.onSurface, fontSize = 14.5.sp,
+                                fontWeight = FontWeight.Medium, maxLines = 1)
                             Spacer(Modifier.height(2.dp))
-                            Text("${s.mode} · ${s.createdAt.ifBlank { "—" }}", fontSize = 12.sp, maxLines = 1)
+                            Text("${s.mode} · ${s.createdAt.ifBlank { "—" }}", color = cs.onSurfaceSecondary,
+                                fontSize = 12.sp, maxLines = 1)
                         }
-                        StatusTag(
+                        KewuTag(
                             if (s.state == "closed") "已结束" else "进行中",
-                            if (s.state == "closed") cs.surfaceVariant else KewuGreen.copy(alpha = 0.16f),
-                            if (s.state == "closed") cs.onSurfaceVariant else KewuGreen,
+                            if (s.state == "closed") cs.secondaryContainer else KewuGreen.copy(alpha = 0.16f),
+                            if (s.state == "closed") cs.onSurfaceSecondary else KewuGreen,
                         )
                     }
                 }
