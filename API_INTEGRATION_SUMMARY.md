@@ -98,9 +98,9 @@
 
 本轮已补全：老师「发起签到」(`createAttendance`)、「绑定课程」(`bindCourse`)、「发布课堂笔记」(`postNote`)，以及首页**真实录音上传**(`uploadRecording`)。全部在新文件 `ui/TeacherTools.kt`（从「我的」tab 进入），录音按钮在首页（课堂页）。
 
-仍待补齐（如需完整闭环）：
-- 单份作业提交明细 (`getSubmission`/`getSubmissions`) 界面
-- 录音融合 (`fuseRecordings`)、录音会话管理 (`createSession`/`getSession`) 界面
-- 服务健康检查 (`health`/`obsHealth`) 可视化界面
+2026-10-23 第十三轮已补全（详见《项目交接文档》二十四节）：跨课程待批阅 (`getPendingReview`) 总览页、录音融合 (`fuseRecordings`) 与本地上传记录、协同会话 (`createSession`/`getSession`)、服务健康 (`isBusinessUp`/`obsHealthInfo`) 可视化、8081 签到镜像 (`checkin`/`getCheckins`)、课堂速记缓存 (`getNoteCache`)、签到 `deviceId`/`courseId`。
+
+仍待补齐：
+- 多端录音融合需 8081 提供会话内录音列表（当前只能融合本机记录）
 
 > 说明：项目根目录另有若干自动生成的报告（`API_IMPLEMENTATION_PLAN.md`、`COMPLETE_*.md`、`FINAL_*.md`、`PROGRESS_REPORT.md`、`TODO_LIST.md`、`test_report.md`），内容与本文档重复，可清理保留本汇总即可。

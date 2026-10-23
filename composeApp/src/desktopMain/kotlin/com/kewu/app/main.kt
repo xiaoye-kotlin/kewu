@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
@@ -170,7 +170,7 @@ private fun DesktopRoot(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(COUITheme.colorScheme.surface),
     ) {
         // 被采样层：整个 App 内容。标题栏玻璃按钮透出的就是这里的内容。
         Box(
@@ -204,7 +204,7 @@ private fun DesktopTitleBar(
     modifier: Modifier = Modifier,
 ) {
     // 图标颜色在 composable 作用域取一次（Canvas 的 DrawScope 内不能再调 @Composable）。
-    val iconColor = MaterialTheme.colorScheme.onSurface
+    val iconColor = COUITheme.colorScheme.onSurface
     Row(
         modifier = modifier.height(40.dp),
         verticalAlignment = Alignment.CenterVertically,
