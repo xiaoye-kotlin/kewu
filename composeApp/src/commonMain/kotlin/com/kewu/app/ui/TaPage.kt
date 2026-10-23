@@ -15,6 +15,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -46,8 +47,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -93,8 +92,24 @@ import com.kewu.app.haptic
 import com.kewu.app.shareText
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import androidx.compose.ui.graphics.vector.ImageVector
+import io.github.suqi8.coui.kmp.basic.Chip
+import io.github.suqi8.coui.kmp.basic.ChipDefaults
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.IconButton
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Add
+import io.github.suqi8.coui.kmp.icon.extended.Close
+import io.github.suqi8.coui.kmp.icon.extended.File
+import io.github.suqi8.coui.kmp.icon.extended.Mic
+import io.github.suqi8.coui.kmp.icon.extended.Ok
+import io.github.suqi8.coui.kmp.icon.extended.Photos
+import io.github.suqi8.coui.kmp.icon.extended.Scan
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -103,7 +118,7 @@ import kotlinx.coroutines.launch
 /**
  * 「助教」页 = AI 智能体对话页（Ardot 设计稿：`kewu-AI助教界面`）。学生和小悟对话问课堂问题。
  *
- * 视觉语言（浅色 M3 背景上的 coui 玻璃，2026-10-18 晚真机打磨后）：
+ * 视觉语言（coui 灰底上的液态玻璃，2026-10-18 晚真机打磨后；2026-10-23 非玻璃件全部换 coui 原生）：
  * - **玻璃必须看得见**：浅色底上光靠白色 tint 拓不出边界（交接文档第七节同款坑），所以每个玻璃件
  *   都套 `border(1dp, outlineVariant)` 描边 + 提高 tintAlpha 做出奶白磨砂感；
  * - 发送钮：绿芯（KewuGreen 径向渐变，白图标才看得见）+ 导航泡泡同款 spectralBrush 彩虹双带；
@@ -125,7 +140,7 @@ private enum class AssistantPanel { NONE, ATTACH, VOICE }
 
 @Composable
 fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val pageBackdrop = rememberGlassBackdrop()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -167,14 +182,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     //   滚动时 onGloballyPositioned 持续上报 → 菜单跟着气泡走，不会脱节。
     var menuAnchor by remember { mutableStateOf<Rect?>(null) } // 长按气泡的窗口坐标矩形
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }  // 页面根盒的窗口原点
-    var hint by remember { mutableStateOf<String?>(null) }
+    // 轻提示走全局 coui Snackbar（原自建中央胶囊已下线）
+    val snackbar = LocalKewuSnackbar.current
     val clipboard = LocalClipboardManager.current
-    LaunchedEffect(hint) {
-        if (hint != null) {
-            delay(1400)
-            hint = null
-        }
-    }
 
     // 上下文 chip + 建议提问：真实接口（/api/courses、/api/assignments），失败保留 mock
     LaunchedEffect(Unit) {
@@ -294,13 +304,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             .imePadding()
             .onGloballyPositioned { rootOrigin = it.positionInWindow() },
     ) {
-        // 背景采样层：M3 语义色，与玻璃内容平级 ✓
+        // 背景采样层：coui 页面底色（surface 灰底），与玻璃内容平级 ✓
         // imePadding 加在页面根：窗口收缩时整页（含采样层）一起变小，weight 对话区自动让位。
         Box(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.background),
+                .background(cs.surface),
         )
         Column(Modifier.fillMaxSize()) {
             // ── AI 人格区 + 上下文 chip：键盘弹出时自动收起，把空间让给对话列 ──
@@ -348,7 +358,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                             Canvas(Modifier.size(7.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
                         }
                         Spacer(Modifier.height(3.dp))
-                        Text("KEWU AI", color = cs.onSurfaceVariant, fontSize = 12.sp)
+                        Text("KEWU AI", color = cs.onSurfaceSecondary, fontSize = 12.sp)
                     }
                     Spacer(Modifier.height(12.dp))
 
@@ -380,7 +390,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 item {
                     Text(
                         "今天",
-                        color = cs.onSurfaceVariant,
+                        color = cs.onSurfaceSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.fillMaxWidth(),
                         textAlign = TextAlign.Center,
@@ -465,21 +475,18 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // coui Chip（自带按压缩放 + Tint）；首条（由真实作业生成）用品牌绿浅底做强调
                     suggestions.forEachIndexed { i, s ->
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(17.dp))
-                                .background(cs.surfaceVariant)
-                                .border(
-                                    1.dp,
-                                    if (i == 0) KewuGreen.copy(alpha = 0.5f) else cs.outlineVariant,
-                                    RoundedCornerShape(17.dp),
-                                )
-                                .pressBounce { doSend(s) }
-                                .padding(horizontal = 13.dp, vertical = 8.dp),
-                        ) {
-                            Text(s, color = cs.onSurface, fontSize = 12.5.sp, maxLines = 1)
-                        }
+                        Chip(
+                            selected = false,
+                            onClick = { haptic(HapticKind.Tick); doSend(s) },
+                            label = s,
+                            colors = if (i == 0) {
+                                ChipDefaults.chipColors(containerColor = KewuGreen.copy(alpha = 0.14f))
+                            } else {
+                                ChipDefaults.chipColors()
+                            },
+                        )
                     }
                 }
             }
@@ -524,13 +531,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                     } else {
                                         AssistantPanel.ATTACH
                                     }
-                                }) { PlusGlyph() }
+                                }) { GlyphIcon(COUIIcons.Add) }
                                 Box(
                                     Modifier.weight(1f).padding(horizontal = 9.dp),
                                     contentAlignment = Alignment.CenterStart,
                                 ) {
                                     if (input.isEmpty()) {
-                                        Text("问点什么…", color = cs.onSurfaceVariant, fontSize = 14.sp)
+                                        Text("问点什么…", color = cs.onSurfaceSecondary, fontSize = 14.sp)
                                     }
                                     BasicTextField(
                                         value = input,
@@ -549,7 +556,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                         voiceSecs = 0
                                         panel = AssistantPanel.VOICE
                                     }
-                                }) { MicGlyph() }
+                                }) { GlyphIcon(COUIIcons.Mic) }
                                 Spacer(Modifier.width(4.dp))
                                 SendBtn(
                                     backdrop = pageBackdrop,
@@ -583,7 +590,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 actions = listOf(
                     GlassMenuAction("复制", MenuGlyphKind.Copy) {
                         clipboard.setText(AnnotatedString(activeMenuMsg.displayText))
-                        hint = "已复制"
+                        scope.launch { snackbar.toast("已复制") }
                     },
                     GlassMenuAction("引用", MenuGlyphKind.Quote) {
                         // ★ 引用（12.8）：不再把原文塞进输入框，改为在输入框上方单独显示引用条
@@ -596,21 +603,6 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 ),
                 onDismiss = { menuMsg = null },
             )
-        }
-
-        // ── 轻提示（复制成功等）：中央胶囊，1.4s 自动消失 ──
-        val activeHint = hint
-        if (activeHint != null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(50))
-                        .background(cs.onSurface.copy(alpha = 0.82f))
-                        .padding(horizontal = 18.dp, vertical = 9.dp),
-                ) {
-                    Text(activeHint, color = cs.surface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                }
-            }
         }
     }
 }
@@ -715,11 +707,11 @@ private fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
  */
 @Composable
 private fun DockStroke(shape: RoundedCornerShape) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Canvas(
         Modifier
             .fillMaxSize()
-            .border(1.dp, cs.outlineVariant, shape),
+            .border(1.dp, cs.dividerLine, shape),
     ) {
         val w = size.width
         val h = size.height
@@ -742,17 +734,21 @@ private fun DockStroke(shape: RoundedCornerShape) {
     }
 }
 
-/** 顶部上下文 chip：小玻璃胶囊（描边 + 圆点 + 文字，内容可 Q 弹按压）。 */
+/**
+ * 顶部上下文 chip：小玻璃胶囊（描边 + 圆点 + 文字，内容可 Q 弹按压）。
+ * ★ 2026-10-23 coui 化：本体是 KewuGlassCard（液态玻璃件）→ 按「除液态玻璃外全部 coui」原则保留玻璃外壳，
+ *   内部文字已是 coui Text；非玻璃的建议提问 chip 才换 coui Chip。
+ */
 @Composable
 private fun ContextChip(
     backdrop: LayerBackdrop,
     dot: Color,
     content: @Composable () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Box(
         Modifier
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(15.dp)),
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(15.dp)),
     ) {
         KewuGlassCard(
             backdrop = backdrop,
@@ -788,13 +784,13 @@ private fun AiBubble(
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val shape = RoundedCornerShape(topStart = 8.dp, topEnd = 22.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
         Box(
             Modifier
-                .border(1.dp, cs.outlineVariant, shape)
+                .border(1.dp, cs.dividerLine, shape)
                 .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
         ) {
             KewuGlassCard(
@@ -815,20 +811,21 @@ private fun AiBubble(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Canvas(Modifier.size(6.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
                         Spacer(Modifier.width(5.dp))
-                        Text("小悟", color = cs.onSurfaceVariant, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
+                        Text("小悟", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
                     }
                     Spacer(Modifier.height(5.dp))
                     Text(msg.text, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
                     msg.formula?.let { f ->
                         Spacer(Modifier.height(7.dp))
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .background(cs.surfaceVariant)
-                                .border(1.dp, KewuGreen.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = cs.secondaryContainer,
+                            border = BorderStroke(1.dp, KewuGreen.copy(alpha = 0.4f)),
                         ) {
-                            Text(f, color = cs.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                            Text(
+                                f, color = cs.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            )
                         }
                     }
                 }
@@ -837,7 +834,7 @@ private fun AiBubble(
     }
 }
 
-/** 用户气泡：M3 primary 填充 / 语音气泡带 mic + 时长，右对齐；同支持长按菜单。 */
+/** 用户气泡：coui Surface 品牌色实心填充 / 语音气泡带 mic + 时长，右对齐；同支持长按菜单。 */
 @Composable
 private fun UserBubble(
     msg: ChatMsg,
@@ -846,17 +843,22 @@ private fun UserBubble(
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val shape = RoundedCornerShape(topStart = 22.dp, topEnd = 8.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        Column(
-            Modifier
+        // Surface 承担 clip + 品牌色底；按压缩放仍只作用于内部内容（与改造前一致）
+        Surface(
+            modifier = Modifier
                 .widthIn(max = 280.dp)
                 .riseEnter(p, 26f)
-                .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
-                .clip(shape)
-                .background(cs.primary)
+                .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
+            shape = shape,
+            color = cs.primary,
+            contentColor = cs.onPrimary,
+        ) {
+        Column(
+            Modifier
                 .bubblePress(onLongPress)
                 .padding(horizontal = 14.dp, vertical = 11.dp),
         ) {
@@ -890,7 +892,7 @@ private fun UserBubble(
             }
             if (msg.isVoice) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    MicGlyph(color = cs.onPrimary, glyphSize = 16.dp)
+                    Icon(COUIIcons.Mic, contentDescription = null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "语音消息 · ${fmtClock(msg.voiceSecs)}",
@@ -902,6 +904,7 @@ private fun UserBubble(
                 Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
             }
         }
+        }
     }
 }
 
@@ -912,49 +915,42 @@ private fun UserBubble(
  */
 @Composable
 private fun QuotePreviewBar(text: String, onCancel: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(cs.surfaceVariant)
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(12.dp))
-            .padding(start = 11.dp, top = 7.dp, bottom = 7.dp, end = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    val cs = COUITheme.colorScheme
+    // coui Surface 承载底色 + 描边；× 换 coui IconButton + Close 图标
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = cs.surfaceContainer,
+        border = BorderStroke(1.dp, cs.dividerLine),
     ) {
-        Box(
-            Modifier
-                .width(3.dp)
-                .height(26.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(KewuGreen),
-        )
-        Spacer(Modifier.width(9.dp))
-        Column(Modifier.weight(1f)) {
-            Text("引用", color = cs.onSurfaceVariant, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
-            Text(
-                text, color = cs.onSurfaceVariant,
-                fontSize = 11.5.sp, lineHeight = 15.sp,
-                maxLines = 2, overflow = TextOverflow.Ellipsis,
-            )
-        }
-        // × 取消（复用本文件统一按压反馈，带轻震动）
-        Box(
-            Modifier
-                .size(28.dp)
-                .pressBounce { onCancel() },
-            contentAlignment = Alignment.Center,
+        Row(
+            Modifier.padding(start = 11.dp, top = 7.dp, bottom = 7.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Canvas(Modifier.size(12.dp)) {
-                val ws = size.width * 0.13f
-                drawLine(
-                    cs.onSurfaceVariant, Offset(ws, ws), Offset(size.width - ws, size.height - ws),
-                    ws, StrokeCap.Round,
+            Box(
+                Modifier
+                    .width(3.dp)
+                    .height(26.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(KewuGreen),
+            )
+            Spacer(Modifier.width(9.dp))
+            Column(Modifier.weight(1f)) {
+                Text("引用", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    text, color = cs.onSurfaceSecondary,
+                    fontSize = 11.5.sp, lineHeight = 15.sp,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis,
                 )
-                drawLine(
-                    cs.onSurfaceVariant, Offset(size.width - ws, ws), Offset(ws, size.height - ws),
-                    ws, StrokeCap.Round,
-                )
+            }
+            // × 取消（带轻震动）
+            IconButton(
+                onClick = { haptic(HapticKind.Tick); onCancel() },
+                minWidth = 32.dp,
+                minHeight = 32.dp,
+                cornerRadius = 16.dp,
+            ) {
+                Icon(COUIIcons.Close, contentDescription = "取消引用", tint = cs.onSurfaceSecondary, modifier = Modifier.size(14.dp))
             }
         }
     }
@@ -967,7 +963,7 @@ private fun RoundIconBtn(
     onClick: () -> Unit,
     glyph: @Composable () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     // ★ 第三轮 12.5：按压缩放只加在**内部图标**（非采样者），玻璃件保持静止
     // —— 否则外层 scale 裹住玻璃采样者，快速点击触发反复重采样卡顿（且踩 coui 硬约束）。
     // 手势用 pointerInput(Unit)+rememberUpdatedState，稳定不重建。
@@ -979,7 +975,7 @@ private fun RoundIconBtn(
     )
     val onClickState = rememberUpdatedState(onClick)
     Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().border(1.dp, cs.outlineVariant, CircleShape)) {
+        Box(Modifier.fillMaxSize().border(1.dp, cs.dividerLine, CircleShape)) {
             KewuGlassCard(
                 backdrop = backdrop,
                 shape = CircleShape,
@@ -1027,46 +1023,10 @@ private fun PersonGlyph(modifier: Modifier = Modifier, color: Color) {
     }
 }
 
-/** 「+」照片/文件 icon。 */
+/** 输入框内小钮的 coui 图标（原自绘 Plus / Mic 已换 coui-icons）。 */
 @Composable
-private fun PlusGlyph() {
-    val cs = MaterialTheme.colorScheme
-    Canvas(Modifier.size(19.dp)) {
-        val s = size.minDimension
-        val c = center
-        val w = s * 0.11f
-        val r = s * 0.34f
-        drawLine(cs.onSurfaceVariant, Offset(c.x - r, c.y), Offset(c.x + r, c.y), w, StrokeCap.Round)
-        drawLine(cs.onSurfaceVariant, Offset(c.x, c.y - r), Offset(c.x, c.y + r), w, StrokeCap.Round)
-    }
-}
-
-/** 麦克风 icon（圆头竖条 + 弧线底座）。 */
-@Composable
-private fun MicGlyph(
-    color: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-    glyphSize: androidx.compose.ui.unit.Dp = 19.dp,
-) {
-    Canvas(Modifier.size(glyphSize)) {
-        val s = size.minDimension
-        val c = center
-        drawRoundRect(
-            color,
-            topLeft = Offset(c.x - s * 0.11f, c.y - s * 0.34f),
-            size = Size(s * 0.22f, s * 0.42f),
-            cornerRadius = CornerRadius(s * 0.11f),
-        )
-        drawArc(
-            color,
-            startAngle = 0f,
-            sweepAngle = 180f,
-            useCenter = false,
-            topLeft = Offset(c.x - s * 0.24f, c.y - s * 0.16f),
-            size = Size(s * 0.48f, s * 0.44f),
-            style = Stroke(width = s * 0.09f, cap = StrokeCap.Round),
-        )
-        drawLine(color, Offset(c.x, c.y + s * 0.28f), Offset(c.x, c.y + s * 0.38f), s * 0.09f, StrokeCap.Round)
-    }
+private fun GlyphIcon(icon: ImageVector) {
+    Icon(icon, contentDescription = null, tint = COUITheme.colorScheme.onSurfaceSecondary, modifier = Modifier.size(20.dp))
 }
 
 /**
@@ -1188,13 +1148,13 @@ private fun SendBtn(
 /** QQ 式附件面板：相册 / 拍照 / 文件（后端接入前点击仅反馈 + 收起）。 */
 @Composable
 private fun AttachPanel(backdrop: LayerBackdrop, onClose: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Box(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .padding(bottom = 6.dp)
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(20.dp)),
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp)),
     ) {
         KewuGlassCard(
             backdrop = backdrop,
@@ -1208,31 +1168,33 @@ private fun AttachPanel(backdrop: LayerBackdrop, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AttachOption("相册") { PhotoGlyph() }
-                AttachOption("拍照") { CameraGlyph() }
-                AttachOption("文件") { FileGlyph() }
+                AttachOption("相册", COUIIcons.Photos)
+                AttachOption("拍照", COUIIcons.Scan)
+                AttachOption("文件", COUIIcons.File)
             }
         }
     }
 }
 
 @Composable
-private fun AttachOption(label: String, glyph: @Composable () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+private fun AttachOption(label: String, icon: ImageVector) {
+    val cs = COUITheme.colorScheme
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         modifier = Modifier.pressBounce { /* 相册/拍照/文件选择器：后端接入后补 */ },
     ) {
-        Box(
-            Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(cs.surfaceVariant)
-                .border(1.dp, cs.outlineVariant, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) { glyph() }
+        Surface(
+            modifier = Modifier.size(56.dp),
+            shape = CircleShape,
+            color = cs.secondaryContainer,
+            border = BorderStroke(1.dp, cs.dividerLine),
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = label, tint = cs.onSurfaceSecondary, modifier = Modifier.size(24.dp))
+            }
+        }
         Spacer(Modifier.height(6.dp))
-        Text(label, color = cs.onSurfaceVariant, fontSize = 11.sp)
+        Text(label, color = cs.onSurfaceSecondary, fontSize = 11.sp)
     }
 }
 
@@ -1244,13 +1206,13 @@ private fun VoiceRecordPanel(
     onCancel: () -> Unit,
     onSend: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Box(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
             .padding(bottom = 6.dp)
-            .border(1.dp, cs.outlineVariant, RoundedCornerShape(20.dp)),
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp)),
     ) {
         KewuGlassCard(
             backdrop = backdrop,
@@ -1263,22 +1225,15 @@ private fun VoiceRecordPanel(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // 取消
-                Box(
-                    Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(cs.surfaceVariant)
-                        .border(1.dp, cs.outlineVariant, CircleShape)
-                        .pressBounce(onCancel),
-                    contentAlignment = Alignment.Center,
+                // 取消（coui IconButton 灰底圆钮）
+                IconButton(
+                    onClick = { haptic(HapticKind.Tick); onCancel() },
+                    backgroundColor = cs.secondaryContainer,
+                    minWidth = 38.dp,
+                    minHeight = 38.dp,
+                    cornerRadius = 19.dp,
                 ) {
-                    Canvas(Modifier.size(14.dp)) {
-                        val s = size.minDimension
-                        val w = s * 0.16f
-                        drawLine(cs.onSurfaceVariant, Offset(s * 0.1f, s * 0.1f), Offset(s * 0.9f, s * 0.9f), w, StrokeCap.Round)
-                        drawLine(cs.onSurfaceVariant, Offset(s * 0.9f, s * 0.1f), Offset(s * 0.1f, s * 0.9f), w, StrokeCap.Round)
-                    }
+                    Icon(COUIIcons.Close, contentDescription = "取消", tint = cs.onSurfaceSecondary, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.width(14.dp))
                 // 声纹波纹
@@ -1286,21 +1241,15 @@ private fun VoiceRecordPanel(
                 Spacer(Modifier.width(10.dp))
                 Text(fmtClock(voiceSecs), color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                 Spacer(Modifier.weight(1f))
-                // 发送
-                Box(
-                    Modifier
-                        .size(38.dp)
-                        .clip(CircleShape)
-                        .background(KewuGreen)
-                        .pressBounce(onSend),
-                    contentAlignment = Alignment.Center,
+                // 发送（coui IconButton 品牌绿圆钮）
+                IconButton(
+                    onClick = { haptic(HapticKind.Light); onSend() },
+                    backgroundColor = KewuGreen,
+                    minWidth = 38.dp,
+                    minHeight = 38.dp,
+                    cornerRadius = 19.dp,
                 ) {
-                    Canvas(Modifier.size(15.dp)) {
-                        val s = size.minDimension
-                        val w = s * 0.18f
-                        drawLine(Color.White, Offset(s * 0.15f, s * 0.52f), Offset(s * 0.45f, s * 0.82f), w, StrokeCap.Round)
-                        drawLine(Color.White, Offset(s * 0.45f, s * 0.82f), Offset(s * 0.88f, s * 0.18f), w, StrokeCap.Round)
-                    }
+                    Icon(COUIIcons.Ok, contentDescription = "发送语音", tint = Color.White, modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -1334,60 +1283,5 @@ private fun VoiceWave(active: Boolean) {
                     .background(color),
             )
         }
-    }
-}
-
-// ───────────────────────── 附件面板小图标 ─────────────────────────
-
-@Composable
-private fun PhotoGlyph() {
-    val cs = MaterialTheme.colorScheme
-    Canvas(Modifier.size(24.dp)) {
-        val s = size.minDimension
-        val c = cs.onSurfaceVariant
-        val stroke = Stroke(width = s * 0.08f, cap = StrokeCap.Round)
-        drawRoundRect(c, topLeft = Offset(s * 0.1f, s * 0.18f), size = Size(s * 0.8f, s * 0.64f), cornerRadius = CornerRadius(s * 0.12f), style = stroke)
-        drawCircle(c, radius = s * 0.09f, center = Offset(s * 0.32f, s * 0.38f))
-        val m = Path().apply {
-            moveTo(s * 0.18f, s * 0.74f)
-            lineTo(s * 0.42f, s * 0.5f)
-            lineTo(s * 0.6f, s * 0.66f)
-            lineTo(s * 0.74f, s * 0.52f)
-            lineTo(s * 0.86f, s * 0.74f)
-        }
-        drawPath(m, c, style = stroke)
-    }
-}
-
-@Composable
-private fun CameraGlyph() {
-    val cs = MaterialTheme.colorScheme
-    Canvas(Modifier.size(24.dp)) {
-        val s = size.minDimension
-        val c = cs.onSurfaceVariant
-        val stroke = Stroke(width = s * 0.08f, cap = StrokeCap.Round)
-        drawRoundRect(c, topLeft = Offset(s * 0.08f, s * 0.26f), size = Size(s * 0.84f, s * 0.56f), cornerRadius = CornerRadius(s * 0.12f), style = stroke)
-        drawCircle(c, radius = s * 0.16f, center = center.copy(y = s * 0.54f), style = stroke)
-        drawRoundRect(c, topLeft = Offset(s * 0.36f, s * 0.14f), size = Size(s * 0.28f, s * 0.12f), cornerRadius = CornerRadius(s * 0.04f), style = stroke)
-    }
-}
-
-@Composable
-private fun FileGlyph() {
-    val cs = MaterialTheme.colorScheme
-    Canvas(Modifier.size(24.dp)) {
-        val s = size.minDimension
-        val c = cs.onSurfaceVariant
-        val stroke = Stroke(width = s * 0.08f, cap = StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-        val p = Path().apply {
-            moveTo(s * 0.12f, s * 0.22f)
-            lineTo(s * 0.42f, s * 0.22f)
-            lineTo(s * 0.52f, s * 0.34f)
-            lineTo(s * 0.88f, s * 0.34f)
-            lineTo(s * 0.88f, s * 0.78f)
-            lineTo(s * 0.12f, s * 0.78f)
-            close()
-        }
-        drawPath(p, c, style = stroke)
     }
 }
