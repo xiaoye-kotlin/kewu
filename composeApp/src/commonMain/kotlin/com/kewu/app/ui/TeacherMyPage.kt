@@ -22,8 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,15 +38,19 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.BackHandler
+import com.kewu.app.HapticKind
+import com.kewu.app.haptic
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.theme.COUITheme
 
 // ───────────────────────── 教师端 · 我的（tab 2） ─────────────────────────
 //
-// 结构对齐学生端 MyPage：资料头玻璃卡 + 分组功能行（coui Card）+ 退出登录；
+// 结构对齐学生端 MyPage：资料头玻璃卡 + 分组功能行（coui ArrowPreference 分组卡）+ 退出登录（二次确认）；
 // 子页路由用「仅 slide 无 fade」的 AnimatedContent + BackHandler（与学生端同款，防 coui SIGSEGV）。
 // 功能分组：
 //   教学管理：课程绑定（BindCourseScreen）/ 发起签到（CreateAttendanceScreen）/ 发布笔记（PostNoteScreen）
@@ -88,7 +90,7 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(MaterialTheme.colorScheme.background),
+                .background(COUITheme.colorScheme.surface),
         )
         AnimatedContent(
             targetState = screen,
@@ -143,7 +145,10 @@ private fun TeacherMyHome(
     onAbout: () -> Unit,
     onLogout: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
+    // 退出登录二次确认（coui OverlayDialog），与学生端一致
+    var confirmLogout by remember { mutableStateOf(false) }
+    Box(Modifier.fillMaxSize()) {
     Column(
         Modifier
             .fillMaxSize()
@@ -164,7 +169,7 @@ private fun TeacherMyHome(
                 .padding(horizontal = 12.dp)
                 .padding(bottom = 12.dp)
                 .glassEnter(p0)
-                .border(1.dp, cs.outlineVariant, RoundedCornerShape(20.dp)),
+                .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp)),
         ) {
             Row(
                 Modifier.fillMaxWidth().alpha(p0).padding(18.dp),
@@ -174,10 +179,10 @@ private fun TeacherMyHome(
                     Modifier
                         .size(62.dp)
                         .clip(CircleShape)
-                        .background(cs.primaryContainer),
+                        .background(cs.tertiaryContainer),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(name.firstOrNull()?.toString() ?: "师", color = cs.onPrimaryContainer,
+                    Text(name.firstOrNull()?.toString() ?: "师", color = cs.onTertiaryContainer,
                         fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.width(14.dp))
@@ -186,40 +191,31 @@ private fun TeacherMyHome(
                         Text(name.ifBlank { "老师" }, color = cs.onSurface, fontSize = 20.sp,
                             fontWeight = FontWeight.SemiBold, maxLines = 1)
                         Spacer(Modifier.width(8.dp))
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(7.dp))
-                                .background(KewuBlue.copy(alpha = 0.12f))
-                                .padding(horizontal = 8.dp, vertical = 3.dp),
-                        ) {
-                            Text("教师", color = KewuBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
+                        KewuTag("教师", KewuBlue.copy(alpha = 0.12f), KewuBlue)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("账号 $account", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                    Text("账号 $account", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
                 }
             }
         }
 
+        // 教学管理：五行并成一张 coui 分组卡（ArrowPreference），整组错峰入场
         GroupLabel("教学管理", Modifier.riseEnter(rememberEnterProgress(1)))
-        FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop,
-            onClick = onCreateCourse, modifier = Modifier.riseEnter(rememberEnterProgress(2)))
-        FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop,
-            onClick = onClasses, modifier = Modifier.riseEnter(rememberEnterProgress(3)))
-        FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop,
-            onClick = onBindCourse, modifier = Modifier.riseEnter(rememberEnterProgress(4)))
-        FuncRow(1, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop,
-            onClick = onCreateAttendance, modifier = Modifier.riseEnter(rememberEnterProgress(5)))
-        FuncRow(2, "发布笔记", "记录课堂要点，学生端即时可见", backdrop,
-            onClick = onPostNote, modifier = Modifier.riseEnter(rememberEnterProgress(6)))
+        KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(2))) {
+            FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop, onClick = onCreateCourse)
+            FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop, onClick = onClasses)
+            FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop, onClick = onBindCourse)
+            FuncRow(7, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop, onClick = onCreateAttendance)
+            FuncRow(8, "发布笔记", "记录课堂要点，学生端即时可见", backdrop, onClick = onPostNote)
+        }
 
         GroupLabel("通用", Modifier.riseEnter(rememberEnterProgress(5)))
-        FuncRow(2, "通知设置", "签到提醒、作业提醒与权限管理", backdrop,
-            onClick = onNotification, modifier = Modifier.riseEnter(rememberEnterProgress(6)))
-        FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop,
-            onClick = onAbout, modifier = Modifier.riseEnter(rememberEnterProgress(7)))
+        KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(6))) {
+            FuncRow(2, "通知设置", "签到提醒、作业提醒与权限管理", backdrop, onClick = onNotification)
+            FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout)
+        }
 
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(2.dp))
         GroupLabel("账号", Modifier.riseEnter(rememberEnterProgress(8)))
         val p9 = rememberEnterProgress(9)
         KewuGlassCard(
@@ -227,12 +223,12 @@ private fun TeacherMyHome(
             shape = RoundedCornerShape(16.dp),
             blurRadius = glassCondenseBlur(p9, 18f),
             tintAlpha = 0.26f * p9,
-            onClick = onLogout,
+            onClick = { haptic(HapticKind.Tick); confirmLogout = true },
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
                 .glassEnter(p9)
-                .border(1.dp, cs.outlineVariant, RoundedCornerShape(16.dp)),
+                .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp)),
         ) {
             Row(
                 Modifier.fillMaxWidth().alpha(p9).padding(vertical = 15.dp, horizontal = 18.dp),
@@ -242,5 +238,15 @@ private fun TeacherMyHome(
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+
+    KewuConfirmDialog(
+        show = confirmLogout,
+        title = "退出登录",
+        summary = "退出后需要重新登录才能发起签到、批阅作业和管理班级",
+        confirmText = "退出登录",
+        onConfirm = { confirmLogout = false; onLogout() },
+        onDismiss = { confirmLogout = false },
+    )
     }
 }
