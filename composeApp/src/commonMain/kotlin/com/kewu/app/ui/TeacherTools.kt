@@ -1,7 +1,6 @@
 package com.kewu.app.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,13 +8,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -23,22 +19,26 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.CourseInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
-import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
-import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
+import io.github.suqi8.coui.kmp.basic.BasicComponent
+import io.github.suqi8.coui.kmp.basic.Chip
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.basic.TextField
+import io.github.suqi8.coui.kmp.basic.TextFieldDefaults
+import io.github.suqi8.coui.kmp.basic.TextFieldMode
+import io.github.suqi8.coui.kmp.basic.TopTips
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
+import io.github.suqi8.coui.kmp.preference.RadioButtonPreference
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
 
 // ───────────────────────── 教师 / 课程工具（补全缺界面的接口） ─────────────────────────
@@ -51,78 +51,69 @@ import kotlinx.coroutines.launch
 // coui 安全约束：本组界面**复用 MyPage 顶层的单一采样层**（不新建自己的 layerBackdrop 背景），
 // 玻璃卡（KewuGlassCard）只作为采样者引用传入的 [backdrop]。否则 transition 期间会出现两个
 // 采样层同时写同一 backdrop 的冲突。离线 / 未登录时全部优雅降级（提示而不崩）。
+//
+// 2026-10-23 全局 coui 化：顶栏 KewuTopBar；输入框 coui TextField；主按钮 KewuPrimaryButton；
+// 选课改 coui RadioButtonPreference 分组卡；时长改 coui Chip；结果文字行改为
+// 「coui Snackbar 轻提示 + 失败时常驻 TopTips」（失败文案可能较长，如 postNote 的 Redis 降级说明，
+// toast 一闪而过读不完，故失败额外挂一条可关闭的顶部提示条）。
+// 下列 internal 件同时被 ClassManageScreens.kt 复用。
 
-/** 通用输入框：标签 + 圆角底（M3 surfaceVariant）+ BasicTextField。 */
+/**
+ * 表单输入：小标题（coui Text）+ coui [TextField]（Rectangle 白底，单行带清除键）。
+ * [placeholder] 作为框内占位，空时回退到 [label]。
+ */
 @Composable
-private fun ToolField(
+internal fun TeacherToolField(
     label: String,
     value: String,
     onValueChange: (String) -> Unit,
     singleLine: Boolean = true,
     placeholder: String = "",
+    keyboardType: KeyboardType = KeyboardType.Text,
 ) {
-    val cs = MaterialTheme.colorScheme
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
-        Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(bottom = 6.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(12.dp))
-                .background(cs.surfaceVariant)
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-        ) {
-            BasicTextField(
-                value = value,
-                onValueChange = onValueChange,
-                singleLine = singleLine,
-                textStyle = TextStyle(color = cs.onSurface, fontSize = 15.sp),
-                modifier = Modifier.fillMaxWidth(),
-                decorationBox = { inner ->
-                    Box(Modifier.fillMaxWidth()) {
-                        if (value.isEmpty()) {
-                            Text(placeholder.ifEmpty { label }, color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 15.sp)
-                        }
-                        inner()
-                    }
-                },
-            )
-        }
+    val cs = COUITheme.colorScheme
+    Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
+        Text(label, color = cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            backgroundMode = TextFieldMode.Rectangle,
+            colors = TextFieldDefaults.textFieldColors(backgroundColor = cs.surfaceContainer),
+            label = placeholder.ifEmpty { label },
+            singleLine = singleLine,
+            minLines = if (singleLine) 1 else 4,
+            showClearButton = singleLine,
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        )
     }
 }
 
-/** 通用主操作按钮（主色 / 禁用态转灰）。 */
+/**
+ * 失败常驻提示（coui [TopTips]，可关闭）。成功只走 Snackbar 轻提示，不占版面。
+ * 记住最后一条文案，保证收起动画期间文字不突然变空。
+ */
 @Composable
-private fun ToolButton(text: String, enabled: Boolean, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .clip(RoundedCornerShape(14.dp))
-            .background(if (enabled) cs.primary else cs.surfaceVariant)
-            .hapticClickable { if (enabled) onClick() }
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text, color = if (enabled) Color.White else cs.onSurfaceVariant,
-            fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+internal fun TeacherToolFailTips(result: Pair<Boolean, String>?, onClose: () -> Unit) {
+    var lastMsg by remember { mutableStateOf("") }
+    val failMsg = result?.takeIf { !it.first }?.second
+    LaunchedEffect(failMsg) { if (failMsg != null) lastMsg = failMsg }
+    val text = failMsg ?: lastMsg
+    if (text.isNotEmpty()) {
+        TopTips(
+            text = text,
+            visible = failMsg != null,
+            onClose = onClose,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 12.dp),
+        )
     }
 }
 
-/** 结果提示行（成功=品牌绿，失败=error 语义色）。 */
+/** 玻璃说明卡（液态玻璃本体保留，采样自传入 [backdrop]；卡内文字为 coui Text）。 */
 @Composable
-private fun ResultLine(msg: String, ok: Boolean) {
-    val cs = MaterialTheme.colorScheme
-    Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 12.dp)) {
-        Text(msg, color = if (ok) KewuGreen else cs.error, fontSize = 13.sp)
-    }
-}
-
-/** 玻璃说明卡（液态玻璃，采样自传入 [backdrop]）。 */
-@Composable
-private fun GlassIntro(backdrop: LayerBackdrop, title: String, subtitle: String) {
-    val cs = MaterialTheme.colorScheme
+internal fun TeacherToolIntro(backdrop: LayerBackdrop, title: String, subtitle: String) {
+    val cs = COUITheme.colorScheme
     KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(20.dp),
@@ -133,47 +124,37 @@ private fun GlassIntro(backdrop: LayerBackdrop, title: String, subtitle: String)
         Column(Modifier.padding(16.dp)) {
             Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(4.dp))
-            Text(subtitle, color = cs.onSurfaceVariant, fontSize = 13.sp)
+            Text(subtitle, color = cs.onSurfaceSecondary, fontSize = 13.sp)
         }
     }
 }
 
-/** 可点选的课程行（squircle；选中态用 primaryContainer 高亮）。 */
+/** 整宽主操作按钮（KewuPrimaryButton，左右与卡片对齐 12dp）。 */
 @Composable
-private fun CoursePickRow(
-    course: CourseInfo,
-    selected: Boolean,
-    subtitle: String = "",
-    onSelect: () -> Unit,
-) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 8.dp)
-            .squircleCard(14.dp, if (selected) cs.primaryContainer else cs.surfaceVariant)
-            .hapticClickable { haptic(HapticKind.Tick); onSelect() }
-            .padding(14.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(course.name, color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-                if (subtitle.isNotBlank() || course.teacher.isNotBlank()) {
-                    Spacer(Modifier.height(2.dp))
-                    Text(if (subtitle.isNotBlank()) subtitle else course.teacher,
-                        color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1)
-                }
+private fun ToolButton(text: String, enabled: Boolean, onClick: () -> Unit) {
+    KewuPrimaryButton(text, onClick, Modifier.fillMaxWidth().padding(horizontal = 12.dp), enabled = enabled)
+}
+
+/**
+ * 课程单选组：coui [RadioButtonPreference] 放进同一张分组白卡。
+ * 列表为空 / 加载中分别走 KewuEmpty / KewuLoading。
+ */
+@Composable
+private fun CoursePickGroup(courses: List<CourseInfo>?, selectedId: String?, onSelect: (String) -> Unit) {
+    when {
+        courses == null -> KewuLoading(text = "课程加载中…")
+        courses.isEmpty() -> KewuEmpty("暂无可选课程")
+        else -> KewuCardGroup {
+            courses.forEach { c ->
+                RadioButtonPreference(
+                    title = c.name,
+                    summary = c.teacher.ifBlank { null },
+                    selected = selectedId == c.id,
+                    onClick = { haptic(HapticKind.Tick); onSelect(c.id) },
+                )
             }
-            if (selected) Text("已选", color = cs.primary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
         }
     }
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp,
-        fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp))
 }
 
 // ───────────────────────── 绑定课程 ─────────────────────────
@@ -184,6 +165,7 @@ private fun SectionLabel(text: String) {
 @Composable
 internal fun BindCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
     var courseId by remember { mutableStateOf("") }
     var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var loading by remember { mutableStateOf(false) }
@@ -195,28 +177,17 @@ internal fun BindCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
-        HubTopBar("绑定课程", onBack)
-        GlassIntro(backdrop, "绑定课程", "输入课程 ID 绑定到当前账号，绑定后可同步课程作业、签到与录音。")
+        KewuTopBar("绑定课程", onBack)
+        TeacherToolIntro(backdrop, "绑定课程", "输入课程 ID 绑定到当前账号，绑定后可同步课程作业、签到与录音。")
         if (bound.isNotEmpty()) {
-            SectionLabel("已绑定课程")
-            bound.forEach { c ->
-                Box(
-                    Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 8.dp)
-                        .squircleCard(14.dp, MaterialTheme.colorScheme.surfaceVariant).padding(14.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text(c.name, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                            Spacer(Modifier.height(2.dp))
-                            Text("ID: ${c.id}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-                        }
-                    }
-                }
+            KewuSectionTitle("已绑定课程")
+            KewuCardGroup {
+                bound.forEach { c -> BasicComponent(title = c.name, summary = "ID: ${c.id}") }
             }
         }
-        ToolField("课程 ID", courseId, { courseId = it }, placeholder = "如 c1001")
+        TeacherToolField("课程 ID", courseId, { courseId = it }, placeholder = "如 c1001")
         Spacer(Modifier.height(4.dp))
-        ToolButton("绑定课程", enabled = courseId.isNotBlank() && !loading) {
+        ToolButton(if (loading) "正在绑定…" else "绑定课程", enabled = courseId.isNotBlank() && !loading) {
             scope.launch {
                 loading = true
                 val err = KewuApi.bindCourse(courseId.trim())
@@ -228,58 +199,69 @@ internal fun BindCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                 } else {
                     result = false to (err ?: "绑定失败")
                 }
+                result?.let { snackbar.toast(it.second) }
             }
         }
-        result?.let { ResultLine(it.second, it.first) }
+        TeacherToolFailTips(result) { result = null }
         Spacer(Modifier.height(24.dp))
     }
 }
 
 // ───────────────────────── 发起签到（教师） ─────────────────────────
 
+/** 签到有效时长可选项（分钟），coui Chip 单选。 */
+private val DURATION_OPTIONS = listOf(5, 10, 15, 30)
+
 /**
  * 发起签到：选课程 + 标题 + 有效时长，调 [KewuApi.createAttendance]。
  */
 @Composable
 internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
     var selectedId by remember { mutableStateOf<String?>(null) }
     var title by remember { mutableStateOf("课堂签到") }
-    var duration by remember { mutableStateOf("10") }
+    var duration by remember { mutableStateOf(10) }
     var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var loading by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) { courses = KewuApi.getCourses() }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
-        HubTopBar("发起签到", onBack)
-        GlassIntro(backdrop, "发起课堂签到", "创建一次签到会话，学生通过动态码 / 定位完成打卡。")
-        SectionLabel("选择课程")
-        courses?.let { list ->
-            if (list.isEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(16.dp)) { Text("暂无可选课程", color = cs.onSurfaceVariant, fontSize = 13.sp) }
+        KewuTopBar("发起签到", onBack)
+        TeacherToolIntro(backdrop, "发起课堂签到", "创建一次签到会话，学生通过动态码 / 定位完成打卡。")
+        KewuSectionTitle("选择课程")
+        CoursePickGroup(courses, selectedId) { selectedId = it }
+        TeacherToolField("签到标题", title, { title = it }, placeholder = "课堂签到")
+        // 有效时长：coui Chip 单选（原自由数字输入改为常用档位，避免填 0 / 超长）
+        Text("有效时长（分钟）", color = cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 6.dp))
+        Row(
+            Modifier.padding(horizontal = 12.dp).padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            DURATION_OPTIONS.forEach { m ->
+                Chip(
+                    selected = duration == m,
+                    onClick = { haptic(HapticKind.Tick); duration = m },
+                    label = "$m 分钟",
+                )
             }
-            list.forEach { c ->
-                CoursePickRow(c, selected = selectedId == c.id) { selectedId = c.id }
-            }
-        } ?: Box(Modifier.fillMaxWidth().padding(16.dp)) { Text("课程加载中…", color = cs.onSurfaceVariant, fontSize = 13.sp) }
-        Spacer(Modifier.height(8.dp))
-        ToolField("签到标题", title, { title = it }, placeholder = "课堂签到")
-        ToolField("有效时长（分钟）", duration, { duration = it.filter { ch -> ch.isDigit() } }, placeholder = "10")
+        }
         Spacer(Modifier.height(4.dp))
-        ToolButton("发起签到", enabled = selectedId != null && title.isNotBlank() && !loading) {
+        ToolButton(if (loading) "正在发起…" else "发起签到", enabled = selectedId != null && title.isNotBlank() && !loading) {
             scope.launch {
                 loading = true
-                val dur = duration.toIntOrNull() ?: 10
-                val session = KewuApi.createAttendance(selectedId!!, title.trim(), durationMinutes = dur)
+                val session = KewuApi.createAttendance(selectedId!!, title.trim(), durationMinutes = duration)
                 loading = false
                 result = if (session != null) true to "签到已发起 · 会话 ${session.id}"
                 else false to "签到发起失败，请稍后重试"
+                result?.let { snackbar.toast(it.second) }
             }
         }
-        result?.let { ResultLine(it.second, it.first) }
+        TeacherToolFailTips(result) { result = null }
         Spacer(Modifier.height(24.dp))
     }
 }
@@ -288,11 +270,12 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
 
 /**
  * 发布课堂笔记：选课程 + 编辑内容，调 [KewuApi.postNote]；选课后自动拉取已有笔记作草稿。
+ * 注：Redis 降级时 postNote 返回「课堂缓存服务暂不可用…」文案，照常作为失败提示展示。
  */
 @Composable
 internal fun PostNoteScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
     var selectedId by remember { mutableStateOf<String?>(null) }
     var content by remember { mutableStateOf("") }
@@ -308,26 +291,22 @@ internal fun PostNoteScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
-        HubTopBar("课堂笔记", onBack)
-        GlassIntro(backdrop, "发布课堂笔记", "记录本节课的要点，发布后即缓存到本课程，方便回看。")
-        SectionLabel("选择课程")
-        courses?.let { list ->
-            list.forEach { c ->
-                CoursePickRow(c, selected = selectedId == c.id) { selectedId = c.id }
-            }
-        } ?: Box(Modifier.fillMaxWidth().padding(16.dp)) { Text("课程加载中…", color = cs.onSurfaceVariant, fontSize = 13.sp) }
-        Spacer(Modifier.height(8.dp))
-        ToolField("笔记内容", content, { content = it }, singleLine = false, placeholder = "记录本节课的要点…")
+        KewuTopBar("课堂笔记", onBack)
+        TeacherToolIntro(backdrop, "发布课堂笔记", "记录本节课的要点，发布后即缓存到本课程，方便回看。")
+        KewuSectionTitle("选择课程")
+        CoursePickGroup(courses, selectedId) { selectedId = it }
+        TeacherToolField("笔记内容", content, { content = it }, singleLine = false, placeholder = "记录本节课的要点…")
         Spacer(Modifier.height(4.dp))
-        ToolButton("发布笔记", enabled = selectedId != null && content.isNotBlank() && !loading) {
+        ToolButton(if (loading) "正在发布…" else "发布笔记", enabled = selectedId != null && content.isNotBlank() && !loading) {
             scope.launch {
                 loading = true
                 val err = KewuApi.postNote(selectedId!!, content.trim())
                 loading = false
                 result = if (err == null) true to "笔记已发布" else false to (err ?: "发布失败")
+                result?.let { snackbar.toast(it.second) }
             }
         }
-        result?.let { ResultLine(it.second, it.first) }
+        TeacherToolFailTips(result) { result = null }
         Spacer(Modifier.height(24.dp))
     }
 }
