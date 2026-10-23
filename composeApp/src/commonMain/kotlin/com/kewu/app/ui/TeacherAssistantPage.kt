@@ -23,8 +23,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -58,8 +56,11 @@ import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.defaultKewuHighlight
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -71,7 +72,7 @@ import kotlinx.coroutines.launch
 // 教师可随时在底部输入框提问，AI 先用本地规则 mock 回答（按关键词匹配学情数据），
 // 后端问答接口就绪后替换 answer() 实现即可（接入点已标注）。
 //
-// 组件语言与学生端小悟一致：AI coui 毛玻璃气泡（标签行+内容块）/ 用户 M3 primary 气泡 /
+// 组件语言与学生端小悟一致：AI coui 毛玻璃气泡（标签行+内容块）/ 用户 coui Surface 品牌色气泡 /
 // 液态玻璃输入框常驻导航栏上方（bottom 118dp 兜底 + 根 imePadding 随键盘上移）。
 
 private data class WatchStudent(val name: String, val reason: String, val kind: Int) // 0=退步 1=风险 2=关注
@@ -87,7 +88,7 @@ private data class TaMsg(val isUser: Boolean, val blocks: List<TaBlock>)
 
 @Composable
 fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val pageBackdrop = rememberGlassBackdrop()
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -124,6 +125,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         assignmentCount = assignments?.size ?: 0
         // 控制台聚合：待批阅红点数（2026-10-21 接入，简报用）
         pendingReview = KewuApi.getTeacherConsole()?.pendingReview
+        // 跨课程待批阅聚合（2026-10-23）：简报里补「紧急 X 份 + 建议先改谁」
+        val pendingDetail = KewuApi.getPendingReview()
         val analytics: Analytics? = courses?.firstOrNull()?.let { KewuApi.getAnalytics(it.id) }
         weakPoints = analytics?.weakPoints.orEmpty()
         mastery = analytics?.knowledgeMastery.orEmpty()
@@ -165,6 +168,13 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             add(TaBlock.Text("${greetingByHour()}，${teacherName}！我是小悟，先给你今天的教学简报："))
             add(TaBlock.Text("课程 $courseCount 门 · 作业 $assignmentCount 份 · 重点关注 ${watchList.size} 人" +
                 (pendingReview?.let { " · 待批阅 $it 份" } ?: ""), emphasis = true))
+            // 紧急批阅提示：聚合为 null 或 total=0 不出这句；items 按服务端优先级排序，取前 2 名
+            pendingDetail?.takeIf { it.total > 0 }?.let { pr ->
+                val top = pr.items.take(2).joinToString("、") { item ->
+                    item.studentName + (item.reasons.firstOrNull()?.let { "（$it）" } ?: "")
+                }
+                add(TaBlock.Text("其中紧急 ${pr.urgentCount} 份" + (if (top.isNotEmpty()) "，建议先改：$top" else "")))
+            }
             if (attStats != null) {
                 add(TaBlock.Text("最近签到：应到 ${attStats!!.expected} · 实到 ${attStats!!.checked} · " +
                     "签到率 ${(attStats!!.checkRate * 100).toInt()}%"))
@@ -247,13 +257,13 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(cs.background)) {
-        // 背景采样层（玻璃气泡的采样源，与气泡平级）
+    Box(Modifier.fillMaxSize().background(cs.surface)) {
+        // 背景采样层（玻璃气泡的采样源，与气泡平级；底色 = coui 页面灰底 surface）
         Box(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.background),
+                .background(cs.surface),
         )
         Column(Modifier.fillMaxSize().imePadding()) {
             // ── AI 人格区（与学生端小悟同款语言） ──
@@ -278,16 +288,9 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                         Box(Modifier.size(7.dp).background(KewuGreen, CircleShape))
                     }
                     Spacer(Modifier.height(2.dp))
-                    Text("KEWU AI · 学情分析", color = cs.onSurfaceVariant, fontSize = 11.5.sp)
+                    Text("KEWU AI · 学情分析", color = cs.onSurfaceSecondary, fontSize = 11.5.sp)
                 }
-                Box(
-                    Modifier
-                        .clip(RoundedCornerShape(7.dp))
-                        .background(cs.primaryContainer)
-                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                ) {
-                    Text("主动播报", color = cs.onPrimaryContainer, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
+                KewuTag("主动播报", color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer)
             }
 
             // ── 对话列 ──
@@ -303,9 +306,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 }
                 if (!dataReady && snapshot.isEmpty()) {
                     item {
-                        Box(Modifier.fillMaxWidth().padding(40.dp), contentAlignment = Alignment.Center) {
-                            Text("小悟正在整理今日学情…", color = cs.onSurfaceVariant, fontSize = 13.sp)
-                        }
+                        KewuLoading(Modifier.padding(top = 12.dp), text = "小悟正在整理今日学情…")
                     }
                 }
             }
@@ -325,18 +326,15 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
 @Composable
 private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     if (msg.isUser) {
-        // 用户：M3 品牌蓝气泡（右对齐，与学生端同款）
+        // 用户：coui Surface 品牌蓝气泡（右对齐，与学生端同款）
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(KewuBlue)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-            ) {
-                msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
-                    Text(t.s, color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp)
+            Surface(shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
+                        Text(t.s, color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp)
+                    }
                 }
             }
         }
@@ -350,19 +348,17 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
                 tintAlpha = 0.30f,
                 modifier = Modifier
                     .fillMaxWidth(0.88f)
-                    .border(1.dp, cs.outlineVariant, RoundedCornerShape(20.dp)),
+                    .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp)),
             ) {
                 Column(Modifier.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("小悟", color = KewuGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(6.dp))
-                        Box(
-                            Modifier
-                                .clip(RoundedCornerShape(5.dp))
-                                .background(KewuGreen.copy(alpha = 0.16f))
-                                .padding(horizontal = 5.dp, vertical = 1.dp),
-                        ) {
-                            Text("KEWU AI", color = KewuGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                        Surface(shape = RoundedCornerShape(5.dp), color = KewuGreen.copy(alpha = 0.16f)) {
+                            Text(
+                                "KEWU AI", color = KewuGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                            )
                         }
                     }
                     Spacer(Modifier.height(8.dp))
@@ -371,7 +367,7 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
                             is TaBlock.Text -> {
                                 Text(
                                     block.s,
-                                    color = if (block.emphasis) cs.onSurface else cs.onSurfaceVariant,
+                                    color = if (block.emphasis) cs.onSurface else cs.onSurfaceSecondary,
                                     fontSize = 13.5.sp,
                                     fontWeight = if (block.emphasis) FontWeight.SemiBold else FontWeight.Normal,
                                     lineHeight = 20.sp,
@@ -380,34 +376,36 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
                             }
                             is TaBlock.Students -> {
                                 block.list.forEach { w ->
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = cs.secondaryContainer,
+                                    ) {
                                     Row(
-                                        Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(cs.surfaceVariant.copy(alpha = 0.6f))
-                                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                                        Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                     ) {
                                         Column(Modifier.weight(1f)) {
                                             Text(w.name, color = cs.onSurface, fontSize = 13.5.sp,
                                                 fontWeight = FontWeight.Medium)
-                                            Text(w.reason, color = cs.onSurfaceVariant, fontSize = 11.5.sp,
+                                            Text(w.reason, color = cs.onSurfaceSecondary, fontSize = 11.5.sp,
                                                 maxLines = 2, lineHeight = 15.sp)
                                         }
                                         Spacer(Modifier.width(8.dp))
-                                        StatusTag(
+                                        KewuTag(
                                             when (w.kind) { 0 -> "退步"; 1 -> "风险"; else -> "需关注" },
                                             when (w.kind) {
                                                 0 -> cs.errorContainer
                                                 1 -> Color(0xFFFFB300).copy(alpha = 0.2f)
-                                                else -> cs.primaryContainer
+                                                else -> cs.tertiaryContainer
                                             },
                                             when (w.kind) {
                                                 0 -> cs.onErrorContainer
                                                 1 -> Color(0xFF8A5A00)
-                                                else -> cs.onPrimaryContainer
+                                                else -> cs.onTertiaryContainer
                                             },
                                         )
+                                    }
                                     }
                                     Spacer(Modifier.height(6.dp))
                                 }
@@ -415,13 +413,11 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
                             is TaBlock.Chips -> {
                                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                     block.list.forEach { c ->
-                                        Box(
-                                            Modifier
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(cs.primaryContainer)
-                                                .padding(horizontal = 9.dp, vertical = 4.dp),
-                                        ) {
-                                            Text(c, color = cs.onPrimaryContainer, fontSize = 11.5.sp, maxLines = 1)
+                                        Surface(shape = RoundedCornerShape(8.dp), color = cs.tertiaryContainer) {
+                                            Text(
+                                                c, color = cs.onTertiaryContainer, fontSize = 11.5.sp, maxLines = 1,
+                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                            )
                                         }
                                     }
                                 }
@@ -445,7 +441,7 @@ private fun TaInputBar(
     onInput: (String) -> Unit,
     onSend: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Row(
         Modifier
             .fillMaxWidth()
@@ -462,7 +458,7 @@ private fun TaInputBar(
                 tintAlpha = 0.34f,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, cs.outlineVariant, RoundedCornerShape(26.dp)),
+                    .border(1.dp, cs.dividerLine, RoundedCornerShape(26.dp)),
             ) {
                 Box(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
                     BasicTextField(
@@ -475,7 +471,7 @@ private fun TaInputBar(
                             Box(Modifier.fillMaxWidth()) {
                                 if (input.isEmpty()) {
                                     Text("问小悟：谁退步了 / 作业质量 / 薄弱知识点…",
-                                        color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 14.sp)
+                                        color = cs.onSurfaceSecondary.copy(alpha = 0.7f), fontSize = 14.sp)
                                 }
                                 inner()
                             }
@@ -492,7 +488,7 @@ private fun TaInputBar(
 /** 发送钮：46dp 液态玻璃圆钮（magnify 透镜感 + 品牌绿芯 + 纸飞机），横向拉伸式按压回弹。 */
 @Composable
 private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     var pressed by remember { mutableStateOf(false) }
     val onClickState = rememberUpdatedState(onClick)
     val scaleV by androidx.compose.animation.core.animateFloatAsState(
@@ -521,14 +517,14 @@ private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> 
             highlight = defaultKewuHighlight(false),
             modifier = Modifier
                 .fillMaxSize()
-                .border(1.dp, cs.outlineVariant, CircleShape),
+                .border(1.dp, cs.dividerLine, CircleShape),
         ) {
             // 绿芯（白图标在白底上不可见的修复，与学生端 SendBtn 同款思路）
             Box(
                 Modifier
                     .fillMaxSize()
                     .padding(5.dp)
-                    .background(if (enabled) KewuGreen else cs.surfaceVariant, CircleShape),
+                    .background(if (enabled) KewuGreen else cs.secondaryContainer, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
                 Canvas(Modifier.size(17.dp)) {
@@ -541,7 +537,7 @@ private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> 
                         lineTo(w * 0.42f, h * 0.58f)
                         close()
                     }
-                    drawPath(p, if (enabled) Color(0xFF0B3B26) else cs.onSurfaceVariant)
+                    drawPath(p, if (enabled) Color(0xFF0B3B26) else cs.onSurfaceSecondary)
                 }
             }
         }

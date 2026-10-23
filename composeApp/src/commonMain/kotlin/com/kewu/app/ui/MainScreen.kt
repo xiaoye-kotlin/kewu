@@ -29,8 +29,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlin.math.roundToInt
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.basic.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -65,7 +65,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.material3.MaterialTheme
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuBlue
 import com.kewu.app.haptic
@@ -84,7 +84,7 @@ import kotlinx.coroutines.launch
 /**
  * 底部导航栏的一个 tab。
  *
- * ★ 配色约定（用户要求）：**页面背景一律走 `MaterialTheme.colorScheme`，不允许自己造背景色**
+ * ★ 配色约定（用户要求）：**页面背景一律走主题色（2026-10-23 起 `COUITheme.colorScheme`），不允许自己造背景色**
  * （原来每个 tab 一套硬编码渐变已全部去掉）。所以这里只留索引和文字。
  */
 // internal：教师端 TeacherMainScreen 复用同一套液态玻璃导航（index 决定自绘图标形状）
@@ -211,7 +211,7 @@ fun MainScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background), // 全 app 底色走 M3，不自造色
+            .background(COUITheme.colorScheme.surface), // 全 app 底色走 coui 页面灰底，不自造色
     ) {
         Column(
             Modifier
@@ -278,7 +278,7 @@ fun MainScreen(
                 .fillMaxWidth()
                 .height(24.dp)
                 .align(Alignment.BottomCenter)
-                .background(MaterialTheme.colorScheme.background),
+                .background(COUITheme.colorScheme.surface),
         )
         AppleLiquidGlassNavBar(
             items = NAV_ITEMS,
@@ -351,21 +351,26 @@ fun MainScreen(
 
 @Composable
 private fun TopBar(modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
+    // coui 化：顶栏底 = coui 白卡色 surfaceContainer（原 M3 surface 白），品牌方块走 coui Surface
     Box(
         modifier
             .fillMaxWidth()
             .height(64.dp)
-            .background(cs.surface),
+            .background(cs.surfaceContainer),
         contentAlignment = Alignment.CenterStart,
     ) {
         Row(Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .size(36.dp)
-                    .background(cs.primary, RoundedCornerShape(10.dp)),
-                contentAlignment = Alignment.Center,
-            ) { Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold) }
+            Surface(
+                modifier = Modifier.size(36.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = cs.primary,
+                contentColor = cs.onPrimary,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold)
+                }
+            }
             Spacer(Modifier.width(12.dp))
             Text("课悟 · Kewu", color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
         }
@@ -402,17 +407,17 @@ private fun TabContent(
         return
     }
     // 兜底（理论上不会到这）：纯色背景占位
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Box(
         Modifier
             .fillMaxSize()
-            .background(cs.background),
+            .background(cs.surface),
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(item.label, color = cs.onSurface, fontSize = 42.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(10.dp))
-            Text("内容区域", color = cs.onSurfaceVariant, fontSize = 15.sp)
+            Text("内容区域", color = cs.onSurfaceSecondary, fontSize = 15.sp)
         }
     }
 }
@@ -973,8 +978,8 @@ private fun NavTab(
     tabCenterX: Float = 0f,  // 该 tab 中心 x（Row 坐标）
     tabLeftX: Float = 0f,    // 该 tab 左缘 x（Row 坐标）：文字染色 clipRect 需要把 Row 坐标换算到 tab 局部
 ) {
-    // 未选中 = M3 的 onSurfaceVariant；选中 = KewuBlue（品牌强调色，不是背景色）
-    val baseColor = if (selected) KewuBlue else MaterialTheme.colorScheme.onSurfaceVariant
+    // 未选中 = coui 次级文字色 onSurfaceSecondary；选中 = KewuBlue（品牌强调色，不是背景色）
+    val baseColor = if (selected) KewuBlue else COUITheme.colorScheme.onSurfaceSecondary
     val scale by animateFloatAsState(
         targetValue = if (selected) 1.12f else 1f,
         animationSpec = spring(dampingRatio = 0.7f, stiffness = 420f),
