@@ -21,9 +21,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,15 +48,23 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
-import com.kewu.app.hapticClickable
 import com.kewu.app.platformActivity
 import com.kewu.app.requestCameraPermission
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.ButtonDefaults
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.basic.TextButton
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Back
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * 相机扫码视图（平台 actual）。
@@ -113,6 +118,9 @@ private sealed interface ScanState {
  *
  * coui 安全：本页自建 pageBackdrop（与 AttendanceDetailScreen 同模式），
  * 玻璃卡全部是采样者，绝不裹 alpha/graphicsLayer；相机 PreviewView 不是采样者，任意层都可放。
+ *
+ * 2026-10-23 coui 化：玻璃件（顶栏胶囊 / 取景环 / 提示卡 / 结果卡）全部保留，
+ * 玻璃里的文字 / 返回图标 / 转圈 / 文字按钮换 coui 原生件，配色读 [COUITheme]。
  */
 @Composable
 fun ScanPage(
@@ -121,7 +129,7 @@ fun ScanPage(
     onDone: () -> Unit,
     onOpenCodeCheckIn: (sessionId: String, code: String) -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val pageBackdrop = rememberGlassBackdrop()
     val scope = rememberCoroutineScope()
 
@@ -161,12 +169,16 @@ fun ScanPage(
         lastSessionId = sid
         lastCode = code
         scope.launch {
+            // 二维码里只有 sid：先轻查一次会话拿 courseId（接口会顺带写 8081 简易签到缓存）；
+            // 查不到 / 超时就不传，不阻塞签到主流程。
+            val courseId = withTimeoutOrNull(2_000L) { KewuApi.getAttendance(sid) }?.courseId?.ifBlank { null }
             val err = KewuApi.attendanceCheckIn(
                 id = sid,
                 studentId = KewuApi.username ?: "",
                 studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
                 code = code.ifBlank { null },
                 latitude = 0.0, longitude = 0.0,
+                courseId = courseId,
             )
             state = if (err == null) ScanState.Success(sid) else ScanState.Error(err)
         }
@@ -178,7 +190,7 @@ fun ScanPage(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.background),
+                .background(cs.surface),
         )
 
         // 相机预览（授权后才挂；被拒 / 非 Android 平台是黑底）
@@ -200,7 +212,8 @@ fun ScanPage(
             ScanFrame(pageBackdrop, Modifier.size(FrameSize))
         }
 
-        // 顶栏：返回 + 标题（玻璃胶囊）
+        // 顶栏：返回 + 标题（玻璃胶囊保留——叠在相机画面上，coui SmallTopAppBar 的透明底会看不清；
+        //   胶囊里的返回符号换 coui Back 图标）
         Row(
             Modifier
                 .fillMaxWidth()
@@ -217,7 +230,7 @@ fun ScanPage(
                 onClick = onBack,
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("‹", color = cs.onSurface, fontSize = 26.sp, fontWeight = FontWeight.SemiBold)
+                    Icon(COUIIcons.Back, contentDescription = "返回", tint = cs.onSurface, modifier = Modifier.size(22.dp))
                 }
             }
             Spacer(Modifier.width(12.dp))
@@ -266,13 +279,9 @@ fun ScanPage(
                     )
                     if (state is ScanState.Scanning && fallbackSessionId != null) {
                         Spacer(Modifier.height(10.dp))
-                        Text(
-                            "相机不可用？输入暗号签到",
-                            color = KewuGreen,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.hapticClickable { onOpenCodeCheckIn(fallbackSessionId, "") },
-                        )
+                        ScanTextAction("相机不可用？输入暗号签到", primary = false) {
+                            onOpenCodeCheckIn(fallbackSessionId, "")
+                        }
                     }
                 }
             }
@@ -281,7 +290,7 @@ fun ScanPage(
         // 中部结果卡：提交中 / 成功 / 失败
         when (val s = state) {
             is ScanState.Submitting -> ScanStatusCard(pageBackdrop) {
-                CircularProgressIndicator(color = KewuGreen, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+                InfiniteProgressIndicator(color = KewuGreen, size = 36.dp, strokeWidth = 3.dp)
                 Spacer(Modifier.height(12.dp))
                 Text("正在签到…", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             }
@@ -290,19 +299,19 @@ fun ScanPage(
                 Spacer(Modifier.height(12.dp))
                 Text("签到成功", color = KewuGreen, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("即将打开签到详情", color = cs.onSurfaceVariant, fontSize = 13.sp)
+                Text("即将打开签到详情", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             }
             is ScanState.Error -> ScanStatusCard(pageBackdrop) {
                 Text("签到失败", color = cs.error, fontSize = 18.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(6.dp))
-                Text(s.message, color = cs.onSurfaceVariant, fontSize = 13.sp, textAlign = TextAlign.Center)
+                Text(s.message, color = cs.onSurfaceSecondary, fontSize = 13.sp, textAlign = TextAlign.Center)
                 Spacer(Modifier.height(14.dp))
                 Row {
-                    ScanTextAction("重试", KewuGreen) { state = ScanState.Scanning }
+                    ScanTextAction("重试", primary = true) { state = ScanState.Scanning }
                     val codeSid = lastSessionId ?: fallbackSessionId
                     if (codeSid != null) {
-                        Spacer(Modifier.width(24.dp))
-                        ScanTextAction("输入暗号签到", cs.onSurfaceVariant) {
+                        Spacer(Modifier.width(12.dp))
+                        ScanTextAction("输入暗号签到", primary = false) {
                             onOpenCodeCheckIn(codeSid, lastCode)
                         }
                     }
@@ -329,15 +338,15 @@ fun ScanPage(
                         if (camGranted == false) {
                             Spacer(Modifier.height(14.dp))
                             Row {
-                                ScanTextAction("授权相机", KewuGreen) {
+                                ScanTextAction("授权相机", primary = true) {
                                     val act = platformActivity()
                                     if (act == null) camGranted = false
                                     else requestCameraPermission(act) { camGranted = it }
                                 }
                                 val codeSid = lastSessionId ?: fallbackSessionId
                                 if (codeSid != null) {
-                                    Spacer(Modifier.width(24.dp))
-                                    ScanTextAction("输入暗号签到", cs.onSurfaceVariant) {
+                                    Spacer(Modifier.width(12.dp))
+                                    ScanTextAction("输入暗号签到", primary = false) {
                                         onOpenCodeCheckIn(codeSid, lastCode)
                                     }
                                 }
@@ -365,15 +374,19 @@ private fun ScanStatusCard(backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop
     }
 }
 
-/** 结果卡里的文字按钮（无背景，纯文字 + 轻震动）。 */
+/**
+ * 玻璃卡里的操作按钮：coui 小号 [TextButton]（2026-10-23 由「纯文字 + clickable」改来）。
+ * [primary] = 主色实心（重试 / 授权相机）；否则 coui 灰底次按钮（输入暗号签到）。
+ */
 @Composable
-private fun ScanTextAction(label: String, color: Color, onClick: () -> Unit) {
-    Text(
-        label,
-        color = color,
-        fontSize = 14.sp,
-        fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.hapticClickable(onClick = onClick),
+private fun ScanTextAction(label: String, primary: Boolean, onClick: () -> Unit) {
+    TextButton(
+        text = label,
+        onClick = { haptic(HapticKind.Tick); onClick() },
+        colors = if (primary) ButtonDefaults.textButtonColorsPrimary() else ButtonDefaults.textButtonColors(),
+        minHeight = ButtonDefaults.MinHeightSmall,
+        minWidth = ButtonDefaults.MinWidthSmall,
+        insideMargin = ButtonDefaults.InsideMarginSmall,
     )
 }
 

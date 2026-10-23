@@ -40,12 +40,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -88,13 +83,26 @@ import com.kewu.app.KewuGreen
 import com.kewu.app.RecordingManager
 import com.kewu.app.RecordingStatus
 import com.kewu.app.haptic
-import com.kewu.app.hapticClickable
 import com.kewu.app.platformActivity
 import com.kewu.app.requestAudioPermission
+import com.kewu.app.todayCn
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.ButtonDefaults
+import io.github.suqi8.coui.kmp.basic.Card
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.IconButton
+import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
+import io.github.suqi8.coui.kmp.basic.LinearProgressIndicator
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.basic.TextButton
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
+import io.github.suqi8.coui.kmp.icon.extended.Mic
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -159,6 +167,9 @@ private fun mockHistory(): List<Course> = listOf(
 )
 
 // ───────────────────────── 形状：MIUI squircle ─────────────────────────
+//
+// 2026-10-23 coui 化：本页三卡 / MoreBar 已改用 coui 原生 `Card`（自带 squircle 与灰底白卡分层），
+// 不再调用下面这组自绘件；仍有其他页面（任务 / 教师控制台 / 笔记…）引用，故保留签名与实现。
 
 /**
  * 生成 MIUI / miuix 风格的「squircle」圆角路径（超椭圆角）。
@@ -426,9 +437,10 @@ private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE }
 // ───────────────────────── 课堂主页 ─────────────────────────
 
 /**
- * 课堂主页：整体照 Mishka（miuix）的版式 —— squircle 卡片、12.dp 间距、
+ * 课堂主页：整体照 Mishka（miuix）的版式 —— 12.dp 间距、
  * 左侧大状态卡 + 右侧两张堆叠小卡、卡内 16.dp 内边距、超大水印图形。
- * 配色走 [MaterialTheme] 默认 colorScheme，不自定义背景色。
+ * 2026-10-23 coui 化：白卡 = coui `Card`、文字 / 按钮 / 进度 / 标签 = coui 原生件，
+ * 配色走 [COUITheme] colorScheme（灰底白卡），不自定义背景色；课程卡 / 签到卡 / 录音浮层仍是液态玻璃。
  *
  * @param onGoToTab 跳转到主界面某个 tab（头像 → 「我的」= 3）
  * @param onNavHide 滚动方向回调：true = 向下浏览（收起底部导航栏），false = 回顶（展开）
@@ -493,12 +505,12 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var attendanceId by remember { mutableStateOf<String?>(null) }
 
     Box(Modifier.fillMaxSize()) {
-        // 背景层：M3 默认背景色，是玻璃的采样源
+        // 背景层：coui 页面灰底（surface），是玻璃的采样源
         Box(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(MaterialTheme.colorScheme.background),
+                .background(COUITheme.colorScheme.surface),
         )
         // 下钻路由：签到详情 / 课表页 / 课堂主页。
         // ★ 共享轴滑页（与「我的」页子路由同款，仅 slide、无 fade）：旧版 when 直接硬切，
@@ -624,7 +636,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
 
 @Composable
 private fun GreetingBar(name: String, onAvatar: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Row(
         Modifier
             .fillMaxWidth()
@@ -632,7 +644,7 @@ private fun GreetingBar(name: String, onAvatar: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(Modifier.weight(1f)) {
-            Text(rememberGreeting(), color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+            Text(rememberGreeting(), color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
             Text(
                 name, color = cs.onSurface, fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1,
@@ -654,19 +666,21 @@ private fun rememberGreeting(): String {
     }
 }
 
+/** 头像：coui [IconButton]（圆形浅灰底 + 姓氏首字），点按跳「我的」。 */
 @Composable
 private fun Avatar(name: String, onAvatar: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .size(36.dp)
-            .clip(CircleShape)
-        .background(cs.secondaryContainer)
-        .hapticClickable { onAvatar() },
-        contentAlignment = Alignment.Center,
+    val cs = COUITheme.colorScheme
+    IconButton(
+        onClick = { haptic(HapticKind.Tick); onAvatar() },
+        backgroundColor = cs.secondaryContainer,
+        cornerRadius = 18.dp,
+        minHeight = 36.dp,
+        minWidth = 36.dp,
     ) {
-        Text(name.firstOrNull()?.toString() ?: "我", color = cs.onSecondaryContainer,
-            fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        Text(
+            name.firstOrNull()?.toString() ?: "我", color = cs.onSecondaryVariant,
+            fontWeight = FontWeight.Bold, fontSize = 15.sp,
+        )
     }
 }
 
@@ -675,6 +689,9 @@ private fun Avatar(name: String, onAvatar: () -> Unit) {
 /**
  * 左：大状态卡（超大水印「大半圆+绿勾」+ 状态标题 + 两行副文本）
  * 右：两张堆叠小卡（标签 13.sp + 数值 20.sp Bold）—— 对齐 Mishka 的 statusSection。
+ *
+ * 2026-10-23 coui 化：三卡改 coui 原生 [Card]（coui 白卡 surfaceContainer 叠在页面灰底 surface 上，
+ * 天然分层），**去掉 squircleShadow 自绘软阴影**（15.7 的阴影是当年「白底白卡」的补救，灰底下不再需要）。
  *
  * @param todayCount 今日课程数（不随「查看全部」展开变化）
  * @param onTodayCourses 点「今日课程」→ 进课表页看排课
@@ -688,16 +705,13 @@ private fun StatusSection(
     onTodayCourses: () -> Unit,
     onHomework: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val live = courses.firstOrNull { it.status == CourseStatus.LIVE }
     val done = courses.count { it.status == CourseStatus.DONE }
     // 下节课（未上课时直接显示教室，用户要求：不要"下节课在哪里上"这种话术）
     val next = courses.firstOrNull { it.status == CourseStatus.PENDING || it.status == CourseStatus.SUMMARIZING }
     // 状态语义色：**正在上课 = 琥珀黄「!」；无课 = 品牌绿大半圆+勾**（用户 2026-10-19 明确要求这种对应）
     val statusTint = if (live != null) Color(0xFFFFB300) else KewuGreen
-    // 用户 2026-10-19：三卡原来用 surfaceVariant 偏灰 → 改近白（surface），
-    // 白底下靠 squircleShadow 软阴影区分层次（阴影层与卡片层是兄弟节点，见下方）
-    val statusContainer = cs.surface
 
     Row(
         modifier = Modifier
@@ -708,64 +722,56 @@ private fun StatusSection(
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // 左侧大状态卡：外层 Box 只提供尺寸；软阴影层与卡片层做兄弟（阴影不裁切才能渗出卡片边界）
-        Box(
-            Modifier
-                .weight(1f)
-                .fillMaxHeight(),
+        // 左侧大状态卡：coui Card（squircleSurface 本身就按卡片轮廓遮罩子内容）。
+        // insideMargin 置 0，16dp 内边距挪到文字列上——水印要贴着卡片原点布局、越界部分被卡片裁掉。
+        Card(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            cornerRadius = 22.dp,
+            insideMargin = PaddingValues(0.dp),
+            colors = kewuCardColors(),
         ) {
-            // 底层：squircle 软阴影（白卡片在白底上的层次感全靠它）
-            Box(Modifier.fillMaxSize().squircleShadow(22.dp))
-            // 上层：卡片本体。clip=false——裁剪改由卡内中间层做（见下），
-            // 否则 clipToBounds 会把上面这层投影一起裁掉。
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .squircleCard(22.dp, statusContainer, clip = false),
-            ) {
-                // 内容裁剪层：替代原先 squircleCard 内部的 clipToBounds。
-                // ★ 裁剪节点必须留在卡片原点：水印子节点带 offset，若把 clip 挂到
-                //   被 offset 的节点上，裁剪框会跟着一起移走，水印就裁不掉了。
-                Box(Modifier.fillMaxSize().clipToBounds()) {
-                    // 超大水印：170dp 的大半圆+符号，offset 到右下角、被卡片裁掉大半。
-                    // 注意用 **lambda 版 offset**（px，纯视觉平移）：Dp 版 `offset(x, y)` 会把
-                    // x/y 加进 min intrinsic 尺寸，导致 `Row(height = IntrinsicSize.Min)` 被撑高 45dp。
-                    Box(
-                        Modifier
-                            .fillMaxSize()
-                            .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
-                        contentAlignment = Alignment.BottomEnd,
-                    ) {
-                        // 无课 → 品牌绿大半圆+勾；正在上课 → 琥珀黄大半圆+「!」（用户 2026-10-19 要求）
-                        // 水印绿用深绿（2026-10-19 用户反馈：品牌荧光绿 α0.30 太浅，看不清）
-                        if (live != null) {
-                            // ★ 2026-10-21：alpha 0.30→0.45 —— 点在琥珀 tinted 卡上太浅看不清（用户反馈）
-                            ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.45f)
-                        } else {
-                            ThreeQuarterCheck(size = 170.dp, color = WatermarkGreen, alpha = 0.55f)
-                        }
+            // 内容裁剪层（双保险：coui 遮罩之外再挂一层矩形 clipToBounds）。
+            // ★ 裁剪节点必须留在卡片原点：水印子节点带 offset，若把 clip 挂到
+            //   被 offset 的节点上，裁剪框会跟着一起移走，水印就裁不掉了。
+            Box(Modifier.fillMaxSize().clipToBounds()) {
+                // 超大水印：170dp 的大半圆+符号，offset 到右下角、被卡片裁掉大半。
+                // 注意用 **lambda 版 offset**（px，纯视觉平移）：Dp 版 `offset(x, y)` 会把
+                // x/y 加进 min intrinsic 尺寸，导致 `Row(height = IntrinsicSize.Min)` 被撑高 45dp。
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
+                    contentAlignment = Alignment.BottomEnd,
+                ) {
+                    // 无课 → 品牌绿大半圆+勾；正在上课 → 琥珀黄大半圆+「!」（用户 2026-10-19 要求）
+                    // 水印绿用深绿（2026-10-19 用户反馈：品牌荧光绿 α0.30 太浅，看不清）
+                    if (live != null) {
+                        // ★ 2026-10-21：alpha 0.30→0.45 —— 点在琥珀 tinted 卡上太浅看不清（用户反馈）
+                        ExclaimMark(size = 170.dp, color = statusTint, alpha = 0.45f)
+                    } else {
+                        ThreeQuarterCheck(size = 170.dp, color = WatermarkGreen, alpha = 0.55f)
                     }
-                    Column(Modifier.fillMaxSize().padding(16.dp)) {
-                Text(
-                    if (live != null) "！当前正在上课" else "无课",
-                    color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    if (live != null) "${live.name} · ${live.room}"
-                    else (next?.let { "下节课：${it.name} · ${it.room}" } ?: "今日课程已全部结束"),
-                    color = cs.onSurfaceVariant, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                )
-                Text(
-                    when {
-                        loading -> "正在同步课程…"
-                        live != null -> "已总结 $done / ${courses.size} 节"
-                        todayCount == 0 -> "今天没有排课"
-                        else -> "今天共 $todayCount 节课"
-                    },
-                    color = cs.onSurfaceVariant, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                )
-                    }
+                }
+                Column(Modifier.fillMaxSize().padding(16.dp)) {
+                    Text(
+                        if (live != null) "！当前正在上课" else "无课",
+                        color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        if (live != null) "${live.name} · ${live.room}"
+                        else (next?.let { "下节课：${it.name} · ${it.room}" } ?: "今日课程已全部结束"),
+                        color = cs.onSurfaceSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                    )
+                    Text(
+                        when {
+                            loading -> "正在同步课程…"
+                            live != null -> "已总结 $done / ${courses.size} 节"
+                            todayCount == 0 -> "今天没有排课"
+                            else -> "今天共 $todayCount 节课"
+                        },
+                        color = cs.onSurfaceSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                    )
                 }
             }
         }
@@ -790,8 +796,8 @@ private fun StatusSection(
 }
 
 /**
- * Mishka 堆叠小卡：标签 + 大数值。
- * [onClick] 非空时整卡可点，并在右侧画一个小箭头提示「可进入」。
+ * Mishka 堆叠小卡：标签 + 大数值（coui [Card]，可点时走 COUI 按压 Tint）。
+ * [onClick] 非空时整卡可点，并在右侧放一个 coui 箭头图标提示「可进入」。
  */
 @Composable
 private fun MiniStatCard(
@@ -800,43 +806,28 @@ private fun MiniStatCard(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
 ) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        modifier
-            .then(if (onClick != null) Modifier.hapticClickable { onClick() } else Modifier),
+    val cs = COUITheme.colorScheme
+    Card(
+        modifier = modifier,
+        cornerRadius = 22.dp,
+        insideMargin = PaddingValues(16.dp),
+        colors = kewuCardColors(),
+        onClick = onClick?.let { cb -> { haptic(HapticKind.Tick); cb() } },
     ) {
-        // 底层：squircle 软阴影（用户 2026-10-19：卡片改近白后，白底上的层次靠阴影）
-        Box(Modifier.fillMaxSize().squircleShadow(22.dp))
-        // 上层：近白卡片（surfaceVariant 偏灰 → surface；阴影层不裁切才能渗出边界，
-        // 所以卡片层保持默认 clip=true 也无所谓——小卡没有越界内容）
-        Box(
-            Modifier
-                .fillMaxSize()
-                .squircleCard(22.dp, cs.surface)
-                .padding(16.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(label, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                    Text(label, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
                     Spacer(Modifier.height(2.dp))
                     Text(value, color = cs.onSurface, fontSize = 20.sp, fontWeight = FontWeight.Bold, maxLines = 1)
                 }
                 if (onClick != null) {
                     Spacer(Modifier.width(6.dp))
-                    // 右侧小箭头（›）：弱提示「这张卡可以点」
-                    Canvas(Modifier.size(13.dp)) {
-                        val sw = size.width * 0.14f
-                        val p = Path().apply {
-                            moveTo(size.width * 0.35f, size.height * 0.2f)
-                            lineTo(size.width * 0.65f, size.height * 0.5f)
-                            lineTo(size.width * 0.35f, size.height * 0.8f)
-                        }
-                        drawPath(
-                            p, cs.onSurfaceVariant,
-                            style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round),
-                        )
-                    }
+                    // 右侧小箭头（coui ChevronForward）：弱提示「这张卡可以点」
+                    Icon(
+                        COUIIcons.ChevronForward, contentDescription = null,
+                        tint = cs.onSurfaceVariantSummary, modifier = Modifier.size(16.dp),
+                    )
                 }
             }
         }
@@ -852,10 +843,12 @@ private fun MiniStatCard(
  *   [RecordingManager]（原因与旧版泄漏详见该文件头注释）——旋屏（Activity
  *   重建）/ 切 tab（本 Composition 销毁）都不再中断录音或丢失状态，本
  *   Composable 只是观察者 + 发起点，不再持有任何 remember 录音状态。
+ *
+ * 玻璃外壳保留；内部文字 / 录音钮 / 进度条 / 重试钮已换 coui 原生件（2026-10-23）。
  */
 @Composable
 private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseInfo>?) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
 
     val activeCourse = courseInfos?.firstOrNull()
     val classId = activeCourse?.id
@@ -863,6 +856,15 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
 
     // 录音状态单源：单例 StateFlow（旋屏 / 切 tab / 页面销毁均不影响录音进程）
     val st = RecordingManager.status.collectAsState().value
+
+    // 课堂协同会话：RecordingManager 上传时带 sessionId = classSessionId(课程, 今天)，
+    // 同课同日的教师端 / 学生端落到同一会话由 8081 择优融合。这里只查一下会话是否存在，
+    // 存在就提示一行小字；查询失败 / 404 静默不显示。状态类型变化时（如上传成功后会话刚建立）重查一次。
+    var collabOn by remember(classId) { mutableStateOf(false) }
+    LaunchedEffect(classId, st::class) {
+        val cid = classId ?: return@LaunchedEffect
+        collabOn = KewuApi.getSession(KewuApi.classSessionId(cid, todayCn())) != null
+    }
 
     // 玻璃凝结入场（2026-10-18 动画统一改造）：初始 tint≈0 + 内容透明 = 不可见，
     // 240ms 后从零「长」出来，不再一进场就整卡出现、再突然滑一遍。
@@ -927,18 +929,29 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                         is RecordingStatus.Error -> st.msg
                         RecordingStatus.Idle -> "点击右侧按钮开始录音"
                     }
-                    Text(sub, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+                    Text(sub, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    if (collabOn) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "已加入课堂协同录音 · 老师端优先融合",
+                            color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1,
+                        )
+                    }
                 }
-                // 录音 / 停止按钮
-                Box(
-                    Modifier
-                        .size(48.dp)
-                        .clip(CircleShape)
-                        .background(if (st is RecordingStatus.Recording) cs.error else cs.primary)
-                        .hapticClickable { onRecordClick() },
-                    contentAlignment = Alignment.Center,
+                // 录音 / 停止按钮（coui IconButton 圆钮：待录 = 主色 + 麦克风；录音中 = error 红 + 停止方块）
+                IconButton(
+                    onClick = { onRecordClick() },
+                    backgroundColor = if (st is RecordingStatus.Recording) cs.error else cs.primary,
+                    cornerRadius = 24.dp,
+                    minHeight = 48.dp,
+                    minWidth = 48.dp,
                 ) {
-                    Text(if (st is RecordingStatus.Recording) "⏹" else "⏺", color = Color.White, fontSize = 20.sp)
+                    if (st is RecordingStatus.Recording) {
+                        // coui-icons 无「停止」图形，按通行语义画一枚白色圆角方块
+                        Box(Modifier.size(16.dp).clip(RoundedCornerShape(4.dp)).background(Color.White))
+                    } else {
+                        Icon(COUIIcons.Mic, contentDescription = "开始录音", tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
                 }
             }
 
@@ -946,9 +959,9 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
             when (st) {
                 is RecordingStatus.Uploading -> {
                     Spacer(Modifier.height(12.dp))
-                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth(), color = cs.primary)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(6.dp))
-                    Text("上传中…", color = cs.onSurfaceVariant, fontSize = 12.5.sp)
+                    Text("上传中…", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
                 }
                 is RecordingStatus.Success -> {
                     Spacer(Modifier.height(12.dp))
@@ -960,13 +973,14 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                         Text(st.msg, color = cs.error, fontSize = 12.5.sp, modifier = Modifier.weight(1f))
                         if (st.filePath != null) {
                             Spacer(Modifier.width(8.dp))
-                            Box(
-                                Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(cs.error)
-                                    .hapticClickable { haptic(HapticKind.Tick); RecordingManager.retryUpload() }
-                                    .padding(horizontal = 14.dp, vertical = 7.dp),
-                            ) { Text("重试", color = Color.White, fontSize = 12.5.sp, fontWeight = FontWeight.Bold) }
+                            TextButton(
+                                text = "重试",
+                                onClick = { haptic(HapticKind.Tick); RecordingManager.retryUpload() },
+                                colors = ButtonDefaults.textButtonColorsPrimary(color = cs.error),
+                                minHeight = ButtonDefaults.MinHeightSmall,
+                                minWidth = ButtonDefaults.MinWidthSmall,
+                                insideMargin = ButtonDefaults.InsideMarginSmall,
+                            )
                         }
                     }
                 }
@@ -981,7 +995,7 @@ private fun Waveform(active: Boolean = false) {
     val t by rememberInfiniteTransition().animateFloat(
         0f, 1f, infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     )
-    val color = MaterialTheme.colorScheme.primary
+    val color = COUITheme.colorScheme.primary
     Canvas(Modifier.size(36.dp, 26.dp)) {
         val n = 5
         val bw = size.width / (n * 2f)
@@ -1003,6 +1017,10 @@ private fun Waveform(active: Boolean = false) {
 
 // ───────────────────────── 课程卡片流 ─────────────────────────
 
+/**
+ * 课程卡：外壳保留液态玻璃（KewuGlassCard 是项目自研玻璃件，按「除液态玻璃外全部 coui」原则不替换），
+ * 卡内文字 / 标签 / 转圈换 coui 原生件。
+ */
 @Composable
 private fun CourseCard(course: Course, backdrop: LayerBackdrop, index: Int) {
     // 玻璃凝结入场：初始 tint≈0 + 内容透明（不可见）→ 错峰从零上浮「长」出来
@@ -1031,25 +1049,23 @@ private fun CourseCard(course: Course, backdrop: LayerBackdrop, index: Int) {
 
 @Composable
 private fun StatusBadge(status: CourseStatus) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     when (status) {
         // 已总结：标志性「四分之三圆 + 勾」
         CourseStatus.DONE -> ThreeQuarterCheck(size = 28.dp, color = KewuGreen)
         CourseStatus.LIVE -> {
+            // 呼吸圆点：coui 无 tertiary，改用主色（与「录音中」标签的 tertiaryContainer 主色浅底同色系）
             val pulse by rememberInfiniteTransition().animateFloat(
                 0.65f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse),
             )
             Canvas(Modifier.size(28.dp)) {
-                drawCircle(color = cs.tertiary.copy(alpha = 0.22f * pulse + 0.1f))
-                drawCircle(color = cs.tertiary, radius = size.width * 0.17f * pulse)
+                drawCircle(color = cs.primary.copy(alpha = 0.22f * pulse + 0.1f))
+                drawCircle(color = cs.primary, radius = size.width * 0.17f * pulse)
             }
         }
         CourseStatus.SUMMARIZING -> {
             Box(Modifier.size(28.dp), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = cs.primary, strokeWidth = 2.5.dp, strokeCap = StrokeCap.Round,
-                )
+                InfiniteProgressIndicator(color = cs.primary, size = 20.dp, strokeWidth = 2.5.dp)
             }
         }
         // 失败：同样的「大半圆外壳」，里面改成红色的叉（不用感叹号）
@@ -1057,7 +1073,7 @@ private fun StatusBadge(status: CourseStatus) {
         CourseStatus.PENDING -> {
             Canvas(Modifier.size(28.dp)) {
                 drawCircle(
-                    color = cs.onSurfaceVariant.copy(alpha = 0.45f),
+                    color = cs.onSurfaceSecondary.copy(alpha = 0.45f),
                     style = Stroke(width = size.width * 0.09f),
                 )
             }
@@ -1067,7 +1083,7 @@ private fun StatusBadge(status: CourseStatus) {
 
 @Composable
 private fun CourseContent(course: Course) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     // 标题行：课程名 + 时间（单行）
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Text(
@@ -1076,7 +1092,7 @@ private fun CourseContent(course: Course) {
         )
         if (course.time.isNotEmpty()) {
             Spacer(Modifier.width(8.dp))
-            Text(course.time, color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1)
+            Text(course.time, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
         }
     }
 
@@ -1091,16 +1107,16 @@ private fun CourseContent(course: Course) {
 
 @Composable
 private fun PendingBody(course: Course) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Spacer(Modifier.height(3.dp))
     MetaText("${course.room} · ${course.teacher}")
     Spacer(Modifier.height(8.dp))
-    StatusTag("未开始", cs.surfaceVariant, cs.onSurfaceVariant)
+    StatusTag("未开始", cs.secondaryContainer, cs.onSurfaceSecondary)
 }
 
 @Composable
 private fun LiveBody(course: Course) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Spacer(Modifier.height(3.dp))
     MetaText(course.room)
     Spacer(Modifier.height(8.dp))
@@ -1112,37 +1128,37 @@ private fun LiveBody(course: Course) {
 
 @Composable
 private fun DoneBody(course: Course) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Spacer(Modifier.height(3.dp))
     Text(
         course.summary.ifEmpty { "本节课暂无摘要" },
-        color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 2,
+        color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 2,
     )
     if (course.devices > 0 || course.aiReady) {
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (course.devices > 0) StatusTag("${course.devices} 台设备", cs.primaryContainer, cs.onPrimaryContainer)
-            if (course.aiReady) StatusTag("AI 已就绪", cs.primaryContainer, cs.onPrimaryContainer)
+            if (course.devices > 0) StatusTag("${course.devices} 台设备", cs.tertiaryContainer, cs.onTertiaryContainer)
+            if (course.aiReady) StatusTag("AI 已就绪", cs.tertiaryContainer, cs.onTertiaryContainer)
         }
     }
 }
 
 @Composable
 private fun SummarizingBody(course: Course) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Spacer(Modifier.height(3.dp))
     Text(
-        "AI 正在整理课堂纪要…", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
+        "AI 正在整理课堂纪要…", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1,
     )
     Spacer(Modifier.height(3.dp))
     Text(
-        course.estWait, color = cs.onSurfaceVariant.copy(alpha = 0.7f), fontSize = 12.sp, maxLines = 1,
+        course.estWait, color = cs.onSurfaceVariantSummary, fontSize = 12.sp, maxLines = 1,
     )
 }
 
 @Composable
 private fun FailedBody(course: Course) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Spacer(Modifier.height(3.dp))
     Text("录音上传不完整", color = cs.error, fontSize = 13.sp, maxLines = 1)
     Spacer(Modifier.height(8.dp))
@@ -1152,39 +1168,37 @@ private fun FailedBody(course: Course) {
 @Composable
 private fun MetaText(text: String) {
     Text(
-        text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
+        text, color = COUITheme.colorScheme.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1,
     )
 }
 
-/** Mishka 风格小标签：胶囊底 + 对应 on 色文字。 */
+/**
+ * 状态小标签（跨页共享，签名保留）：2026-10-23 起内部改走 coui [KewuTag]（coui Surface 胶囊 + coui Text）。
+ * [background] / [content] 由调用方按语义传 coui 色（如 tertiaryContainer / onTertiaryContainer）。
+ */
 @Composable
 internal fun StatusTag(label: String, background: Color, content: Color) {
-    Box(
-        Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(background)
-            .padding(horizontal = 9.dp, vertical = 4.dp),
-    ) {
-        Text(label, color = content, fontSize = 12.sp, maxLines = 1)
-    }
+    KewuTag(label, color = background, contentColor = content)
 }
 
+/** 「查看全部 / 收起」条：coui 可点 [Card]（按压 Tint），文字居中。 */
 @Composable
 private fun MoreBar(showAll: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        modifier
+    val cs = COUITheme.colorScheme
+    Card(
+        modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .squircleCard(16.dp, cs.surfaceVariant)
-            .hapticClickable { onClick() }
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center,
+            .padding(horizontal = 12.dp),
+        cornerRadius = 16.dp,
+        insideMargin = PaddingValues(vertical = 14.dp),
+        colors = kewuCardColors(),
+        onClick = { haptic(HapticKind.Tick); onClick() },
     ) {
         Text(
             if (showAll) "收起历史课程" else "查看全部课程",
-            color = cs.onSurfaceVariant, fontSize = 14.sp,
+            color = cs.onSurfaceSecondary, fontSize = 14.sp,
             fontWeight = FontWeight.Medium, maxLines = 1, textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
         )
     }
 }
@@ -1299,10 +1313,11 @@ internal fun Modifier.textRiseIn(delayMs: Int): Modifier {
  * 签到入口卡片 —— 当有进行中的签到（state=OPEN）时显示。
  * 整卡可点；身份分流由调用方按 [AttendanceSession.publisher] 与当前用户决定：
  * 教师（发布者本人）→ [AttendanceDetailScreen] 展示二维码；学生 → [ScanPage] 扫码。
+ * 外壳保留液态玻璃；内部标记圆 / 文字换 coui Surface / Text（2026-10-23）。
  */
 @Composable
 private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSession) -> Unit) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     var currentSession by remember { mutableStateOf<AttendanceSession?>(null) }
 
     // 获取当前进行中的签到会话（取第一门课的 OPEN 会话）
@@ -1341,15 +1356,16 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
                 .padding(20.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 左侧：醒目的进行中标记
-            Box(
-                Modifier
-                    .size(64.dp)
-                    .clip(CircleShape)
-                    .background(cs.primaryContainer),
-                contentAlignment = Alignment.Center,
+            // 左侧：醒目的进行中标记（coui Surface 圆，主色浅底 + 主色字）
+            Surface(
+                modifier = Modifier.size(64.dp),
+                shape = CircleShape,
+                color = cs.tertiaryContainer,
+                contentColor = cs.onTertiaryContainer,
             ) {
-                Text("签", color = cs.onPrimaryContainer, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("签", color = cs.onTertiaryContainer, fontSize = 26.sp, fontWeight = FontWeight.Bold)
+                }
             }
 
             Spacer(Modifier.width(16.dp))

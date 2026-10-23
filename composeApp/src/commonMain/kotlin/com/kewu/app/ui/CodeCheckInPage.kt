@@ -5,6 +5,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,9 +16,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,11 +43,15 @@ import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
-import com.kewu.app.hapticClickable
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.ButtonDefaults
+import io.github.suqi8.coui.kmp.basic.Card
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.basic.TextButton
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -57,7 +59,8 @@ import kotlinx.coroutines.launch
  * 学生端**暗号签到**独立页（扫码失败的兜底 / 相机不可用时的主路径）。
  *
  * 设计风格（按用户要求）：
- * - **coui = 整体版式**：页骨架 / 信息卡 / 问题卡 / 按钮都是 coui 语言（M3 配色、squircle、干净留白）。
+ * - **coui = 整体版式**：顶栏 [KewuTopBar] / 信息卡 / 问题卡（coui Card）/ 提交按钮（coui TextButton）/
+ *   加载与失败占位（KewuLoading / KewuEmpty），配色读 [COUITheme]（2026-10-23 全局 coui 化）。
  * - **液态玻璃 = 输入框**：暗号输入 / 随堂答案输入用 [KewuGlassCard] 玻璃容器（背景层顶部有蓝绿环境光晕，
  *   玻璃的模糊折射才看得出来）；成功弹层也用玻璃。
  *
@@ -71,7 +74,7 @@ fun CodeCheckInPage(
     onBack: () -> Unit,
     onDone: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val pageBackdrop = rememberGlassBackdrop()
     val scope = rememberCoroutineScope()
 
@@ -120,6 +123,8 @@ fun CodeCheckInPage(
                 code = code.trim(),
                 answer = s.quiz?.let { answer.trim().ifBlank { null } },
                 latitude = 0.0, longitude = 0.0,
+                // 带上课程 id：签到成功后接口顺带写 8081 简易签到缓存（空串视为拿不到，不传）
+                courseId = s.courseId.ifBlank { null },
             )
             submitting = false
             if (err == null) {
@@ -137,7 +142,7 @@ fun CodeCheckInPage(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.background),
+                .background(cs.surface),
         ) {
             Box(
                 Modifier
@@ -168,32 +173,27 @@ fun CodeCheckInPage(
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 96.dp),
         ) {
-            HubTopBar("暗号签到", onBack)
+            KewuTopBar("暗号签到", onBack = onBack)
             Spacer(Modifier.height(12.dp))
 
             when {
-                loadFailed -> Box(
-                    Modifier.fillMaxWidth().padding(48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("签到信息加载失败，请返回后重试", color = cs.onSurfaceVariant, fontSize = 14.sp)
-                }
-                session == null -> Box(
-                    Modifier.fillMaxWidth().padding(48.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = cs.primary, strokeWidth = 3.dp, modifier = Modifier.size(28.dp))
-                }
+                loadFailed -> KewuEmpty("签到信息加载失败，请返回后重试")
+                session == null -> KewuLoading()
                 else -> {
                     val s = session!!
 
-                    // ── 签到信息（coui 素卡） ──
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+                    // ── 签到信息（coui 白卡） ──
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        cornerRadius = 16.dp,
+                        insideMargin = PaddingValues(16.dp),
+                        colors = kewuCardColors(),
+                    ) {
                         Text(s.title, color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(6.dp))
                         Text(
                             "${s.publisher} 老师 · ${if (s.state == "OPEN") "进行中" else "已结束"}",
-                            color = cs.onSurfaceVariant,
+                            color = cs.onSurfaceSecondary,
                             fontSize = 13.sp,
                         )
                     }
@@ -216,24 +216,22 @@ fun CodeCheckInPage(
                         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
                             Text(
                                 "随堂问题",
-                                color = cs.onSurfaceVariant,
+                                color = cs.onSurfaceSecondary,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
                             )
                             Spacer(Modifier.height(6.dp))
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(14.dp))
-                                    .background(cs.surfaceVariant)
-                                    .padding(14.dp),
+                            // 问题卡：coui 白卡（原自绘圆角灰块）
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                cornerRadius = 14.dp,
+                                insideMargin = PaddingValues(14.dp),
+                                colors = kewuCardColors(),
                             ) {
-                                Column {
-                                    Text(q.question, color = cs.onSurface, fontSize = 14.sp, lineHeight = 20.sp)
-                                    if (q.hint.isNotBlank()) {
-                                        Spacer(Modifier.height(4.dp))
-                                        Text("提示：${q.hint}", color = cs.onSurfaceVariant, fontSize = 12.sp)
-                                    }
+                                Text(q.question, color = cs.onSurface, fontSize = 14.sp, lineHeight = 20.sp)
+                                if (q.hint.isNotBlank()) {
+                                    Spacer(Modifier.height(4.dp))
+                                    Text("提示：${q.hint}", color = cs.onSurfaceSecondary, fontSize = 12.sp)
                                 }
                             }
                         }
@@ -260,28 +258,19 @@ fun CodeCheckInPage(
                         Spacer(Modifier.height(10.dp))
                     }
 
-                    // ── 提交按钮（coui 实心主按钮） ──
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(if (submitting) cs.primary.copy(alpha = 0.6f) else cs.primary)
-                            .hapticClickable(enabled = !submitting && !success) { submit() },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            if (submitting) "签到中…" else "立即签到",
-                            color = cs.onPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.padding(vertical = 15.dp),
-                        )
-                    }
+                    // ── 提交按钮（coui 主色 TextButton） ──
+                    // 不用 KewuPrimaryButton：它自带 Light 震动，submit() 里已有 Medium 震动，叠两次手感发虚。
+                    TextButton(
+                        text = if (submitting) "签到中…" else "立即签到",
+                        onClick = { submit() },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        enabled = !submitting && !success,
+                        colors = ButtonDefaults.textButtonColorsPrimary(),
+                    )
                     Spacer(Modifier.height(12.dp))
                     Text(
                         "暗号 30 秒内有效，过期请看教师端最新二维码",
-                        color = cs.onSurfaceVariant,
+                        color = cs.onSurfaceSecondary,
                         fontSize = 12.sp,
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                         textAlign = TextAlign.Center,
@@ -308,7 +297,10 @@ fun CodeCheckInPage(
     }
 }
 
-/** 液态玻璃输入框：玻璃容器（带高光折射）+ BasicTextField。 */
+/**
+ * 液态玻璃输入框：玻璃容器（带高光折射）+ BasicTextField。
+ * 属于项目自研液态玻璃件，按「除液态玻璃外全部 coui」原则保留；仅标签 / 占位文字换 coui Text 与 coui 配色。
+ */
 @Composable
 private fun GlassCodeInput(
     backdrop: LayerBackdrop,
@@ -318,11 +310,11 @@ private fun GlassCodeInput(
     placeholder: String,
     big: Boolean,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Text(
             label,
-            color = cs.onSurfaceVariant,
+            color = cs.onSurfaceSecondary,
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
             modifier = Modifier.padding(bottom = 6.dp),
@@ -356,7 +348,7 @@ private fun GlassCodeInput(
                             if (value.isEmpty()) {
                                 Text(
                                     placeholder,
-                                    color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+                                    color = cs.onSurfaceVariantSummary,
                                     fontSize = if (big) 16.sp else 15.sp,
                                     textAlign = TextAlign.Center,
                                 )

@@ -2,9 +2,7 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.RepeatMode
@@ -18,20 +16,15 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,8 +32,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,12 +42,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -65,6 +52,8 @@ import com.kewu.app.KewuGreen
 import com.kewu.app.KewuBlue
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CardColors
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.theme.COUITheme
 
 // ───────────────────────── 数据模型（mock） ─────────────────────────
 
@@ -125,13 +114,14 @@ private fun mockWeek(): List<DaySchedule> = listOf(
 /**
  * 课表页：由课堂页「今日课程」小卡进入，查看一周排课。
  *
- * 版式 = Mishka（squircle 卡片、12dp 间距、卡内 16dp、状态用标志性图形）；
- * 顶部「周一到周日」日条用 **coui 原生 Card**（固定浅色配色：未选中 = 白底 +
- * outlineVariant 描边，选中 = KewuBlue 蓝底白字），芯片仍浮在列表上方，保留浮动感。
+ * 版式 = Mishka（12dp 间距、卡内 16dp、状态用标志性图形）；2026-10-23 coui 化：
+ * 顶栏 = [KewuTopBar]（coui SmallTopAppBar），课块 / 空态 = coui [Card]，文字 / 标签 = coui 原生件，
+ * 配色读 [COUITheme]（页面灰底 surface + 白卡 surfaceContainer）。
+ * 顶部「周一到周日」日条用 **coui 原生 Card**（未选中 = 白底 + dividerLine 描边，
+ * 选中 = KewuBlue 蓝底白字），芯片仍浮在列表上方，保留浮动感。
  */
 @Composable
 fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
-    val cs = MaterialTheme.colorScheme
     val week = remember { mockWeek() }
     var selected by remember { mutableIntStateOf(4) } // 默认选中今天（周五）
     val scrollState = rememberScrollState()
@@ -151,8 +141,8 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
     }
 
     Box(Modifier.fillMaxSize()) {
-        // 1) 平色底（M3 语义色）。不挂 backdrop —— 玻璃日条要采到的是滚动列表。
-        Box(Modifier.matchParentSize().background(Color(0xFFF8F9FA)))
+        // 1) 平色底（coui 页面灰底）。不挂 backdrop —— 本页已无玻璃采样者。
+        Box(Modifier.matchParentSize().background(COUITheme.colorScheme.surface))
 
         Column(Modifier.fillMaxSize()) {
             TimetableHeader(onBack)
@@ -165,7 +155,7 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                             .fillMaxSize()
                             .verticalScroll(scrollState)
                             .padding(horizontal = 12.dp)
-                            // 顶部让位给浮动玻璃日条（62dp + 间距）
+                            // 顶部让位给浮动日条（62dp + 间距）
                             .padding(top = 74.dp, bottom = 96.dp),
                     ) {
                         // 按天切换：横推 + 淡入（iOS 式推页）；切天顺手滚回顶，
@@ -210,76 +200,34 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
     }
 }
 
+/** 顶栏：coui [KewuTopBar]（标题 + 周次副标题 + coui 返回钮），右侧保留「今天有课在录」呼吸绿点。 */
 @Composable
 private fun TimetableHeader(onBack: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
     // 右侧小绿点呼吸（今天有课在录）：alpha + 缩放双通道，1.1s 一个来回
     val dotPulse by rememberInfiniteTransition().animateFloat(
         0.65f, 1f, infiniteRepeatable(tween(1100), RepeatMode.Reverse),
         label = "dotPulse",
     )
-    // 返回键按压反馈
-    val backInteraction = remember { MutableInteractionSource() }
-    val backPressed by backInteraction.collectIsPressedAsState()
-    val backScale by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (backPressed) 0.88f else 1f,
-        animationSpec = spring(dampingRatio = 0.45f, stiffness = 600f),
-        label = "backScale",
+    KewuTopBar(
+        title = "课表",
+        subtitle = "第 7 周 · 10月12日 - 10月18日",
+        onBack = onBack,
+        actions = {
+            Box(
+                Modifier
+                    .padding(end = 20.dp)
+                    .size(8.dp)
+                    .scale(0.75f + 0.25f * dotPulse)
+                    .alpha(0.55f + 0.45f * dotPulse)
+                    .background(KewuGreen, CircleShape),
+            )
+        },
     )
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .padding(top = 10.dp, bottom = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 返回键
-        Box(
-            Modifier
-                .size(36.dp)
-                .scale(backScale)
-                .clip(CircleShape)
-                .background(cs.surfaceVariant)
-                .clickable(interactionSource = backInteraction) { onBack() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(15.dp)) {
-                val sw = size.width * 0.14f
-                val p = Path().apply {
-                    moveTo(size.width * 0.62f, size.height * 0.18f)
-                    lineTo(size.width * 0.34f, size.height * 0.5f)
-                    lineTo(size.width * 0.62f, size.height * 0.82f)
-                }
-                drawPath(
-                    p, cs.onSurfaceVariant,
-                    style = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round),
-                )
-            }
-        }
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(
-                "课表", color = cs.onSurface, fontSize = 20.sp,
-                fontWeight = FontWeight.SemiBold, maxLines = 1,
-            )
-            Text(
-                "第 7 周 · 10月12日 - 10月18日", color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
-            )
-        }
-        // 右侧小绿点：今天有课在录
-        Box(
-            Modifier
-                .size(8.dp)
-                .scale(0.75f + 0.25f * dotPulse)
-                .alpha(0.55f + 0.45f * dotPulse)
-                .background(KewuGreen, CircleShape),
-        )
-    }
 }
 
 /**
  * 浮动日条（2026-10-19 改）：每天一枚 coui 原生 `Card` 芯片浮在列表上方，
- * 固定浅色配色 —— 未选中 = `cs.surface` 白底 + `outlineVariant` 描边 + onSurface/onSurfaceVariant
+ * 固定浅色配色 —— 未选中 = `surfaceContainer` 白底 + `dividerLine` 描边 + onSurface/onSurfaceSecondary
  * 文字；选中 = `KewuBlue` 蓝底 + 白字（选中进度弹簧过渡，不瞬变）。「今天」额外点一枚品牌绿小点。
  */
 @Composable
@@ -289,7 +237,7 @@ private fun DayStrip(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Row(
         modifier.fillMaxWidth().padding(horizontal = 12.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -299,14 +247,14 @@ private fun DayStrip(
             val p = rememberEnterProgress(i, baseDelayMs = 120L, stepMs = 45L)
             // 选中进度：蓝底 / 文字色随之弹簧过渡，不瞬变（不生硬的关键）
             val cardColor by animateColorAsState(
-                targetValue = if (sel) KewuBlue else cs.surface,
+                targetValue = if (sel) KewuBlue else cs.surfaceContainer,
                 // ★ 不能传 Float 的 visibilityThreshold（会把 spring 推导成 SpringSpec<Float>，
                 //   与 AnimationSpec<Color> 不符）；用默认阈值即可，弹簧照样过冲。
                 animationSpec = spring(dampingRatio = 0.62f, stiffness = 420f),
                 label = "dayCardColor$i",
             )
             val topColor by animateColorAsState(
-                targetValue = if (sel) Color.White else cs.onSurfaceVariant,
+                targetValue = if (sel) Color.White else cs.onSurfaceSecondary,
                 animationSpec = tween(durationMillis = 200),
                 label = "dayTop$i",
             )
@@ -318,7 +266,7 @@ private fun DayStrip(
             val pressedColor = if (sel) {
                 Color.White.copy(alpha = 0.18f)
             } else {
-                cs.primary.copy(alpha = 0.12f)
+                cs.tertiaryContainer
             }
             // 芯片浮在列表上方：入场只做位移 + 透明度（非玻璃件可安全叠 alpha/scale）
             Box(
@@ -327,7 +275,7 @@ private fun DayStrip(
                     .height(62.dp)
                     .then(
                         if (!sel) {
-                            Modifier.border(1.dp, cs.outlineVariant, RoundedCornerShape(18.dp))
+                            Modifier.border(1.dp, cs.dividerLine, RoundedCornerShape(18.dp))
                         } else {
                             Modifier
                         },
@@ -375,19 +323,21 @@ private fun DayStrip(
     }
 }
 
-/** 单节课卡片（Mishka squircle）：徽章 + 时间 + 课程信息 + 状态标签。 */
+/** 单节课卡片（coui Card）：徽章 + 时间 + 课程信息 + 状态标签。 */
 @Composable
 private fun ClassBlock(slot: ClassSlot, index: Int) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
+    val cs = COUITheme.colorScheme
+    Card(
+        modifier = Modifier
             .fillMaxWidth()
             .padding(bottom = 12.dp)
-            .squircleCard(16.dp, cs.surfaceVariant)
             .riseEnter(rememberEnterProgress(index, baseDelayMs = 200L, stepMs = 55L), 60f),
+        cornerRadius = 16.dp,
+        insideMargin = PaddingValues(16.dp),
+        colors = kewuCardColors(),
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(16.dp),
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             SlotBadge(slot.state)
@@ -399,20 +349,20 @@ private fun ClassBlock(slot: ClassSlot, index: Int) {
                         fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f), maxLines = 1,
                     )
                     Text(
-                        "${slot.start} - ${slot.end}", color = cs.onSurfaceVariant,
+                        "${slot.start} - ${slot.end}", color = cs.onSurfaceSecondary,
                         fontSize = 13.sp, maxLines = 1,
                     )
                 }
                 Spacer(Modifier.height(3.dp))
                 Text(
                     "${slot.room} · ${slot.teacher}",
-                    color = cs.onSurfaceVariant, fontSize = 13.sp, maxLines = 1,
+                    color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1,
                 )
                 Spacer(Modifier.height(8.dp))
                 when (slot.state) {
-                    SlotState.ATTENDED -> StatusTag("已上过", cs.secondaryContainer, cs.onSecondaryContainer)
+                    SlotState.ATTENDED -> StatusTag("已上过", cs.secondaryContainer, cs.onSecondaryVariant)
                     SlotState.LIVE -> StatusTag("正在上课", cs.tertiaryContainer, cs.onTertiaryContainer)
-                    SlotState.UPCOMING -> StatusTag("未开始", cs.surfaceVariant, cs.onSurfaceVariant)
+                    SlotState.UPCOMING -> StatusTag("未开始", cs.secondaryContainer, cs.onSurfaceSecondary)
                 }
             }
         }
@@ -422,42 +372,43 @@ private fun ClassBlock(slot: ClassSlot, index: Int) {
 /** 状态徽章：与课堂页课程卡同一套「标志性图形语言」。 */
 @Composable
 private fun SlotBadge(state: SlotState) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     when (state) {
         // 已上过：大半圆 + 绿勾
         SlotState.ATTENDED -> ThreeQuarterCheck(size = 28.dp, color = KewuGreen)
         SlotState.LIVE -> {
+            // 呼吸圆点：coui 无 tertiary，用主色（与课堂页课程卡 LIVE 徽章一致）
             val pulse by rememberInfiniteTransition().animateFloat(
                 0.65f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse),
             )
             Canvas(Modifier.size(28.dp)) {
-                drawCircle(color = cs.tertiary.copy(alpha = 0.22f * pulse + 0.1f))
-                drawCircle(color = cs.tertiary, radius = size.width * 0.17f * pulse)
+                drawCircle(color = cs.primary.copy(alpha = 0.22f * pulse + 0.1f))
+                drawCircle(color = cs.primary, radius = size.width * 0.17f * pulse)
             }
         }
         SlotState.UPCOMING -> Canvas(Modifier.size(28.dp)) {
             drawCircle(
-                color = cs.onSurfaceVariant.copy(alpha = 0.45f),
+                color = cs.onSurfaceSecondary.copy(alpha = 0.45f),
                 style = Stroke(width = size.width * 0.09f),
             )
         }
     }
 }
 
-/** 周日空态：一张 squircle 卡 + 灰色标志性图形。 */
+/** 周日空态：一张 coui Card + 灰色标志性图形。 */
 @Composable
 private fun EmptyDayCard() {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
+    val cs = COUITheme.colorScheme
+    Card(
+        modifier = Modifier
             .fillMaxWidth()
-            .squircleCard(16.dp, cs.surfaceVariant)
-            .riseEnter(rememberEnterProgress(0, baseDelayMs = 200L), 40f)
-            .padding(vertical = 32.dp),
-        contentAlignment = Alignment.Center,
+            .riseEnter(rememberEnterProgress(0, baseDelayMs = 200L), 40f),
+        cornerRadius = 16.dp,
+        insideMargin = PaddingValues(vertical = 32.dp),
+        colors = kewuCardColors(),
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            ThreeQuarterCheck(size = 44.dp, color = cs.onSurfaceVariant, alpha = 0.35f)
+        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+            ThreeQuarterCheck(size = 44.dp, color = cs.onSurfaceSecondary, alpha = 0.35f)
             Spacer(Modifier.height(14.dp))
             Text(
                 "周日没有安排", color = cs.onSurface, fontSize = 14.sp,
@@ -465,7 +416,7 @@ private fun EmptyDayCard() {
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "好好休息，或提前预习下周课程", color = cs.onSurfaceVariant, fontSize = 12.sp, maxLines = 1,
+                "好好休息，或提前预习下周课程", color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1,
             )
         }
     }
