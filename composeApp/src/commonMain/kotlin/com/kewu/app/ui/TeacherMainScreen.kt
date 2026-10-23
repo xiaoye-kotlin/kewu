@@ -19,8 +19,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -31,7 +29,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -42,7 +39,10 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuBlue
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -57,6 +57,7 @@ import kotlin.math.roundToInt
 // - 内容区只渲染当前选中单页（绝不用 Row 并排多页 + offset），切页只换 index；
 // - 内容区是导航栏玻璃托盘的采样层（layerBackdrop），导航栏与之平级；
 // - 入场/收起动画只动 placement 位移（lambda offset）+ 导航栏自身的 alpha/scale（生产已验证）。
+// 2026-10-23 全局 coui 化：底色 / 顶栏改读 COUITheme，导航栏（液态玻璃）原样不动。
 
 private val TEACHER_NAV_ITEMS = listOf(
     NavItem(0, "控制台"),
@@ -126,7 +127,7 @@ fun TeacherMainScreen(
     Box(
         Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background),
+            .background(COUITheme.colorScheme.surface),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             TeacherTopBar(
@@ -168,7 +169,7 @@ fun TeacherMainScreen(
                 .fillMaxWidth()
                 .height(24.dp)
                 .align(Alignment.BottomCenter)
-                .background(MaterialTheme.colorScheme.background),
+                .background(COUITheme.colorScheme.surface),
         )
         AppleLiquidGlassNavBar(
             items = TEACHER_NAV_ITEMS,
@@ -226,37 +227,34 @@ fun TeacherMainScreen(
     }
 }
 
-/** 教师端顶栏：课字标 + 「课悟 · 教师端」（深蓝徽章区分角色，与学生端视觉区分）。 */
+/**
+ * 教师端顶栏：课字标 + 「课悟 · 教师端」（品牌蓝徽章区分角色，与学生端视觉区分）。
+ * 2026-10-23 coui 化：字标底块走 coui [Surface]，角色徽章走 [KewuTag]，文字走 coui [Text]。
+ */
 @Composable
 private fun TeacherTopBar(modifier: Modifier = Modifier) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     Box(
         modifier
             .fillMaxWidth()
             .height(64.dp)
-            .background(cs.surface),
+            .background(cs.surfaceContainer),
         contentAlignment = Alignment.CenterStart,
     ) {
         Row(Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                Modifier
-                    .width(36.dp)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(KewuBlue),
-                contentAlignment = Alignment.Center,
-            ) { Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold) }
+            Surface(
+                modifier = Modifier.width(36.dp).height(36.dp),
+                shape = RoundedCornerShape(10.dp),
+                color = KewuBlue,
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold)
+                }
+            }
             Spacer(Modifier.width(12.dp))
             Text("课悟 · Kewu", color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.width(8.dp))
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(7.dp))
-                    .background(KewuBlue.copy(alpha = 0.12f))
-                    .padding(horizontal = 8.dp, vertical = 3.dp),
-            ) {
-                Text("教师端", color = KewuBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-            }
+            KewuTag("教师端", KewuBlue.copy(alpha = 0.12f), KewuBlue)
         }
     }
 }
