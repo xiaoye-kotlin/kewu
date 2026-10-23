@@ -45,13 +45,14 @@ import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
-import io.github.suqi8.coui.kmp.basic.Card
+import com.kewu.app.hapticClickable
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.LinearProgressIndicator
 import io.github.suqi8.coui.kmp.basic.ProgressIndicatorDefaults
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.TextField
 import io.github.suqi8.coui.kmp.basic.TextFieldMode
+import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Mic
@@ -79,7 +80,8 @@ import kotlinx.coroutines.launch
  * 动态码用自绘二维码渲染（见 [QrCodeView]）：取 `qrContent`（缺省退回 `code`）生成可扫二维码，
  * 30s 刷新一次防代签；下方同时保留大字暗号与倒计时，方便 CODE 模式手填。
  *
- * 配色走 [COUITheme] 语义色；头部保留课悟液态玻璃，其余分段卡一律 coui [Card]（2026-10-23 全局 coui 化）。
+ * 配色走 [COUITheme] 语义色；卡片外壳保留课悟液态玻璃，卡内文字 / 按钮 / 输入框 / 进度条 / 标签一律 coui
+ * 原生件（2026-10-23 全局 coui 化）。
  */
 @Composable
 fun AttendanceDetailScreen(
@@ -218,6 +220,7 @@ fun AttendanceDetailScreen(
                         // 学生：我的签到状态 / 签到动作
                         HubSectionLabel("我的签到")
                         MyCheckInCard(
+                            backdrop = pageBackdrop,
                             record = myRecord,
                             quiz = s.quiz,
                             checking = checking,
@@ -234,7 +237,7 @@ fun AttendanceDetailScreen(
                         // 教师端：二维码展示（学生端不显示）
                         HubSectionLabel("二维码签到")
                         DynamicCodeCard(
-                            code = code, remaining = remaining,
+                            backdrop = pageBackdrop, code = code, remaining = remaining,
                             onRefresh = {
                                 scope.launch {
                                     code = KewuApi.getAttendanceCode(attendanceId)?.also { remaining = it.remainingSeconds }
@@ -246,26 +249,26 @@ fun AttendanceDetailScreen(
 
                         // 统计
                         HubSectionLabel("签到统计")
-                        StatsCard(stats = stats, syncedCount = syncedCount)
+                        StatsCard(backdrop = pageBackdrop, stats = stats, syncedCount = syncedCount)
                         Spacer(Modifier.height(14.dp))
 
                         // 实时概览
                         HubSectionLabel("实时概览")
-                        RealtimeCard(realtime = realtime)
+                        RealtimeCard(backdrop = pageBackdrop, realtime = realtime)
                         Spacer(Modifier.height(14.dp))
 
                         // 风险记录
                         HubSectionLabel("风险记录")
-                        RiskCard(risk = risk)
+                        RiskCard(backdrop = pageBackdrop, risk = risk)
                         Spacer(Modifier.height(14.dp))
 
                         // 全部记录
                         HubSectionLabel("签到记录")
-                        RecordsCard(records = records, myId = studentId)
+                        RecordsCard(backdrop = pageBackdrop, records = records, myId = studentId)
                         Spacer(Modifier.height(14.dp))
 
                         // 老师：结束签到
-                        TeacherCloseCard(publisher = s.publisher) {
+                        TeacherCloseCard(backdrop = pageBackdrop, publisher = s.publisher) {
                             scope.launch {
                                 KewuApi.closeAttendance(attendanceId)
                                 reload()
@@ -280,30 +283,27 @@ fun AttendanceDetailScreen(
 }
 
 /**
- * 签到页段内白卡：coui [Card]（16dp 圆角 / 卡内 16dp），左右 12dp。
- * [onClick] 非空时整卡可点（coui 按压 Tint）。
+ * 签到页段卡外壳：课悟液态玻璃 [KewuGlassCard]（玻璃件保留，参数沿用改造前：16dp 圆角 / blur 18 / tint 0.30），
+ * 卡内 16dp，左右 12dp；卡内子元素一律 coui。
+ * [onClick] 非空时整卡可点（与改造前同为 hapticClickable，不给采样者叠 scale/graphicsLayer）。
  */
 @Composable
 private fun AttCard(
+    backdrop: LayerBackdrop,
     onClick: (() -> Unit)? = null,
     horizontalCenter: Boolean = false,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val m = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-    val body: @Composable ColumnScope.() -> Unit = {
+    KewuGlassCard(
+        backdrop = backdrop, shape = RoundedCornerShape(16.dp), blurRadius = 18.dp, tintAlpha = 0.30f,
+        modifier = if (onClick != null) m.hapticClickable { onClick() } else m,
+    ) {
         Column(
-            Modifier.fillMaxWidth(),
+            Modifier.fillMaxWidth().padding(16.dp),
             horizontalAlignment = if (horizontalCenter) Alignment.CenterHorizontally else Alignment.Start,
             content = content,
         )
-    }
-    if (onClick != null) {
-        Card(
-            modifier = m, cornerRadius = 16.dp, insideMargin = PaddingValues(16.dp),
-            colors = kewuCardColors(), onClick = { haptic(HapticKind.Tick); onClick() }, content = body,
-        )
-    } else {
-        Card(modifier = m, cornerRadius = 16.dp, insideMargin = PaddingValues(16.dp), colors = kewuCardColors(), content = body)
     }
 }
 
@@ -324,6 +324,7 @@ private fun EmptyHintRow(text: String) {
 
 @Composable
 private fun MyCheckInCard(
+    backdrop: LayerBackdrop,
     record: com.kewu.app.AttendanceRecord?,
     quiz: com.kewu.app.AttendanceQuiz?,
     checking: Boolean,
@@ -336,7 +337,7 @@ private fun MyCheckInCard(
     onCheckInPlain: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    AttCard {
+    AttCard(backdrop) {
         if (record != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text("已签到", color = KewuGreen, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
@@ -384,9 +385,9 @@ private fun MyCheckInCard(
 }
 
 @Composable
-private fun DynamicCodeCard(code: AttendanceCode?, remaining: Int, onRefresh: () -> Unit) {
+private fun DynamicCodeCard(backdrop: LayerBackdrop, code: AttendanceCode?, remaining: Int, onRefresh: () -> Unit) {
     val cs = COUITheme.colorScheme
-    AttCard(onClick = onRefresh, horizontalCenter = true) {
+    AttCard(backdrop, onClick = onRefresh, horizontalCenter = true) {
         // 自绘二维码（白底保证对比度、可扫），编码 qrContent（缺省退回 code）—— 绘制保留
         val qrContent = code?.qrContent?.takeIf { it.isNotBlank() } ?: code?.code?.takeIf { it.isNotBlank() }
         if (qrContent != null) {
@@ -412,9 +413,9 @@ private fun DynamicCodeCard(code: AttendanceCode?, remaining: Int, onRefresh: ()
 }
 
 @Composable
-private fun StatsCard(stats: AttendanceStats?, syncedCount: Int?) {
+private fun StatsCard(backdrop: LayerBackdrop, stats: AttendanceStats?, syncedCount: Int?) {
     val cs = COUITheme.colorScheme
-    AttCard {
+    AttCard(backdrop) {
         if (stats == null) {
             EmptyHint("暂无统计")
         } else {
@@ -463,9 +464,9 @@ private fun RateBar(label: String, rate: Float) {
 }
 
 @Composable
-private fun RealtimeCard(realtime: AttendanceRealtime?) {
+private fun RealtimeCard(backdrop: LayerBackdrop, realtime: AttendanceRealtime?) {
     val cs = COUITheme.colorScheme
-    AttCard {
+    AttCard(backdrop) {
         if (realtime == null) { EmptyHint("暂无实时数据"); return@AttCard }
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             MiniStat("已签", "${realtime.checked}", cs.tertiaryContainer, cs.onTertiaryContainer)
@@ -486,9 +487,9 @@ private fun RealtimeCard(realtime: AttendanceRealtime?) {
 }
 
 @Composable
-private fun RiskCard(risk: List<AttendanceRisk>?) {
+private fun RiskCard(backdrop: LayerBackdrop, risk: List<AttendanceRisk>?) {
     val cs = COUITheme.colorScheme
-    AttCard {
+    AttCard(backdrop) {
         if (risk.isNullOrEmpty()) { EmptyHint("无风险记录"); return@AttCard }
         risk.forEach { r ->
             Text("${r.studentName} · 风险分 ${r.riskScore}", color = cs.error, fontSize = 13.sp, fontWeight = FontWeight.Medium)
@@ -499,9 +500,9 @@ private fun RiskCard(risk: List<AttendanceRisk>?) {
 }
 
 @Composable
-private fun RecordsCard(records: List<com.kewu.app.AttendanceRecord>?, myId: String) {
+private fun RecordsCard(backdrop: LayerBackdrop, records: List<com.kewu.app.AttendanceRecord>?, myId: String) {
     val cs = COUITheme.colorScheme
-    AttCard {
+    AttCard(backdrop) {
         if (records.isNullOrEmpty()) { EmptyHint("暂无记录"); return@AttCard }
         records.forEach { r ->
             val me = r.studentId == myId
@@ -518,9 +519,9 @@ private fun RecordsCard(records: List<com.kewu.app.AttendanceRecord>?, myId: Str
 }
 
 @Composable
-private fun TeacherCloseCard(publisher: String, onClose: () -> Unit) {
+private fun TeacherCloseCard(backdrop: LayerBackdrop, publisher: String, onClose: () -> Unit) {
     val cs = COUITheme.colorScheme
-    AttCard {
+    AttCard(backdrop) {
         Text("老师操作（发布人 $publisher）", color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(10.dp))
         KewuPrimaryButton("结束签到", onClose, Modifier.fillMaxWidth(), danger = true)

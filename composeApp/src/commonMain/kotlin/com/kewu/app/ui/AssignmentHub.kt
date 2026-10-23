@@ -46,13 +46,14 @@ import com.kewu.app.SubmissionInfo
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
-import io.github.suqi8.coui.kmp.basic.Card
+import com.kewu.app.hapticClickable
 import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
 import io.github.suqi8.coui.kmp.basic.LinearProgressIndicator
 import io.github.suqi8.coui.kmp.basic.ProgressIndicatorDefaults
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.TextField
 import io.github.suqi8.coui.kmp.basic.TextFieldMode
+import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.layout.DialogButtonBar
 import io.github.suqi8.coui.kmp.layout.DialogButtonBarAction
@@ -78,25 +79,23 @@ internal fun HubSectionLabel(text: String) {
 }
 
 /**
- * Hub 段内白卡：coui [Card]（16dp 圆角 / 卡内 16dp / 课悟白卡配色），左右 12dp 与页面对齐。
- * [onClick] 非空时走 coui 按压 Tint（整卡可点）。
+ * Hub 段卡外壳：课悟液态玻璃 [KewuGlassCard]（玻璃件保留，参数沿用改造前：16dp 圆角 / blur 18 / tint 0.30），
+ * 卡内 16dp，左右 12dp 与页面对齐；卡内子元素一律 coui。
+ * [onClick] 非空时整卡可点（与改造前同为 hapticClickable，不给采样者叠 scale/graphicsLayer）。
  */
 @Composable
 private fun HubCard(
+    backdrop: LayerBackdrop,
     onClick: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val m = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-    if (onClick != null) {
-        Card(
-            modifier = m, cornerRadius = 16.dp, insideMargin = PaddingValues(16.dp),
-            colors = kewuCardColors(), onClick = { haptic(HapticKind.Tick); onClick() }, content = content,
-        )
-    } else {
-        Card(
-            modifier = m, cornerRadius = 16.dp, insideMargin = PaddingValues(16.dp),
-            colors = kewuCardColors(), content = content,
-        )
+    KewuGlassCard(
+        backdrop = backdrop,
+        shape = RoundedCornerShape(16.dp), blurRadius = 18.dp, tintAlpha = 0.30f,
+        modifier = if (onClick != null) m.hapticClickable { onClick() } else m,
+    ) {
+        Column(Modifier.padding(16.dp), content = content)
     }
 }
 
@@ -127,8 +126,8 @@ private fun HubBar(fraction: Float, color: Color, modifier: Modifier = Modifier)
  * - `submitAssignment` / `reviewSubmission` 提交与批阅（老师入口）
  * - `publishAssignment` 老师发布新作业（底部折叠入口）
  *
- * 配色走 [COUITheme] 语义色；头部信息卡保留课悟液态玻璃 ([KewuGlassCard])，其余分段卡一律 coui [Card]
- * （2026-10-23 全局 coui 化）。玻璃采样层与背景层平级，规避 coui 首帧 SIGSEGV。
+ * 配色走 [COUITheme] 语义色；卡片外壳保留课悟液态玻璃 ([KewuGlassCard])，卡内文字 / 按钮 / 进度条 /
+ * 输入框 / 标签一律 coui 原生件（2026-10-23 全局 coui 化）。玻璃采样层与背景层平级，规避 coui 首帧 SIGSEGV。
  *
  * @param assignmentId 作业 id
  * @param onBack 返回
@@ -223,18 +222,18 @@ fun AssignmentDetailScreen(
 
                     // 我的提交
                     HubSectionLabel("我的提交")
-                    MySubmissionCard(submission = mySub, onResubmit = { showSubmit = true })
+                    MySubmissionCard(backdrop = pageBackdrop, submission = mySub, onResubmit = { showSubmit = true })
                     Spacer(Modifier.height(14.dp))
 
                     // 批阅统计
                     HubSectionLabel("批阅统计")
-                    StatsCard(stats = stats)
+                    StatsCard(backdrop = pageBackdrop, stats = stats)
                     Spacer(Modifier.height(14.dp))
 
                     // AI 预批阅
                     HubSectionLabel("AI 预批阅")
                     AiPrereviewCard(
-                        suggestion = aiSuggestion,
+                        backdrop = pageBackdrop, suggestion = aiSuggestion,
                         hasSubmission = mySub != null, loading = aiLoading,
                         onRun = {
                             aiLoading = true
@@ -248,24 +247,24 @@ fun AssignmentDetailScreen(
 
                     // 相似片段 / 查重
                     HubSectionLabel("相似片段检测")
-                    SimilarityCard(pairs = similarity)
+                    SimilarityCard(backdrop = pageBackdrop, pairs = similarity)
                     Spacer(Modifier.height(14.dp))
 
                     // 智能批阅队列
                     HubSectionLabel("智能批阅队列")
-                    ReviewQueueCard(items = reviewQueue)
+                    ReviewQueueCard(backdrop = pageBackdrop, items = reviewQueue)
                     Spacer(Modifier.height(14.dp))
 
                     // 知识点学情画像
                     analytics?.let { an ->
                         HubSectionLabel("知识点学情画像")
-                        AnalyticsCard(analytics = an)
+                        AnalyticsCard(backdrop = pageBackdrop, analytics = an)
                         Spacer(Modifier.height(14.dp))
                     }
 
                     // 老师：发布新作业（折叠入口，接入 publishAssignment）
                     TeacherPublishCard(
-                        courseId = a.courseId,
+                        backdrop = pageBackdrop, courseId = a.courseId,
                         publisher = studentName, onPublished = { reload() },
                     )
                     Spacer(Modifier.height(24.dp))
@@ -304,9 +303,9 @@ private fun MetaRow(label: String, value: String) {
 }
 
 @Composable
-private fun MySubmissionCard(submission: SubmissionInfo?, onResubmit: () -> Unit) {
+private fun MySubmissionCard(backdrop: LayerBackdrop, submission: SubmissionInfo?, onResubmit: () -> Unit) {
     val cs = COUITheme.colorScheme
-    HubCard {
+    HubCard(backdrop) {
         if (submission == null) {
             Text("尚未提交", color = cs.onSurfaceSecondary, fontSize = 14.sp)
             Spacer(Modifier.height(10.dp))
@@ -335,9 +334,9 @@ private fun MySubmissionCard(submission: SubmissionInfo?, onResubmit: () -> Unit
 }
 
 @Composable
-private fun StatsCard(stats: AssignmentStats?) {
+private fun StatsCard(backdrop: LayerBackdrop, stats: AssignmentStats?) {
     val cs = COUITheme.colorScheme
-    HubCard {
+    HubCard(backdrop) {
         if (stats == null) {
             EmptyHint("暂无批阅数据")
             return@HubCard
@@ -394,10 +393,10 @@ private fun RowScope.MiniStat(label: String, value: String, background: Color, c
 
 @Composable
 private fun AiPrereviewCard(
-    suggestion: AiSuggestion?, hasSubmission: Boolean, loading: Boolean, onRun: () -> Unit,
+    backdrop: LayerBackdrop, suggestion: AiSuggestion?, hasSubmission: Boolean, loading: Boolean, onRun: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    HubCard {
+    HubCard(backdrop) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("AI 预批阅", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             if (loading) InfiniteProgressIndicator(size = 18.dp)
@@ -439,9 +438,9 @@ private fun AiPrereviewCard(
 }
 
 @Composable
-private fun SimilarityCard(pairs: List<SimilarityPair>?) {
+private fun SimilarityCard(backdrop: LayerBackdrop, pairs: List<SimilarityPair>?) {
     val cs = COUITheme.colorScheme
-    HubCard {
+    HubCard(backdrop) {
         if (pairs.isNullOrEmpty()) {
             EmptyHint("未检测到相似片段")
             return@HubCard
@@ -468,9 +467,9 @@ private fun SimilarityCard(pairs: List<SimilarityPair>?) {
 }
 
 @Composable
-private fun ReviewQueueCard(items: List<ReviewQueueItem>?) {
+private fun ReviewQueueCard(backdrop: LayerBackdrop, items: List<ReviewQueueItem>?) {
     val cs = COUITheme.colorScheme
-    HubCard {
+    HubCard(backdrop) {
         if (items.isNullOrEmpty()) {
             EmptyHint("批阅队列为空")
             return@HubCard
@@ -491,9 +490,9 @@ private fun ReviewQueueCard(items: List<ReviewQueueItem>?) {
 }
 
 @Composable
-private fun AnalyticsCard(analytics: Analytics) {
+private fun AnalyticsCard(backdrop: LayerBackdrop, analytics: Analytics) {
     val cs = COUITheme.colorScheme
-    HubCard {
+    HubCard(backdrop) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             MiniStat("作业数", "${analytics.assignmentCount}", cs.secondaryContainer, cs.onSurface)
             MiniStat("提交数", "${analytics.submissionCount}", cs.secondaryContainer, cs.onSurface)
@@ -537,7 +536,7 @@ private fun AnalyticsCard(analytics: Analytics) {
 }
 
 @Composable
-private fun TeacherPublishCard(courseId: String, publisher: String, onPublished: () -> Unit) {
+private fun TeacherPublishCard(backdrop: LayerBackdrop, courseId: String, publisher: String, onPublished: () -> Unit) {
     val cs = COUITheme.colorScheme
     var expanded by remember { mutableStateOf(false) }
     var title by remember { mutableStateOf("") }
@@ -549,8 +548,8 @@ private fun TeacherPublishCard(courseId: String, publisher: String, onPublished:
     var msg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    // 整卡点按展开/收起（coui Card 按压 Tint）；输入框自己消费点击，不会误触收起
-    HubCard(onClick = { expanded = !expanded }) {
+    // 整卡点按展开/收起（与改造前同为 hapticClickable）；输入框自己消费点击，不会误触收起
+    HubCard(backdrop, onClick = { expanded = !expanded }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("老师 · 发布新作业", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(if (expanded) "收起" else "展开", color = cs.onSurfaceSecondary, fontSize = 13.sp)
