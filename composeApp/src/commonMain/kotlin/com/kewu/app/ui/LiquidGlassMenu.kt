@@ -17,8 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,13 +28,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.geometry.CornerRadius
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
@@ -45,6 +40,14 @@ import com.kewu.app.HapticKind
 import com.kewu.app.haptic
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CardColors
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.Text
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Copy
+import io.github.suqi8.coui.kmp.icon.extended.Reply
+import io.github.suqi8.coui.kmp.icon.extended.Share
+import io.github.suqi8.coui.kmp.icon.extended.Undo
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
 
 /**
@@ -61,6 +64,8 @@ import kotlinx.coroutines.launch
  *
  * 注：菜单容器改为 coui 原生 Card 后**不再需要 backdrop**（无玻璃采样），
  * 因此已移除 `backdrop`/`LayerBackdrop`/`KewuGlassCard` 依赖。
+ * 2026-10-23 全局 coui 化：项内图标改 coui-icons（Copy / Reply / Share / Undo），文字改 coui Text，
+ * 配色改读 [COUITheme]；定位与进出场动画不变。
  */
 @Composable
 fun LiquidGlassActionMenu(
@@ -73,7 +78,7 @@ fun LiquidGlassActionMenu(
     anchorRect: Rect? = null,
 ) {
     if (!visible) return
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
 
     // 进出场进度：1 → 0。外层盒做轻微缩放 + 淡入 + 位移（不再是玻璃凝结）。
@@ -153,9 +158,9 @@ fun LiquidGlassActionMenu(
                 modifier = Modifier,
                 cornerRadius = 22.dp,
                 colors = CardColors(
-                    color = cs.surface,
+                    color = cs.surfaceContainer,
                     contentColor = cs.onSurface,
-                    pressedColor = cs.surface,
+                    pressedColor = cs.surfaceContainer,
                 ),
                 onClick = { /* 容器本身不响应点击；各项在内部自行处理 */ },
             ) {
@@ -191,7 +196,7 @@ private fun MenuBarItem(
     destructive: Boolean,
     onClick: () -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
+    val cs = COUITheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     Row(
@@ -203,7 +208,7 @@ private fun MenuBarItem(
             }
             .background(
                 if (pressed) {
-                    if (destructive) cs.error.copy(alpha = 0.12f) else cs.primary.copy(alpha = 0.12f)
+                    if (destructive) cs.error.copy(alpha = 0.12f) else cs.tertiaryContainer
                 } else {
                     Color.Transparent
                 },
@@ -213,7 +218,11 @@ private fun MenuBarItem(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        MenuGlyph(glyph, destructive, 16.dp)
+        Icon(
+            glyph.icon(), contentDescription = null,
+            tint = if (destructive) cs.error else cs.onSurfaceSecondary,
+            modifier = Modifier.size(16.dp),
+        )
         Text(
             label,
             color = if (destructive) cs.error else cs.onSurface,
@@ -239,45 +248,10 @@ class GlassMenuAction(
 
 enum class MenuGlyphKind { Copy, Quote, Share, Exit }
 
-/** 菜单小图标（复制 / 引用 / 分享 / 退出），Canvas 简笔，跟随 contentColor。 */
-@Composable
-private fun MenuGlyph(kind: MenuGlyphKind, destructive: Boolean, glyphSize: Dp = 24.dp) {
-    val cs = MaterialTheme.colorScheme
-    val color = if (destructive) cs.error else cs.onSurfaceVariant
-    androidx.compose.foundation.Canvas(Modifier.size(glyphSize)) {
-        val s = size.minDimension
-        val w = s * 0.085f
-        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = w, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-        when (kind) {
-            MenuGlyphKind.Copy -> {
-                // 两张重叠圆角片
-                drawRoundRect(color, topLeft = Offset(s * 0.30f, s * 0.16f), size = Size(s * 0.46f, s * 0.52f), cornerRadius = CornerRadius(s * 0.08f), style = stroke)
-                drawRoundRect(color, topLeft = Offset(s * 0.18f, s * 0.32f), size = Size(s * 0.46f, s * 0.52f), cornerRadius = CornerRadius(s * 0.08f), style = stroke)
-            }
-            MenuGlyphKind.Quote -> {
-                // 引用：左竖条 + 两行横线
-                drawLine(color, Offset(s * 0.26f, s * 0.22f), Offset(s * 0.26f, s * 0.78f), w * 1.4f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(color, Offset(s * 0.44f, s * 0.38f), Offset(s * 0.80f, s * 0.38f), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(color, Offset(s * 0.44f, s * 0.62f), Offset(s * 0.68f, s * 0.62f), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-            }
-            MenuGlyphKind.Share -> {
-                // 分享：三点两线（iOS 分享图标）
-                val p1 = Offset(s * 0.72f, s * 0.28f)
-                val p2 = Offset(s * 0.30f, s * 0.50f)
-                val p3 = Offset(s * 0.72f, s * 0.72f)
-                drawLine(color, p1, p2, w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(color, p2, p3, w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawCircle(color, radius = s * 0.09f, center = p1)
-                drawCircle(color, radius = s * 0.09f, center = p2)
-                drawCircle(color, radius = s * 0.09f, center = p3)
-            }
-            MenuGlyphKind.Exit -> {
-                // 退出：门 + 箭头
-                drawRoundRect(color, topLeft = Offset(s * 0.18f, s * 0.20f), size = Size(s * 0.40f, s * 0.60f), cornerRadius = CornerRadius(s * 0.06f), style = stroke)
-                drawLine(color, Offset(s * 0.50f, s * 0.50f), Offset(s * 0.82f, s * 0.50f), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(color, Offset(s * 0.68f, s * 0.36f), Offset(s * 0.84f, s * 0.50f), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-                drawLine(color, Offset(s * 0.68f, s * 0.64f), Offset(s * 0.84f, s * 0.50f), w, cap = androidx.compose.ui.graphics.StrokeCap.Round)
-            }
-        }
-    }
+/** 菜单项图标（coui-icons）：复制 / 引用 / 分享 / 退出。 */
+private fun MenuGlyphKind.icon(): ImageVector = when (this) {
+    MenuGlyphKind.Copy -> COUIIcons.Copy
+    MenuGlyphKind.Quote -> COUIIcons.Reply
+    MenuGlyphKind.Share -> COUIIcons.Share
+    MenuGlyphKind.Exit -> COUIIcons.Undo
 }

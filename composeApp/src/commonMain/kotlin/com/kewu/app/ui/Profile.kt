@@ -1,18 +1,21 @@
 package com.kewu.app.ui
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.AddCircle
+import io.github.suqi8.coui.kmp.icon.extended.Alarm
+import io.github.suqi8.coui.kmp.icon.extended.Community
+import io.github.suqi8.coui.kmp.icon.extended.Info
+import io.github.suqi8.coui.kmp.icon.extended.Link
+import io.github.suqi8.coui.kmp.icon.extended.Recording
+import io.github.suqi8.coui.kmp.icon.extended.Undo
 
 // ───────────────────────── 个人资料数据模型（mock） ─────────────────────────
 
@@ -41,89 +44,34 @@ internal val defaultProfile = UserProfile(
     email = "1640432@qq.com",
 )
 
-// ───────────────────────── 通用图标字形（Canvas 绘制） ─────────────────────────
+// ───────────────────────── 通用图标字形（coui-icons） ─────────────────────────
 
 /**
- * 「我的」页功能列表用的小图标：用与导航栏一致的 Canvas 描边风格，
- * 与全 app 的线条语言统一（不混用 emoji / 位图）。
+ * 「我的」页 / 教师「我的」页功能列表的小图标（2026-10-23 全局 coui 化：原 Canvas 自绘描边
+ * 改为 coui-icons 原生字形，与 coui 设置行同一套线条语言）。签名不变，多处按 kind 调用。
  *
- * @param kind 0=课程绑定 1=录音管理 2=通知 3=关于我们 4=退出登录
+ * kind 语义（按全项目调用点核对）：
+ * - 0 = 课程绑定 → Link（绑定 = 链接；学生/教师「课程绑定」与 MyPage 绑定卡都用它）
+ * - 1 = 录音管理（学生）/ 发起签到（教师）→ Recording
+ * - 2 = 通知设置 / 发布笔记（教师）→ Alarm
+ * - 3 = 关于我们 → Info
+ * - 4 = 退出登录 → Undo（coui 无「登出」字形，取「返回/撤回」箭头语义，红色由调用方给）
+ * - 5 = 加入班级 / 班级管理 → Community（多人）
+ * - 6 = 新建课程 → AddCircle
  */
 @Composable
 internal fun ProfileGlyph(kind: Int, color: Color, sizeDp: Dp = 22.dp) {
-    Canvas(Modifier.size(sizeDp)) {
-        val s = size.width
-        val stroke = Stroke(width = s * 0.10f, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        when (kind) {
-            0 -> { // 课程绑定：日历（圆角框 + 两个挂环 + 一条中线）
-                drawRoundRect(color, topLeft = Offset(s * 0.16f, s * 0.22f),
-                    size = Size(s * 0.68f, s * 0.62f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(s * 0.14f), style = stroke)
-                drawLine(color, Offset(s * 0.30f, s * 0.22f), Offset(s * 0.30f, s * 0.12f), strokeWidth = s * 0.10f, cap = StrokeCap.Round)
-                drawLine(color, Offset(s * 0.70f, s * 0.22f), Offset(s * 0.70f, s * 0.12f), strokeWidth = s * 0.10f, cap = StrokeCap.Round)
-                drawLine(color, Offset(s * 0.16f, s * 0.44f), Offset(s * 0.84f, s * 0.44f), strokeWidth = s * 0.08f, cap = StrokeCap.Round)
-            }
-            1 -> { // 录音管理：麦克风（胶囊头 + 支架 + 底座）
-                drawRoundRect(color, topLeft = Offset(s * 0.34f, s * 0.12f),
-                    size = Size(s * 0.32f, s * 0.42f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(s * 0.16f), style = stroke)
-                drawLine(color, Offset(s * 0.50f, s * 0.54f), Offset(s * 0.50f, s * 0.72f), strokeWidth = s * 0.10f, cap = StrokeCap.Round)
-                drawLine(color, Offset(s * 0.34f, s * 0.74f), Offset(s * 0.66f, s * 0.74f), strokeWidth = s * 0.10f, cap = StrokeCap.Round)
-            }
-            2 -> { // 通知：铃铛（钟形 + 底部圆点）
-                val bell = Path().apply {
-                    moveTo(s * 0.32f, s * 0.30f)
-                    cubicTo(s * 0.32f, s * 0.16f, s * 0.68f, s * 0.16f, s * 0.68f, s * 0.30f)
-                    lineTo(s * 0.74f, s * 0.58f)
-                    lineTo(s * 0.26f, s * 0.58f)
-                    close()
-                }
-                drawPath(bell, color, style = stroke)
-                drawArc(color, startAngle = 0f, sweepAngle = 180f, useCenter = false,
-                    topLeft = Offset(s * 0.30f, s * 0.58f), size = Size(s * 0.40f, s * 0.18f), style = stroke)
-                drawCircle(color, radius = s * 0.05f, center = Offset(s * 0.50f, s * 0.78f))
-            }
-            3 -> { // 关于我们：信息圈（i）
-                drawCircle(color, style = stroke, radius = s * 0.38f, center = Offset(s * 0.50f, s * 0.50f))
-                drawCircle(color, radius = s * 0.045f, center = Offset(s * 0.50f, s * 0.38f))
-                drawLine(color, Offset(s * 0.50f, s * 0.50f), Offset(s * 0.50f, s * 0.66f), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
-            }
-            4 -> { // 退出登录：门 + 出门箭头
-                drawRoundRect(color, topLeft = Offset(s * 0.26f, s * 0.16f),
-                    size = Size(s * 0.40f, s * 0.68f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(s * 0.06f), style = stroke)
-                drawLine(color, Offset(s * 0.46f, s * 0.16f), Offset(s * 0.46f, s * 0.84f), strokeWidth = s * 0.08f, cap = StrokeCap.Round)
-                val arrow = Path().apply {
-                    moveTo(s * 0.58f, s * 0.50f)
-                    lineTo(s * 0.74f, s * 0.50f)
-                    moveTo(s * 0.66f, s * 0.42f)
-                    lineTo(s * 0.74f, s * 0.50f)
-                    lineTo(s * 0.66f, s * 0.58f)
-                }
-                drawPath(arrow, color, style = stroke)
-            }
-            5 -> { // 班级 / 加入班级：双人（两个圆头 + 肩弧）
-                drawCircle(color, style = stroke, radius = s * 0.14f, center = Offset(s * 0.36f, s * 0.34f))
-                drawCircle(color, style = stroke, radius = s * 0.14f, center = Offset(s * 0.64f, s * 0.34f))
-                drawArc(color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
-                    topLeft = Offset(s * 0.16f, s * 0.50f), size = Size(s * 0.40f, s * 0.30f), style = stroke)
-                drawArc(color, startAngle = 180f, sweepAngle = 180f, useCenter = false,
-                    topLeft = Offset(s * 0.44f, s * 0.50f), size = Size(s * 0.40f, s * 0.30f), style = stroke)
-            }
-            6 -> { // 新建课程：书本 + 加号
-                val book = Path().apply {
-                    moveTo(s * 0.20f, s * 0.20f)
-                    lineTo(s * 0.46f, s * 0.26f)
-                    lineTo(s * 0.46f, s * 0.74f)
-                    lineTo(s * 0.20f, s * 0.68f)
-                    close()
-                    moveTo(s * 0.80f, s * 0.20f)
-                    lineTo(s * 0.54f, s * 0.26f)
-                    lineTo(s * 0.54f, s * 0.74f)
-                    lineTo(s * 0.80f, s * 0.68f)
-                    close()
-                }
-                drawPath(book, color, style = stroke)
-                drawLine(color, Offset(s * 0.63f, s * 0.40f), Offset(s * 0.77f, s * 0.40f), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
-                drawLine(color, Offset(s * 0.70f, s * 0.33f), Offset(s * 0.70f, s * 0.47f), strokeWidth = s * 0.09f, cap = StrokeCap.Round)
-            }
-        }
-    }
+    Icon(profileGlyphVector(kind), contentDescription = null, tint = color, modifier = Modifier.size(sizeDp))
+}
+
+/** kind → coui 图标映射；未知 kind 回退 Info，避免空白。 */
+private fun profileGlyphVector(kind: Int): ImageVector = when (kind) {
+    0 -> COUIIcons.Link
+    1 -> COUIIcons.Recording
+    2 -> COUIIcons.Alarm
+    3 -> COUIIcons.Info
+    4 -> COUIIcons.Undo
+    5 -> COUIIcons.Community
+    6 -> COUIIcons.AddCircle
+    else -> COUIIcons.Info
 }
