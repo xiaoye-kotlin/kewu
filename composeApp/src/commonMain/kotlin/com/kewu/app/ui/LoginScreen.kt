@@ -325,11 +325,14 @@ fun LoginScreen(onLogin: () -> Unit) {
                                 label = "loginFields",
                             ) { m ->
                                 Column(Modifier.fillMaxWidth()) {
-                                    // 登录态：仅「学号 + 密码」两字段（用户要求精简）
+                                    // ★ 身份标识按角色切换（2026-10-21）：学生=学号、教师=工号。
+                                    //   工号常带字母（如 T2026001），所以教师端用文本键盘，学生端仍是数字键盘。
+                                    val idLabel = if (role == 1) "工号" else "学号"
+                                    // 登录态：仅「学号/工号 + 密码」两字段（用户要求精简）
                                     MiuixField(
-                                        title = "学号",
+                                        title = idLabel,
                                         value = account,
-                                        keyboardType = KeyboardType.Number,
+                                        keyboardType = if (role == 1) KeyboardType.Text else KeyboardType.Number,
                                         onValueChange = { account = it },
                                     )
                                     Spacer(Modifier.height(12.dp))
@@ -373,7 +376,7 @@ fun LoginScreen(onLogin: () -> Unit) {
                             onDone = {
                                 // ★ 自动记住：登录/注册成功后持久化账号密码 + 已登录标记，
                                 //   下次启动直接进主界面（除非在「我的」点退出登录清空）。
-                                kvSet("kewu_account", account)
+                                kvSet("kewu_account", account.trim())
                                 kvSet("kewu_pwd", pwd)
                                 kvSet("kewu_logged", "1")
                                 onLogin()
@@ -567,15 +570,21 @@ private fun LoginButton(
             ) {
                 haptic(HapticKind.Tick)
                 onError("") // 清除旧错误
+                // ★ 提交前本地校验（2026-10-21）：去掉首尾空格，并挡掉「密码不足 6 位」。
+                //   后端把多条校验错误拼成一条返回，虽然前端已拆条映射，但能在本地拦下更直接。
+                val acc = account.trim()
+                val idLabel = if (role == 1) "工号" else "学号"
+                if (acc.isEmpty()) { onError("请输入${idLabel}"); return@clickable }
+                if (pwd.length < 6) { onError("密码长度至少 6 位，请重新设置"); return@clickable }
                 state = 1
                 scope.launch {
                     // ★ 真实请求：登录 / 注册（注册成功后自动登录拿 token）
                     // 注册把分段选的角色带给后端；登录成功后 KewuApi.login 会用响应里的 role 覆写 kv
                     val msg = if (mode == 0) {
-                        KewuApi.login(account, pwd)
+                        KewuApi.login(acc, pwd)
                     } else {
-                        val r = KewuApi.register(account, pwd, name, if (role == 1) "TEACHER" else "STUDENT")
-                        if (r == null) KewuApi.login(account, pwd) else r
+                        val r = KewuApi.register(acc, pwd, name.trim(), if (role == 1) "TEACHER" else "STUDENT")
+                        if (r == null) KewuApi.login(acc, pwd) else r
                     }
                     if (msg == null) {
                         // 成功：拉取个人资料（最佳努力，失败不影响进入主界面）

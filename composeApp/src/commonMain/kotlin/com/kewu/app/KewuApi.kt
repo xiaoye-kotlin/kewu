@@ -359,13 +359,25 @@ object KewuApi {
         val m = raw?.trim().orEmpty()
         val fallback = if (isRegister) "注册失败，请检查输入信息" else "登录失败，请稍后重试"
         if (m.isEmpty()) return fallback
+        // ★ 后端会把多条校验失败拼进同一条 message（实测：「用户名不能为空, 密码至少 6 位」）。
+        //   早期实现只映射命中的第一条，导致「密码不足 6 位」被误报成「请输入学号」。
+        //   这里按逗号/中文逗号拆分成多条，各自映射后用「；」合并，一条不漏地告诉用户。
+        val parts = m.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return m
+        val mapped = parts.map { mapSingleAuthMessage(it) }.distinct()
+        return mapped.joinToString("；")
+    }
+
+    /** 单条校验文案的正式化映射（[officialAuthMessage] 拆分后逐条调用）。 */
+    private fun mapSingleAuthMessage(m: String): String {
+        val id = idLabel()
         return when {
             "用户名或密码不对" in m || "密码错误" in m || "密码不对" in m || "密码不正确" in m ->
-                "学号或密码不正确，请重新输入"
+                "${id}或密码不正确，请重新输入"
             "已经被注册" in m || "已存在" in m || "重复" in m ->
-                "该学号已注册，请直接登录"
+                "该${id}已注册，请直接登录"
             "用户名不能为空" in m || "用户名为空" in m || "账号为空" in m ->
-                "请输入学号"
+                "请输入${id}"
             "密码至少" in m || "密码长度" in m ->
                 "密码长度至少 6 位，请重新设置"
             "昵称" in m && "空" in m ->
@@ -373,6 +385,12 @@ object KewuApi {
             else -> m
         }
     }
+
+    /**
+     * 登录/注册的身份标识叫法：学生端叫「学号」，教师端叫「工号」（2026-10-21 用户需求）。
+     * 依据 kv `kewu_role`（登录页角色选择即写入，App.kt 用同一个键分流两套 UI）。
+     */
+    fun idLabel(): String = if (kvGet("kewu_role") == ROLE_TEACHER) "工号" else "学号"
 
     /** 将传输/解析异常转换为面向用户的正式提示：不暴露技术细节与原始异常串。 */
     private fun networkErrorMessage(error: Exception): String {
