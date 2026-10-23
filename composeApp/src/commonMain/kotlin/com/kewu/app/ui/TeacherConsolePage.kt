@@ -315,6 +315,8 @@ private fun ConsoleHome(
             )
             else -> courses.forEachIndexed { i, c ->
                 val pc = rememberEnterProgress(5 + i, baseDelayMs = 440L, stepMs = 50L)
+                // ★ 控制台聚合富信息：班级名 / 学生数 / 上课状态 / 今日签到率（文档 5.11 建议的课程卡片）
+                val tc = console?.todayCourses?.firstOrNull { it.courseId == c.id }
                 Box(Modifier.riseEnter(pc, 24f)) {
                     Card(
                         onClick = { haptic(HapticKind.Tick); onOpenCourse(c) },
@@ -335,8 +337,36 @@ private fun ConsoleHome(
                             Column(Modifier.weight(1f)) {
                                 Text(c.name, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                                 Spacer(Modifier.height(2.dp))
-                                Text("ID: ${c.id}", fontSize = 12.sp, maxLines = 1)
+                                Text(
+                                    tc?.let {
+                                        buildString {
+                                            if (it.className.isNotBlank()) append(it.className)
+                                            if (it.studentCount > 0) {
+                                                if (isNotEmpty()) append(" · ")
+                                                append("${it.studentCount} 名学生")
+                                            }
+                                            it.todayCheckRate?.let { r ->
+                                                if (isNotEmpty()) append(" · ")
+                                                append("今日签到 ${(r * 100).toInt()}%")
+                                            }
+                                            if (isEmpty()) append("ID: ${c.id}")
+                                        }
+                                    } ?: "ID: ${c.id}",
+                                    fontSize = 12.sp, maxLines = 1,
+                                )
                             }
+                            // 上课状态胶囊（ON=上课中琥珀 / OFF=未开课灰）
+                            tc?.let {
+                                Spacer(Modifier.width(8.dp))
+                                StatusTag(
+                                    if (it.state == "ON") "上课中" else "未开课",
+                                    if (it.state == "ON") Color(0xFFFFB300).copy(alpha = 0.18f)
+                                    else MaterialTheme.colorScheme.surfaceVariant,
+                                    if (it.state == "ON") Color(0xFF8A5A00)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            Spacer(Modifier.width(8.dp))
                             Text("签到 ›", fontSize = 13.sp)
                         }
                     }

@@ -105,6 +105,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     var watchFromMock by remember { mutableStateOf(false) }
     var attStats by remember { mutableStateOf<AttendanceStats?>(null) }
     var hwStats by remember { mutableStateOf<AssignmentStats?>(null) }
+    var pendingReview by remember { mutableStateOf<Int?>(null) } // 控制台聚合的待批阅数
 
     val messages = remember { mutableListOf<TaMsg>() }
     var msgVersion by remember { mutableStateOf(0) }
@@ -121,6 +122,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         courseCount = courses?.size ?: 0
         val assignments: List<AssignmentInfo>? = KewuApi.getAssignments(courses?.firstOrNull()?.id)
         assignmentCount = assignments?.size ?: 0
+        // 控制台聚合：待批阅红点数（2026-10-21 接入，简报用）
+        pendingReview = KewuApi.getTeacherConsole()?.pendingReview
         val analytics: Analytics? = courses?.firstOrNull()?.let { KewuApi.getAnalytics(it.id) }
         weakPoints = analytics?.weakPoints.orEmpty()
         mastery = analytics?.knowledgeMastery.orEmpty()
@@ -160,8 +163,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         delay(500)
         push(TaMsg(false, buildList {
             add(TaBlock.Text("${greetingByHour()}，${teacherName}！我是小悟，先给你今天的教学简报："))
-            add(TaBlock.Text("课程 $courseCount 门 · 作业 $assignmentCount 份 · 重点关注 ${watchList.size} 人",
-                emphasis = true))
+            add(TaBlock.Text("课程 $courseCount 门 · 作业 $assignmentCount 份 · 重点关注 ${watchList.size} 人" +
+                (pendingReview?.let { " · 待批阅 $it 份" } ?: ""), emphasis = true))
             if (attStats != null) {
                 add(TaBlock.Text("最近签到：应到 ${attStats!!.expected} · 实到 ${attStats!!.checked} · " +
                     "签到率 ${(attStats!!.checkRate * 100).toInt()}%"))
