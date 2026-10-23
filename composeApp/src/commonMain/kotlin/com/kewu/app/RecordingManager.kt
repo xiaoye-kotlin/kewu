@@ -9,6 +9,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonPrimitive
 import kotlin.time.Clock
 
 /**
@@ -40,7 +45,54 @@ sealed interface RecordingStatus {
     data class Error(val msg: String, val durationSec: Int, val filePath: String?) : RecordingStatus
 }
 
+/**
+ * 一条本地录音上传记录（kv `kewu_rec_history` 持久化，最多保留 [RecordingManager.HISTORY_LIMIT] 条）。
+ * 成功项带 8081 返回的 recordingId / url / 质量分 / 电平 / 信噪比，供「录音管理」展示与多端融合；
+ * 失败项保留本地 [filePath]，可在录音管理里手动重传。
+ */
+data class RecordingRecord(
+    val localId: String,
+    val classId: String,
+    val sessionId: String,
+    val role: String,
+    val durationSec: Int,
+    val sizeBytes: Long,
+    val at: Long,
+    val uploaded: Boolean,
+    val recordingId: String = "",
+    val url: String = "",
+    val score: Double = 0.0,
+    val avgLevelDb: Double? = null,
+    val snrDb: Double? = null,
+    val filePath: String? = null,
+)
+
+/** 东八区当天日期 `yyyy-MM-dd`（commonMain 无 kotlinx-datetime，手算公历；课堂场景只在国内）。 */
+fun todayCn(epochMs: Long = Clock.System.now().toEpochMilliseconds()): String {
+    val days = (epochMs + 8 * 3_600_000L).floorDiv(86_400_000L)
+    // Howard Hinnant civil_from_days
+    val z = days + 719_468
+    val era = z.floorDiv(146_097L)
+    val doe = z - era * 146_097
+    val yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365
+    val doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    val mp = (5 * doy + 2) / 153
+    val d = doy - (153 * mp + 2) / 5 + 1
+    val m = if (mp < 10) mp + 3 else mp - 9
+    val y = yoe + era * 400 + if (m <= 2) 1 else 0
+    fun two(v: Long) = if (v < 10) "0$v" else "$v"
+    return "$y-${two(m)}-${two(d)}"
+}
+
 object RecordingManager {
+
+    const val HISTORY_LIMIT = 50
+    private const val HISTORY_KEY = "kewu_rec_history"
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private val _history = MutableStateFlow(loadHistory())
+    /** 本地录音上传记录（新的在前）。 */
+    val history: StateFlow<List<RecordingRecord>> = _history.asStateFlow()
 
     /**
      * 单线程作用域：开始 / 停止 / 计时 / 上传全部串行执行，免锁免竞态
@@ -123,14 +175,90 @@ object RecordingManager {
                 return
             }
             val cid = classId ?: "unknown"
-            val filename = "kewu_${cid}_${Clock.System.now().toEpochMilliseconds()}.wav"
-            val res = KewuApi.uploadRecording(bytes, filename, cid, null, durationSec.toDouble())
+            val now = Clock.System.now().toEpochMilliseconds()
+            // 同课同日的教师端 / 学生端落到同一协同会话，8081 才能按会话做多端择优融合
+            val sid = KewuApi.classSessionId(cid, todayCn(now))
+            val role = if (kvGet("kewu_role") == ROLE_TEACHER) "teacher" else "student"
+            val filename = "kewu_${cid}_$now.wav"
+            val res = KewuApi.uploadRecording(bytes, filename, cid, sid, durationSec.toDouble(), role)
+            val record = RecordingRecord(
+                localId = path, classId = cid, sessionId = sid, role = role,
+                durationSec = durationSec, sizeBytes = bytes.size.toLong(), at = now,
+                uploaded = res != null,
+                recordingId = res?.recordingId.orEmpty(), url = res?.url.orEmpty(),
+                score = res?.score ?: 0.0, avgLevelDb = res?.avgLevelDb, snrDb = res?.snrDb,
+                filePath = if (res == null) path else null,
+            )
+            putHistory(record)
             _status.value = if (res != null) RecordingStatus.Success(res.recordingId)
             else RecordingStatus.Error("录音上传失败，请稍后重试", durationSec, path)
         } catch (e: Exception) {
             _status.value = RecordingStatus.Error("录音上传失败，请稍后重试", durationSec, path)
         }
     }
+
+    /** 录音管理页「重传」：按记录重新上传本地文件（文件已被系统清理时返回失败文案）。 */
+    fun retryRecord(record: RecordingRecord, onDone: (String?) -> Unit) {
+        val path = record.filePath ?: return onDone("本地录音文件已不存在")
+        scope.launch {
+            val bytes = platformReadFile(path)
+            if (bytes == null) { onDone("本地录音文件已不存在"); return@launch }
+            val res = KewuApi.uploadRecording(
+                bytes, "kewu_${record.classId}_${record.at}.wav", record.classId,
+                record.sessionId, record.durationSec.toDouble(), record.role,
+            )
+            if (res == null) { onDone("录音上传失败，请稍后重试"); return@launch }
+            putHistory(record.copy(
+                uploaded = true, recordingId = res.recordingId, url = res.url, score = res.score,
+                avgLevelDb = res.avgLevelDb, snrDb = res.snrDb, filePath = null,
+            ))
+            onDone(null)
+        }
+    }
+
+    /** 从本地记录里移除一条（不删 OBS 上的文件）。 */
+    fun removeRecord(localId: String) {
+        _history.value = _history.value.filterNot { it.localId == localId }
+        saveHistory()
+    }
+
+    private fun putHistory(r: RecordingRecord) {
+        _history.value = (listOf(r) + _history.value.filterNot { it.localId == r.localId }).take(HISTORY_LIMIT)
+        saveHistory()
+    }
+
+    private fun saveHistory() {
+        val arr = JsonArray(_history.value.map { r ->
+            JsonObject(buildMap {
+                put("localId", JsonPrimitive(r.localId)); put("classId", JsonPrimitive(r.classId))
+                put("sessionId", JsonPrimitive(r.sessionId)); put("role", JsonPrimitive(r.role))
+                put("durationSec", JsonPrimitive(r.durationSec)); put("sizeBytes", JsonPrimitive(r.sizeBytes))
+                put("at", JsonPrimitive(r.at)); put("uploaded", JsonPrimitive(r.uploaded))
+                put("recordingId", JsonPrimitive(r.recordingId)); put("url", JsonPrimitive(r.url))
+                put("score", JsonPrimitive(r.score))
+                r.avgLevelDb?.let { put("avgLevelDb", JsonPrimitive(it)) }
+                r.snrDb?.let { put("snrDb", JsonPrimitive(it)) }
+                r.filePath?.let { put("filePath", JsonPrimitive(it)) }
+            })
+        })
+        kvSet(HISTORY_KEY, arr.toString())
+    }
+
+    private fun loadHistory(): List<RecordingRecord> = try {
+        val raw = kvGet(HISTORY_KEY)
+        if (raw.isNullOrBlank()) emptyList() else (json.parseToJsonElement(raw) as JsonArray).mapNotNull { el ->
+            val o = el as? JsonObject ?: return@mapNotNull null
+            fun s(k: String) = o[k]?.jsonPrimitive?.content.orEmpty()
+            fun d(k: String) = o[k]?.jsonPrimitive?.content?.toDoubleOrNull()
+            RecordingRecord(
+                localId = s("localId"), classId = s("classId"), sessionId = s("sessionId"), role = s("role"),
+                durationSec = s("durationSec").toIntOrNull() ?: 0, sizeBytes = s("sizeBytes").toLongOrNull() ?: 0L,
+                at = s("at").toLongOrNull() ?: 0L, uploaded = s("uploaded") == "true",
+                recordingId = s("recordingId"), url = s("url"), score = d("score") ?: 0.0,
+                avgLevelDb = d("avgLevelDb"), snrDb = d("snrDb"), filePath = o["filePath"]?.jsonPrimitive?.content,
+            )
+        }
+    } catch (_: Exception) { emptyList() }
 
     private fun startTicker() {
         ticker?.cancel()

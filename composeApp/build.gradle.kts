@@ -56,6 +56,8 @@ kotlin {
             implementation(libs.kotlinx.coroutines.core)
             implementation(libs.coui.blur)
             implementation(libs.coui.ui)
+            implementation(libs.coui.preference)
+            implementation(libs.coui.icons)
             // 录音测试页调后端上传接口用：客户端核心放 common，引擎按平台放各自 sourceSet
             implementation(libs.ktor.client.core)
             implementation(libs.kotlinx.serialization.json)

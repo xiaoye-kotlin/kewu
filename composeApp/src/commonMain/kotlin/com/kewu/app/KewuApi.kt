@@ -95,10 +95,42 @@ data class Analytics(
 )
 data class ScoreTrendItem(val label: String, val avgScore: Double)
 
+/** 跨课程待批阅里的一份提交（文档 3.12 `items[]`，已按 priority 降序）。 */
+data class PendingReviewItem(
+    val submissionId: String, val assignmentId: String, val assignmentTitle: String,
+    val courseId: String, val courseName: String, val studentId: String, val studentName: String,
+    val submittedAt: String, val waitHours: Double, val version: Int, val status: String,
+    val aiSuggestedScore: Double?, val riskLevel: String, val priority: Double, val urgent: Boolean,
+    val reasons: List<String>,
+)
+data class PendingAssignmentGroup(
+    val assignmentId: String, val title: String, val deadline: String,
+    val pendingCount: Int, val urgentCount: Int,
+)
+data class PendingCourseGroup(
+    val courseId: String, val courseName: String, val pendingCount: Int, val assignmentCount: Int,
+    val urgentCount: Int, val oldestWaitHours: Double, val assignments: List<PendingAssignmentGroup>,
+)
+/** 跨课程待批阅聚合（文档 3.12：scope=TEACHER 只看该老师的班级对应课程 / ALL 全部课程）。 */
+data class PendingReview(
+    val teacherName: String, val scope: String, val total: Int, val courseCount: Int,
+    val assignmentCount: Int, val studentCount: Int, val urgentCount: Int, val highRiskCount: Int,
+    val oldestWaitHours: Double, val avgWaitHours: Double,
+    val groups: List<PendingCourseGroup>, val items: List<PendingReviewItem>,
+)
+
 // 8081 服务
 data class RecordingUploadResult(
     val recordingId: String, val url: String, val score: Double, val storedAt: String,
+    /** 回显的端角色 teacher / student（10.3）。 */
+    val role: String = "",
+    /** 平均电平 dBFS（-20 左右为正常音量），服务端从 WAV 波形算出。 */
+    val avgLevelDb: Double? = null,
+    /** 信噪比 dB，仅 WAV/PCM 有值。 */
+    val snrDb: Double? = null,
 )
+/** 8081 健康检查（10.2 + 10.5：`redis` 字段 up/down，down 时纪要/会话/简易签到写入会 503）。 */
+data class ObsHealth(val status: String, val redis: String, val time: String)
 data class SessionInfo(
     val sessionId: String, val classId: String, val startedAt: String, val state: String,
 )
@@ -106,10 +138,16 @@ data class RecordingFuseItem(
     val recordingId: String, val classId: String, val sessionId: String, val deviceId: String,
     val format: String? = null, val sampleRate: Int? = null, val durationSec: Double? = null,
     val sizeBytes: Long? = null, val storedUrl: String? = null,
+    /** teacher / student；不传按学生端（10.4）。 */
+    val role: String? = null,
+    /** 建议把上传返回的这两个值原样带回（WAV 的 SNR 只有上传时算得出来）。 */
+    val avgLevelDb: Double? = null, val snrDb: Double? = null,
 )
 data class RecordingFuseResult(
     val sessionId: String, val primaryRecordingId: String,
     val mergedSources: List<String>, val strategy: String,
+    val selectedRole: String = "", val fallback: Boolean = false,
+    val abnormalIds: List<String> = emptyList(),
 )
 data class AttendanceQuiz(val question: String, val hint: String, val sourceNoteTitle: String)
 data class AttendanceSession(
@@ -626,6 +664,66 @@ object KewuApi {
     } catch (e: CancellationException) { throw e }
     catch (e: Exception) { networkErrorMessage(e) }
 
+    /** 8081 健康检查（结构化）：`{status, redis, time}`。连不上返回 null。
+     *  redis=down 时服务本身仍 up，但纪要 / 会话 / 简易签到写入会返回 503（10.5）。 */
+    suspend fun obsHealthInfo(): ObsHealth? = try {
+        val o = json.parseToJsonElement(client.get("$OBS_URL/health").bodyAsText()) as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        ObsHealth(o["status"].str(), o["redis"].str(), o["time"].str())
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 8080 是否在线：`/api/health` 返回纯文本 ok 即在线。 */
+    suspend fun isBusinessUp(): Boolean = try {
+        client.get("$BASE_URL/api/health").bodyAsText().trim().equals("ok", ignoreCase = true)
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { false }
+
+    /**
+     * 跨课程待批阅聚合（文档 3.12）。[teacherId] 非空走教师端入口 `/api/teacher/pending-review`
+     * （只聚合该老师所教班级对应的课程，scope=TEACHER）；为空走 `/api/assignments/pending-review`（全部课程，scope=ALL）。
+     * 失败返回 null（调用方降级为逐作业 getSubmissions 聚合）。
+     */
+    suspend fun getPendingReview(teacherId: String? = teacherId()): PendingReview? = try {
+        val url = if (teacherId.isNullOrBlank()) "$BASE_URL/api/assignments/pending-review"
+            else queryUrl("$BASE_URL/api/teacher/pending-review", "teacherId", teacherId)
+        val o = getJson(url).asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        PendingReview(
+            teacherName = o["teacherName"].str(), scope = o["scope"].str(),
+            total = o["total"].int(), courseCount = o["courseCount"].int(),
+            assignmentCount = o["assignmentCount"].int(), studentCount = o["studentCount"].int(),
+            urgentCount = o["urgentCount"].int(), highRiskCount = o["highRiskCount"].int(),
+            oldestWaitHours = o["oldestWaitHours"].num(), avgWaitHours = o["avgWaitHours"].num(),
+            groups = (o["groups"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { g ->
+                PendingCourseGroup(
+                    courseId = g["courseId"].str(), courseName = g["courseName"].str(),
+                    pendingCount = g["pendingCount"].int(), assignmentCount = g["assignmentCount"].int(),
+                    urgentCount = g["urgentCount"].int(), oldestWaitHours = g["oldestWaitHours"].num(),
+                    assignments = (g["assignments"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { a ->
+                        PendingAssignmentGroup(
+                            a["assignmentId"].str(), a["title"].str(), a["deadline"].str(),
+                            a["pendingCount"].int(), a["urgentCount"].int(),
+                        )
+                    },
+                )
+            },
+            items = (o["items"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map { i ->
+                PendingReviewItem(
+                    submissionId = i["submissionId"].str(), assignmentId = i["assignmentId"].str(),
+                    assignmentTitle = i["assignmentTitle"].str(), courseId = i["courseId"].str(),
+                    courseName = i["courseName"].str(), studentId = i["studentId"].str(),
+                    studentName = i["studentName"].str(), submittedAt = i["submittedAt"].str(),
+                    waitHours = i["waitHours"].num(), version = i["version"].int(), status = i["status"].str(),
+                    aiSuggestedScore = (i["aiSuggestedScore"] as? JsonPrimitive)?.content?.toDoubleOrNull(),
+                    riskLevel = i["riskLevel"].str(), priority = i["priority"].num(), urgent = i["urgent"].bool(),
+                    reasons = (i["reasons"] as? JsonArray).orEmpty().map { it.str() },
+                )
+            },
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
     /** 8080 健康检查。文档规定该接口返回纯文本，不套业务壳。 */
     suspend fun health(): String? = try {
         val resp = client.get("$BASE_URL/api/health")
@@ -671,8 +769,9 @@ object KewuApi {
                     "sessionId" to r.sessionId, "deviceId" to r.deviceId,
                     "format" to r.format, "sampleRate" to r.sampleRate,
                     "durationSec" to r.durationSec, "sizeBytes" to r.sizeBytes,
-                    "storedUrl" to r.storedUrl,
-                )
+                    "storedUrl" to r.storedUrl, "role" to r.role,
+                    "avgLevelDb" to r.avgLevelDb, "snrDb" to r.snrDb,
+                ).filterValues { it != null }
             },
         )
         val resp = client.post("$OBS_URL/api/recordings/fuse") {
@@ -684,9 +783,10 @@ object KewuApi {
             sessionId = el["sessionId"].str(), primaryRecordingId = el["primaryRecordingId"].str(),
             mergedSources = (el["mergedSources"] as? JsonArray).orEmpty().map { it.str() },
             strategy = el["strategy"].str(),
+            selectedRole = el["selectedRole"].str(), fallback = el["fallback"].bool(),
+            abnormalIds = (el["abnormalIds"] as? JsonArray).orEmpty().map { it.str() },
         )
-    } catch (e: ResponseException) { throw ApiException(e.response.bodyAsText().let { parseError(it) }) }
-    catch (e: CancellationException) { throw e }
+    } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
 
 
@@ -721,13 +821,19 @@ object KewuApi {
         AttendanceCode(o["sessionId"].str(), o["code"].str(), o["qrContent"].str(), o["windowSeconds"].int(), o["remainingSeconds"].int())
     } catch (_: Exception) { null }
 
-    suspend fun attendanceCheckIn(id: String, studentId: String, studentName: String = studentId, code: String? = null, answer: String? = null, latitude: Double? = null, longitude: Double? = null): String? = try {
+    /**
+     * 学生签到（第 4 节完整版）。[courseId] 非空时签到成功后顺带把到场状态写进 8081 简易签到缓存
+     * （10.5，录音服务内部的课堂状态缓存，教师端上课面板据此显示「录音端已同步到场」），写缓存失败不影响签到结果。
+     */
+    suspend fun attendanceCheckIn(id: String, studentId: String, studentName: String = studentId, code: String? = null, answer: String? = null, latitude: Double? = null, longitude: Double? = null, courseId: String? = null): String? = try {
         val body = mutableMapOf<String, Any?>("studentId" to studentId, "studentName" to studentName)
         if (code != null) body["code"] = code
         if (answer != null) body["answer"] = answer
         if (latitude != null) body["latitude"] = latitude
         if (longitude != null) body["longitude"] = longitude
+        body["deviceId"] = platformDeviceId()
         postJson("$BASE_URL/api/attendance/${pathSegment(id)}/check-in", body, auth = true).asDataOrThrow()
+        if (!courseId.isNullOrBlank()) checkin(courseId, studentId, "present")
         null
     } catch (e: CancellationException) { throw e } catch (e: ApiException) { e.message } catch (_: Exception) { "网络异常，请稍后重试" }
 
@@ -770,13 +876,19 @@ object KewuApi {
      *    会丢掉 boundary，让 [MultiPartFormDataContent] 自己设。 */
     suspend fun uploadRecording(
         bytes: ByteArray, filename: String, classId: String, sessionId: String?, durationSec: Double?,
+        role: String = if (kvGet("kewu_role") == ROLE_TEACHER) "teacher" else "student",
+        avgLevel: Double? = null,
     ): RecordingUploadResult? = try {
         val content = MultiPartFormDataContent(formData {
             append("classId", classId)
             append("deviceId", platformDeviceId())
             append("sampleRate", "44100")
+            append("format", "wav")
+            // 10.3：role 不传默认 student；教师端必须显式传 teacher，融合时才会「教师端优先」
+            append("role", role)
             if (sessionId != null) append("sessionId", sessionId)
             if (durationSec != null) append("durationSec", durationSec.toString())
+            if (avgLevel != null) append("avgLevel", avgLevel.toString())
             append("audio", bytes, Headers.build {
                 append(HttpHeaders.ContentType, "audio/wav")
                 append(HttpHeaders.ContentDisposition, "filename=\"${safeFilename(filename)}\"")
@@ -793,22 +905,37 @@ object KewuApi {
         RecordingUploadResult(
             recordingId = el["recordingId"].str(), url = el["url"].str(),
             score = el["score"].num(), storedAt = el["storedAt"].str(),
+            role = el["role"].str(),
+            avgLevelDb = (el["avgLevelDb"] as? JsonPrimitive)?.content?.toDoubleOrNull(),
+            snrDb = (el["snrDb"] as? JsonPrimitive)?.content?.toDoubleOrNull(),
         )
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
 
-    /** 签到（POST 裸 JSON）。[status] 默认 "present"。失败返回 message 或 null。 */
-    suspend fun checkin(classId: String, studentId: String, status: String = "present"): String? = try {
-        val resp = client.post("$OBS_URL/api/checkin") {
+    /**
+     * 8081 Redis 缓存类写接口（纪要 / 会话 / 简易签到）的统一 POST：成功返回 null，失败返回可展示文案。
+     * 2026-10-21 起 Redis 不可用时返回 `503 {"ok":false,"degraded":true,"error":...}`（不再假成功），
+     * 这里把 degraded 翻译成正式提示，让用户明确知道「没存上」。
+     */
+    private suspend fun postObsCache(path: String, body: Map<String, Any?>): String? = try {
+        val resp = client.post("$OBS_URL$path") {
             contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(
-                mapOf("classId" to classId, "studentId" to studentId, "status" to status),
-            )))
+            setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(body)))
         }
-        val el = json.parseToJsonElement(resp.bodyAsText()).asRawOrThrow()
-        if (el["ok"].bool()) null else "签到失败"
-    } catch (e: ApiException) { e.message }
-    catch (_: Exception) { "网络异常，请稍后重试" }
+        val o = json.parseToJsonElement(resp.bodyAsText()) as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        when {
+            o["degraded"].bool() -> "课堂缓存服务暂不可用，本次内容未保存，请稍后重试"
+            o["ok"].bool() -> null
+            else -> o["error"].strOrNull() ?: "保存失败，请稍后重试"
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { e.message }
+    catch (e: Exception) { networkErrorMessage(e) }
+
+    /** 简易签到（8081 Redis 缓存版，10.5；正式签到走第 4 节）。[status] 默认 "present"。成功返回 null。 */
+    suspend fun checkin(classId: String, studentId: String, status: String = "present"): String? =
+        postObsCache("/api/checkin", mapOf("classId" to classId, "studentId" to studentId, "status" to status))
 
     /** 查询签到状态（返回 studentId->status 的 map）。失败返回 null。 */
     suspend fun getCheckins(classId: String): Map<String, String>? = try {
@@ -816,42 +943,30 @@ object KewuApi {
         val el = json.parseToJsonElement(resp.bodyAsText()).asRawOrThrow()
         val checks = el["checkins"] as? JsonObject ?: return emptyMap()
         checks.mapValues { it.value.str() }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
-    /** 缓存课堂纪要（POST 裸 JSON）。失败返回 message 或 null。 */
-    suspend fun postNote(classId: String, content: String): String? = try {
-        val resp = client.post("$OBS_URL/api/notes") {
-            contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(
-                mapOf("classId" to classId, "content" to content),
-            )))
-        }
-        val el = json.parseToJsonElement(resp.bodyAsText()).asRawOrThrow()
-        if (el["ok"].bool()) null else "保存失败"
-    } catch (e: ApiException) { e.message }
-    catch (_: Exception) { "网络异常，请稍后重试" }
+    /** 缓存课堂纪要（8081，24h 过期）。成功返回 null，失败返回文案。 */
+    suspend fun postNote(classId: String, content: String): String? =
+        postObsCache("/api/notes", mapOf("classId" to classId, "content" to content))
 
     /** 读课堂纪要（GET，无纪要时 404 返回 null 不报错）。 */
     suspend fun getNoteCache(classId: String): String? = try {
         val resp = client.get("$OBS_URL/api/notes/${pathSegment(classId)}")
         val el = json.parseToJsonElement(resp.bodyAsText()).asRawOrThrow()
         el["content"].strOrNull()
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
-    /** 创建课堂会话（POST 裸 JSON）。失败返回 null。 */
-    suspend fun createSession(sessionId: String, classId: String): SessionInfo? = try {
-        val resp = client.post("$OBS_URL/api/sessions") {
-            contentType(ContentType.Application.Json)
-            setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(
-                mapOf("sessionId" to sessionId, "classId" to classId, "state" to "active"),
-            )))
-        }
-        val el = json.parseToJsonElement(resp.bodyAsText()).asRawOrThrow()
-        SessionInfo(
-            sessionId = el["sessionId"].str(), classId = el["classId"].str(),
-            startedAt = el["startedAt"].str(), state = el["state"].str(),
-        )
-    } catch (_: Exception) { null }
+    /** 创建课堂录音协同会话（8081，24h 过期；响应只有 `{ok:true}`）。成功返回 null，失败返回文案。 */
+    suspend fun createSession(sessionId: String, classId: String): String? =
+        postObsCache("/api/sessions", mapOf("sessionId" to sessionId, "classId" to classId, "state" to "active"))
+
+    /**
+     * 课堂协同会话 ID 约定：同一门课同一天的教师端与学生端算出同一个 ID，多端录音据此归到同一会话再融合。
+     * [date] 形如 `2026-10-23`。
+     */
+    fun classSessionId(courseId: String, date: String): String = "$courseId-${date.replace("-", "")}"
 
     /** 查课堂会话（GET，无会话 404 返回 null）。 */
     suspend fun getSession(sessionId: String): SessionInfo? = try {

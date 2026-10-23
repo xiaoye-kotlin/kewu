@@ -29,6 +29,10 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 coui-blur = { module = "io.github.suqi8.coui.kmp:coui-blur", version.ref = "coui" }
 # coui 官方控件库（Checkbox / Card / Switch 等，用户要求：不自造控件，直接用 coui 原生组件）
 coui-ui = { module = "io.github.suqi8.coui.kmp:coui-ui", version.ref = "coui" }
+# coui 设置行组件（ArrowPreference / SwitchPreference / RadioButtonPreference 等，2026-10-23 全局 coui 化）
+coui-preference = { module = "io.github.suqi8.coui.kmp:coui-preference", version.ref = "coui" }
+# coui 官方图标（返回 / 编辑 / 发送 / 麦克风等，替换自绘 Canvas 小图标）
+coui-icons = { module = "io.github.suqi8.coui.kmp:coui-icons", version.ref = "coui" }
 androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "androidxCamera" }
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "androidxCamera" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "androidxCamera" }

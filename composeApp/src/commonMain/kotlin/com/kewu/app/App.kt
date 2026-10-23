@@ -1,12 +1,12 @@
 package com.kewu.app
 
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.Color
+import com.kewu.app.ui.KewuTheme
 import com.kewu.app.ui.LoginScreen
 import com.kewu.app.ui.MainScreen
 import com.kewu.app.ui.TeacherMainScreen
@@ -32,9 +32,9 @@ fun currentRole(): String = kvGet("kewu_role") ?: ROLE_STUDENT
 
 @Composable
 fun App() {
-    // 显式套一层 MaterialTheme：页面一律用它的默认 colorScheme / typography / shapes，
-    // 不再自定义背景与文字色（绿色只作为品牌强调色用在「勾勾」徽章上）。
-    MaterialTheme {
+    // 根主题 = COUITheme + 对齐的 M3 色板 + 根 coui Scaffold（覆盖层弹窗 / 底部弹层 / Snackbar 宿主），
+    // 见 ui/KewuCoui.kt。绿色只作为品牌强调色用在「勾勾」徽章上。
+    KewuTheme {
         // 启动首屏 = 登录/注册（液态玻璃 + coui）。mock 登录态：登录成功后进入主界面，
         // 在「我的」页点「退出登录」会回到这里（App 级持有 loggedIn，保证跨 tab 不丢）。
         // ★ 自动登录：首次登录后 kv 写入 kewu_logged="1"，此处据此跳过登录页；
