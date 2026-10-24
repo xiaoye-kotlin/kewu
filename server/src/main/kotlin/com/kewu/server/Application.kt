@@ -11,6 +11,7 @@ import com.kewu.server.services.ai.NoOpAiService
 import com.kewu.server.services.AudioAnalyzer
 import com.kewu.server.services.AudioFusion
 import com.kewu.server.services.QualityScorer
+import com.kewu.server.services.RecordingDeviceService
 import com.kewu.server.services.RedisService
 import com.kewu.server.services.storage.AudioStorage
 import com.kewu.server.services.storage.LocalStorageService
@@ -40,7 +41,8 @@ class Services(
     val scorer: QualityScorer,
     val fusion: AudioFusion,
     val analyzer: AudioAnalyzer,
-    val ai: AiService
+    val ai: AiService,
+    val deviceMonitor: RecordingDeviceService
 )
 
 val ServicesKey = AttributeKey<Services>("kewu.services")
@@ -52,15 +54,17 @@ fun Application.installServices(config: com.kewu.server.config.AppConfig) {
     } else {
         LocalStorageService(config.localDir)
     }
+    val redis = RedisService(config.redis)
     attributes.put(
         ServicesKey,
         Services(
             storage = storage,
-            redis = RedisService(config.redis),
+            redis = redis,
             scorer = QualityScorer(),
             fusion = AudioFusion(),
             analyzer = AudioAnalyzer(),
-            ai = NoOpAiService()
+            ai = NoOpAiService(),
+            deviceMonitor = RecordingDeviceService(redis)
         )
     )
 }

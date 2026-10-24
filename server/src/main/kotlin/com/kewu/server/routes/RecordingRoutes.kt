@@ -1,6 +1,8 @@
 package com.kewu.server.routes
 
 import com.kewu.server.ServicesKey
+import com.kewu.server.model.DeviceHeartbeat
+import com.kewu.server.model.DeviceStatus
 import com.kewu.server.model.FuseRequest
 import com.kewu.server.model.RecordingMeta
 import com.kewu.server.model.RecordingUploadResult
@@ -13,12 +15,12 @@ import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Routing
+import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.utils.io.core.readBytes
+import kotlinx.serialization.json.Json
 import java.time.Instant
 import java.util.UUID
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
 // 录音上传 + 融合：多端把音频传上来，存好、算电平/信噪比、打分，教师端优先择优，异常自动回退学生端
 fun Routing.recordingRoutes() {
@@ -123,5 +125,38 @@ fun Routing.recordingRoutes() {
         val req = call.receive<FuseRequest>()
         val scored = req.recordings.map { it to services.scorer.score(it).score }
         call.respond(services.fusion.fuse(req.sessionId, scored))
+    }
+
+    // 录音设备雷达与状态监控：Controller 只收 sessionId、调 Service、返回，不含任何 Redis/统计逻辑
+    get("/api/teacher/recording/devices") {
+        val sessionId = call.request.queryParameters["sessionId"] ?: ""
+        call.respond(services.deviceMonitor.getDeviceReport(sessionId))
+    }
+
+    // 设备心跳上报入口：App/大屏端录音时定时把自身状态写进 Redis（field=deviceId, value=DeviceStatus JSON）。
+    // 这是上面 GET 接口的数据来源——没有心跳，雷达就是空的。Redis 降级时如实报 degraded，不假成功
+    post("/api/teacher/recording/devices/heartbeat") {
+        try {
+            val hb = call.receive<DeviceHeartbeat>()
+            if (hb.sessionId.isBlank() || hb.deviceId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "sessionId 和 deviceId 必填"))
+                return@post
+            }
+            val status = DeviceStatus(
+                deviceId = hb.deviceId,
+                type = hb.type,
+                status = hb.status,
+                qualityScore = hb.qualityScore,
+                lastHeartbeat = hb.lastHeartbeat ?: System.currentTimeMillis()
+            )
+            val json = Json.encodeToString(DeviceStatus.serializer(), status)
+            if (services.redis.saveDeviceStatus(hb.sessionId, hb.deviceId, json)) {
+                call.respond(mapOf("ok" to true))
+            } else {
+                call.respond(HttpStatusCode.ServiceUnavailable, mapOf("ok" to false, "degraded" to true, "error" to "redis unavailable, heartbeat not persisted"))
+            }
+        } catch (t: Throwable) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to (t.message ?: "bad request")))
+        }
     }
 }

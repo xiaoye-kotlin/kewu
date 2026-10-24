@@ -90,3 +90,43 @@ data class ClassroomSession(
     val startedAt: String = "",
     val state: String = "active"
 )
+
+// 录音设备实时状态：设备录音时把心跳、类型、质量分写进 Redis（见 RecordingDeviceService）
+@Serializable
+data class DeviceStatus(
+    val deviceId: String = "",
+    val type: String = "",          // "phone" = 手机端，"screen" = 大屏端
+    val status: String = "",        // 如 recording / online / offline
+    val qualityScore: Int = 0,      // 当前音频质量分（0-100）
+    val lastHeartbeat: Long? = null // 最近一次心跳时间戳（ms），可选
+)
+
+// 雷达图里展示的一个设备点（接口 devices 列表的项）
+@Serializable
+data class RecordingDeviceView(
+    val deviceId: String,
+    val type: String,
+    val status: String,
+    val qualityScore: Int
+)
+
+// 录音设备雷达与状态监控接口的完整返回
+@Serializable
+data class RecordingDevicesResponse(
+    val totalDevices: Int,          // 当前录音设备总数
+    val phoneCount: Int,            // 手机端录音数量
+    val screenOnline: Boolean,      // 大屏是否在线（存在且 status=online）
+    val bestDeviceId: String?,      // 质量分最高的设备ID；没有设备时为 null
+    val devices: List<RecordingDeviceView>  // 设备详细列表，供前端画雷达点
+)
+
+// 设备心跳上报请求：App/大屏端录音时定时把自身状态打上来（POST /heartbeat 用）
+@Serializable
+data class DeviceHeartbeat(
+    val sessionId: String = "",
+    val deviceId: String = "",
+    val type: String = "",
+    val status: String = "",
+    val qualityScore: Int = 0,
+    val lastHeartbeat: Long? = null
+)

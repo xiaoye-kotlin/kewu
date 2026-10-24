@@ -112,5 +112,17 @@ class RedisService(private val cfg: RedisConfig) {
     suspend fun getRecordingMetas(sessionId: String): List<String> =
         withRedis(emptyList()) { it.lrange("kewu:recordings:$sessionId", 0L, -1L) }
 
+    // 录音设备状态：用哈希存一节课里每台设备的实时状态（心跳上报时写进来）。field=deviceId，value=DeviceStatus 的 JSON。随课堂数据一并设 24h 过期
+    suspend fun getDeviceStatuses(sessionId: String): Map<String, String> =
+        withRedis(emptyMap()) { it.hgetall("kewu:devices:$sessionId") }
+
+    // 设备心跳上报入口：把某台设备的状态写进哈希（覆盖式，重复心跳不报错）。返回 true=真写入，false=Redis 降级
+    suspend fun saveDeviceStatus(sessionId: String, deviceId: String, statusJson: String): Boolean =
+        withRedis(false) { c ->
+            c.hset("kewu:devices:$sessionId", deviceId, statusJson)
+            c.expire("kewu:devices:$sessionId", TTL_CLASS_DATA_SECONDS)
+            true
+        }
+
     fun close() = runCatching { connection?.close() }
 }

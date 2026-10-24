@@ -307,6 +307,8 @@ private fun ConsoleHome(
         }
 
         // ── 一键开课 / 上课中面板（coui 白卡，非玻璃） ──
+        // 作业模块视角拓展（后端联调）：跨课程待批阅聚合
+        PendingReviewTestBlock()
         val p1 = rememberEnterProgress(1, baseDelayMs = 200L)
         Box(Modifier.riseEnter(p1, 30f)) {
             if (!activeLoaded) {
