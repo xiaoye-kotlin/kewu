@@ -698,6 +698,7 @@ private fun LiveSessionCard(
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
     var code by remember { mutableStateOf<AttendanceCode?>(null) }
     var remaining by remember { mutableStateOf(0) }
     var realtime by remember { mutableStateOf<AttendanceRealtime?>(null) }
@@ -821,17 +822,31 @@ private fun LiveSessionCard(
         confirmText = "确认结束",
         cancelText = "再想想",
         onConfirm = {
-            confirmClose = false
             if (closing) return@KewuConfirmDialog
             closing = true
             // 下课时录音还开着 → 先停并上传，避免麦克风常驻（上传由单例负责，不随页面销毁）
             if (RecordingManager.isRecording) RecordingManager.stopAndUpload()
+            // ★ 修复闪退：先关弹窗触发退场动画，等动画播完（onDismissFinished）后再做网络请求 +
+            //   结构切换（onClosed 会置空 activeSession，整张 LiveSessionCard 随之移出组合）。
+            //   原本在 onConfirm 里直接 launch 调 onClosed，会让「弹窗退场动画」与「卡片销毁」并发，
+            //   coui 玻璃采样层在采样正在销毁的 backdrop 时 SIGSEGV 闪退。
+            confirmClose = false
+        },
+        onDismissFinished = {
+            // 仅在确认结束（closing==true）时执行；点「再想想」取消时 closing 仍为 false，跳过。
+            if (!closing) return@KewuConfirmDialog
             scope.launch {
-                KewuApi.closeAttendance(session.id)
-                // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
-                KewuApi.setClassState(session.courseId, "END")
-                closing = false
-                onClosed()
+                try {
+                    KewuApi.closeAttendance(session.id)
+                    // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
+                    KewuApi.setClassState(session.courseId, "END")
+                } catch (e: Throwable) {
+                    // 关闭失败不应卡住下课流程；提示但不阻断
+                    e.message?.takeIf { it.isNotBlank() }?.let { snackbar.toast(it) }
+                } finally {
+                    closing = false
+                    onClosed()
+                }
             }
         },
         onDismiss = { confirmClose = false },

@@ -550,8 +550,10 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                 2 -> {
                     // 拦截系统返回手势，回到课堂主页，而不是让 Activity 直接 finish 退出 app。
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
+                    // 转场期间 attendanceId 可能已被置空（如按返回），先绑定非空本地值，避免 attId!! NPE 闪退
+                    val aid = attId ?: return@AnimatedContent
                     AttendanceDetailScreen(
-                        attendanceId = attId!!,
+                        attendanceId = aid,
                         studentId = KewuApi.username ?: "",
                         studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
                         onBack = { drill = ClassroomDrill.NONE; attendanceId = null },
@@ -574,8 +576,10 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                 4 -> {
                     // 暗号签到独立页（学生）：扫码失败的兜底 / 相机不可用
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
+                    // 转场期间 attendanceId 可能已被置空，先绑定非空本地值，避免 attId!! NPE 闪退
+                    val aid = attId ?: return@AnimatedContent
                     CodeCheckInPage(
-                        sessionId = attId!!,
+                        sessionId = aid,
                         onBack = { drill = ClassroomDrill.NONE; attendanceId = null },
                         onDone = { drill = ClassroomDrill.NONE; attendanceId = null },
                     )

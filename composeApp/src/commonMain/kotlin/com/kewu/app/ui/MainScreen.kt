@@ -218,13 +218,8 @@ fun MainScreen(
                 .fillMaxSize()
                 .statusBarsPadding(), // 顶部避开状态栏，内容不被状态栏遮挡
         ) {
-            TopBar(
-                // 入场：从上方滑下（TopBar 无玻璃采样，alpha 可用）
-                Modifier
-                    .offset { IntOffset(0, ((1f - enterT) * -14f).dp.roundToPx()) }
-                    .alpha(enterT),
-            )
             // 内容区：记录进玻璃层，供底部导航栏采样折射。
+            // 注：顶部「课悟 · Kewu」品牌横幅已按用户要求移除，内容从状态栏下直接开始，不挡视野。
             // ★ 关键：**只渲染当前选中的那一页**，且固定在 offset=0。
             //   之前用「Row 并排 4 页 + 整条 Row 按 previewFloat 位移」实现横滑，实测有两个致命问题：
             //   ① Row 是 fillMaxSize（宽=屏宽），第 1 个子项吃掉整宽后，后续子项被以 maxWidth=0 测量
@@ -346,34 +341,6 @@ fun MainScreen(
                 .align(Alignment.BottomCenter)
                 .padding(bottom = (24 + 66 + 16).dp),
         )
-    }
-}
-
-@Composable
-private fun TopBar(modifier: Modifier = Modifier) {
-    val cs = COUITheme.colorScheme
-    // coui 化：顶栏底 = coui 白卡色 surfaceContainer（原 M3 surface 白），品牌方块走 coui Surface
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .background(cs.surfaceContainer),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Row(Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                modifier = Modifier.size(36.dp),
-                shape = RoundedCornerShape(10.dp),
-                color = cs.primary,
-                contentColor = cs.onPrimary,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold)
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Text("课悟 · Kewu", color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-        }
     }
 }
 

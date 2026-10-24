@@ -254,7 +254,7 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
         ToolButton(if (loading) "正在发起…" else "发起签到", enabled = selectedId != null && title.isNotBlank() && !loading) {
             scope.launch {
                 loading = true
-                val session = KewuApi.createAttendance(selectedId!!, title.trim(), durationMinutes = duration)
+                val session = KewuApi.createAttendance(selectedId ?: return@launch, title.trim(), durationMinutes = duration)
                 loading = false
                 result = if (session != null) true to "签到已发起 · 会话 ${session.id}"
                 else false to "签到发起失败，请稍后重试"
@@ -300,7 +300,7 @@ internal fun PostNoteScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
         ToolButton(if (loading) "正在发布…" else "发布笔记", enabled = selectedId != null && content.isNotBlank() && !loading) {
             scope.launch {
                 loading = true
-                val err = KewuApi.postNote(selectedId!!, content.trim())
+                val err = KewuApi.postNote(selectedId ?: return@launch, content.trim())
                 loading = false
                 result = if (err == null) true to "笔记已发布" else false to (err ?: "发布失败")
                 result?.let { snackbar.toast(it.second) }

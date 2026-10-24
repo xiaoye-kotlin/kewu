@@ -36,10 +36,8 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.HapticKind
-import com.kewu.app.KewuBlue
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
-import io.github.suqi8.coui.kmp.basic.Surface
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
@@ -58,6 +56,7 @@ import kotlin.math.roundToInt
 // - 内容区是导航栏玻璃托盘的采样层（layerBackdrop），导航栏与之平级；
 // - 入场/收起动画只动 placement 位移（lambda offset）+ 导航栏自身的 alpha/scale（生产已验证）。
 // 2026-10-23 全局 coui 化：底色 / 顶栏改读 COUITheme，导航栏（液态玻璃）原样不动。
+// 2026-10-24 按用户要求移除顶部「课悟 · Kewu」品牌横幅，内容从状态栏下直接开始，不挡视野。
 
 private val TEACHER_NAV_ITEMS = listOf(
     NavItem(0, "控制台"),
@@ -130,10 +129,8 @@ fun TeacherMainScreen(
             .background(COUITheme.colorScheme.surface),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            TeacherTopBar(
-                Modifier.offset { IntOffset(0, ((1f - enterT) * -14f).dp.roundToPx()) }.alpha(enterT),
-            )
             // 内容区：只渲染当前选中页（coui 采样安全），横滑切页（横向主导手势）
+            // 注：顶部「课悟 · Kewu」品牌横幅已按用户要求移除，内容从状态栏下直接开始，不挡视野。
             val n = TEACHER_NAV_ITEMS.size
             Box(
                 Modifier
@@ -227,34 +224,4 @@ fun TeacherMainScreen(
     }
 }
 
-/**
- * 教师端顶栏：课字标 + 「课悟 · 教师端」（品牌蓝徽章区分角色，与学生端视觉区分）。
- * 2026-10-23 coui 化：字标底块走 coui [Surface]，角色徽章走 [KewuTag]，文字走 coui [Text]。
- */
-@Composable
-private fun TeacherTopBar(modifier: Modifier = Modifier) {
-    val cs = COUITheme.colorScheme
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(64.dp)
-            .background(cs.surfaceContainer),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Row(Modifier.padding(start = 20.dp), verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                modifier = Modifier.width(36.dp).height(36.dp),
-                shape = RoundedCornerShape(10.dp),
-                color = KewuBlue,
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("课", color = cs.onPrimary, fontWeight = FontWeight.Bold)
-                }
-            }
-            Spacer(Modifier.width(12.dp))
-            Text("课悟 · Kewu", color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(8.dp))
-            KewuTag("教师端", KewuBlue.copy(alpha = 0.12f), KewuBlue)
-        }
-    }
-}
+
