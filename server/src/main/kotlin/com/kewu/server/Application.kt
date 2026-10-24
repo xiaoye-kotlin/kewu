@@ -7,7 +7,7 @@ import com.kewu.server.plugins.configureRouting
 import com.kewu.server.plugins.configureSerialization
 import com.kewu.server.plugins.configureStatusPages
 import com.kewu.server.services.ai.AiService
-import com.kewu.server.services.ai.NoOpAiService
+import com.kewu.server.services.ai.MaasAiService
 import com.kewu.server.services.AudioAnalyzer
 import com.kewu.server.services.AudioFusion
 import com.kewu.server.services.QualityScorer
@@ -63,7 +63,7 @@ fun Application.installServices(config: com.kewu.server.config.AppConfig) {
             scorer = QualityScorer(),
             fusion = AudioFusion(),
             analyzer = AudioAnalyzer(),
-            ai = NoOpAiService(),
+            ai = MaasAiService(),
             deviceMonitor = RecordingDeviceService(redis)
         )
     )
