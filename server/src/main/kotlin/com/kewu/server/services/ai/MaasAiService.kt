@@ -1,6 +1,7 @@
 package com.kewu.server.services.ai
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -29,7 +30,10 @@ class MaasAiService : AiService {
         System.getenv("MAAS_MODEL").takeIf { !it.isNullOrBlank() } ?: "openpangu-2.0-flash"
 
     private val client: HttpClient = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(15))
+        .connectTimeout(Duration.ofSeconds(20))
+        // 强制直连：不继承系统/环境里的代理设置。否则一旦 JAVA_TOOL_OPTIONS 之类残留了
+        // 代理地址（FlClash 就干过这事），AI 调用会全部以 connect timed out 静默失败
+        .proxy(java.net.ProxySelector.of(null))
         .build()
 
     override suspend fun summarize(transcript: String): String {
@@ -66,22 +70,29 @@ class MaasAiService : AiService {
             )
         )
         return withContext(Dispatchers.IO) {
-            try {
-                val request = HttpRequest.newBuilder()
-                    .uri(URI.create(apiUrl))
-                    .timeout(Duration.ofSeconds(60))
-                    .header("Content-Type", "application/json")
-                    .header("Authorization", "Bearer $apiKey")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
-                    .build()
-                val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-                if (response.statusCode() !in 200..299) {
-                    return@withContext "（AI 调用失败：HTTP ${response.statusCode()} ${response.body().take(300)}）"
+            var lastErr: String? = null
+            // 最多试两次：华为云 MaaS 偶有 connect timed out 的瞬时抖动（实测过一次，
+            // 1 分钟后同样请求又全部成功），重试一次就能救回来，比直接报错体面得多
+            repeat(2) { attempt ->
+                try {
+                    val request = HttpRequest.newBuilder()
+                        .uri(URI.create(apiUrl))
+                        .timeout(Duration.ofSeconds(60))
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer $apiKey")
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .build()
+                    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                    if (response.statusCode() !in 200..299) {
+                        return@withContext "（AI 调用失败：HTTP ${response.statusCode()} ${response.body().take(300)}）"
+                    }
+                    return@withContext extractContent(response.body())
+                } catch (t: Throwable) {
+                    lastErr = t.message ?: t.javaClass.simpleName
+                    if (attempt == 0) delay(1000)
                 }
-                extractContent(response.body())
-            } catch (t: Throwable) {
-                "（AI 调用异常：${t.message ?: t.javaClass.simpleName}）"
             }
+            "（AI 调用异常：$lastErr）"
         }
     }
 
