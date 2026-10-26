@@ -51,7 +51,10 @@ class RecordingDeviceService(private val redis: RedisService) {
             val status = obj["status"]?.jsonPrimitive?.content ?: ""
             val qualityScore = obj["qualityScore"]?.jsonPrimitive?.intOrNull ?: 0
             val last = obj["lastHeartbeat"]?.jsonPrimitive?.content?.toLongOrNull()
-            DeviceStatus(deviceId = deviceId, type = type, status = status, qualityScore = qualityScore, lastHeartbeat = last)
+            val name = obj["name"]?.jsonPrimitive?.content ?: ""
+            val role = obj["role"]?.jsonPrimitive?.content ?: ""
+            DeviceStatus(deviceId = deviceId, type = type, status = status, qualityScore = qualityScore,
+                lastHeartbeat = last, name = name, role = role)
         } catch (t: Throwable) {
             // 这一条坏了不影响整体，deviceId 兜底用哈希 field，其他给空串/0
             DeviceStatus(deviceId = safeId, type = "", status = "", qualityScore = 0)
@@ -68,7 +71,7 @@ class RecordingDeviceService(private val redis: RedisService) {
         val best = devices.maxByOrNull { it.qualityScore }
         val bestDeviceId = best?.deviceId?.takeIf { it.isNotBlank() }
         val views = devices.map {
-            RecordingDeviceView(it.deviceId, it.type, it.status, it.qualityScore)
+            RecordingDeviceView(it.deviceId, it.type, it.status, it.qualityScore, it.name, it.role)
         }
         return RecordingDevicesResponse(
             totalDevices = total,

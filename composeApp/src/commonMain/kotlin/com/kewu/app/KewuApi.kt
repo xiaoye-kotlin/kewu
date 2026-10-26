@@ -48,7 +48,11 @@ import kotlinx.serialization.json.jsonPrimitive
 
 // ───────────────────────── 数据模型（手搓，无 @Serializable） ─────────────────────────
 
-data class UserInfo(val id: String, val username: String, val nickname: String?, val role: String = "")
+data class UserInfo(
+    val id: String, val username: String, val nickname: String?, val role: String = "",
+    /** 学校 / 班级（2026-10-26 起存后端，换机不丢）。 */
+    val school: String? = null, val className: String? = null,
+)
 data class CourseInfo(
     val id: String, val name: String, val description: String, val teacher: String,
 )
@@ -89,7 +93,10 @@ data class SubmissionInfo(
     val durationSec: Int? = null,
 )
 /** 录音雷达里的一台设备。 */
-data class RecordingDevice(val deviceId: String, val type: String, val status: String, val qualityScore: Int)
+data class RecordingDevice(
+    val deviceId: String, val type: String, val status: String, val qualityScore: Int,
+    val name: String = "", val role: String = "",
+)
 data class AiReason(val item: String, val detail: String, val score: Double)
 data class AiSuggestion(
     val suggestedScore: Double, val confidence: Double,
@@ -479,11 +486,13 @@ object KewuApi {
 
     /** 注册：成功返回 null，失败返回 message。注册后不会返回 token，需再调 login。
      *  [role] 传 "TEACHER"/"STUDENT"（后端 2026-10-20 新增，不传默认 STUDENT）。 */
-    suspend fun register(username: String, password: String, nickname: String, role: String = ""): String? = try {
+    suspend fun register(username: String, password: String, nickname: String, role: String = "", school: String = ""): String? = try {
         val body = mutableMapOf<String, Any?>(
             "username" to username, "password" to password, "nickname" to nickname,
         )
         if (role.isNotBlank()) body["role"] = role
+        // 2026-10-26：注册选的学校存后端（旧版只写手机本地 kv，换手机 / 重装后「未填写学校」）
+        if (school.isNotBlank()) body["school"] = school
         val el = postJson("$BASE_URL/api/user/register", body)
         el.asDataOrThrow()
         null
@@ -550,6 +559,19 @@ object KewuApi {
         }
     }
 
+    /** 修改个人资料（昵称 / 学校 / 班级，传 null 的不改）。成功返回 null，失败返回原因。 */
+    suspend fun updateProfile(nickname: String? = null, school: String? = null, className: String? = null): String? = try {
+        val body = mutableMapOf<String, Any?>()
+        if (nickname != null) body["nickname"] = nickname
+        if (school != null) body["school"] = school
+        if (className != null) body["className"] = className
+        postJson("$BASE_URL/api/user/profile", body, auth = true).asDataOrThrow()
+        meFetchedAt = 0L
+        null
+    } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
+    catch (_: Exception) { "网络异常，请稍后重试" }
+
     /** 绑定课程（需 token）。 */
     suspend fun bindCourse(courseId: String): String? = try {
         val el = postJson("$BASE_URL/api/user/bind-course", mapOf("courseId" to courseId), auth = true)
@@ -572,7 +594,12 @@ object KewuApi {
         val courses = (data["courses"] as? JsonArray)?.mapNotNull { c -> c as? JsonObject }.orEmpty()
             .map { CourseInfo(it["id"].str(), it["name"].str(), it["description"].str(), it["teacher"].str()) }
         currentUser = UserMe(
-            user = u?.let { UserInfo(it["id"].str(), it["username"].str(), it["nickname"].strOrNull(), it["role"].str()) },
+            user = u?.let {
+                UserInfo(
+                    it["id"].str(), it["username"].str(), it["nickname"].strOrNull(), it["role"].str(),
+                    school = it["school"].strOrNull(), className = it["className"].strOrNull(),
+                )
+            },
             courses = courses,
         )
         meFetchedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
@@ -1230,6 +1257,9 @@ object KewuApi {
                 put("type", "phone")
                 put("status", status)
                 put("qualityScore", qualityScore)
+                // 雷达上显示名字；老师的点画成黄色
+                put("name", nameForServer())
+                put("role", if (currentRole() == ROLE_TEACHER) "teacher" else "student")
             }.toString())
         }
         resp.status.value in 200..299
@@ -1243,7 +1273,10 @@ object KewuApi {
         else {
             val o = json.parseToJsonElement(resp.bodyAsText()) as? JsonObject
             (o?.get("devices") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map {
-                RecordingDevice(it["deviceId"].str(), it["type"].str(), it["status"].str(), it["qualityScore"].int())
+                RecordingDevice(
+                    it["deviceId"].str(), it["type"].str(), it["status"].str(), it["qualityScore"].int(),
+                    name = it["name"].str(), role = it["role"].str(),
+                )
             }
         }
     } catch (e: CancellationException) { throw e }

@@ -127,6 +127,22 @@ class TeacherRepository {
         }
     }
 
+    /** 所有「上课中」的课堂（自动下课巡检用）。 */
+    fun listOnStates(): List<ClassState> = transaction {
+        ClassStates.selectAll().where { ClassStates.state eq "ON" }.map {
+            ClassState(
+                courseId = it[ClassStates.courseId],
+                courseName = it[ClassStates.courseName],
+                state = it[ClassStates.state],
+                teacherId = it[ClassStates.teacherId],
+                teacherName = it[ClassStates.teacherName],
+                startedAt = it[ClassStates.startedAt],
+                endedAt = it[ClassStates.endedAt],
+                updatedAt = it[ClassStates.updatedAt]
+            )
+        }
+    }
+
     fun findState(courseId: String): ClassState? = transaction {
         ClassStates.selectAll().where { ClassStates.courseId eq courseId }.firstOrNull()?.let {
             ClassState(

@@ -109,7 +109,7 @@ fun Route.recordingRoutes() {
             val score = services.scorer.score(meta).score
             // 元数据按会话落一份 Redis，服务端自己有账，不全靠融合时客户端传
             if (sessionId.isNotBlank()) {
-                services.redis.saveRecordingMeta(sessionId, Json.encodeToString(RecordingMeta.serializer(), meta))
+                services.redis.saveRecordingMeta(sessionId, Json.encodeToString(RecordingMeta.serializer(), meta.copy(storedUrl = url)))
             }
             call.respond(
                 HttpStatusCode.Created,
@@ -147,7 +147,9 @@ fun Route.recordingRoutes() {
                 type = hb.type,
                 status = hb.status,
                 qualityScore = hb.qualityScore,
-                lastHeartbeat = hb.lastHeartbeat ?: System.currentTimeMillis()
+                lastHeartbeat = System.currentTimeMillis(), // 一律用服务端时间：手机时钟可能偏差，过期判断才准
+                name = hb.name.take(32),
+                role = hb.role.take(16)
             )
             val json = Json.encodeToString(DeviceStatus.serializer(), status)
             if (services.redis.saveDeviceStatus(hb.sessionId, hb.deviceId, json)) {

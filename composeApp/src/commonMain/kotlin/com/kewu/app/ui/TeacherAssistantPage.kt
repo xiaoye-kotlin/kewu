@@ -370,7 +370,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         // 2026-10-26：流式——边生成边上屏
         val reply = AiClient.chatStream(
             listOf(
-                AiClient.Msg("system", aiSystemPrompt + buildAiContext() + "\n\n" + AiAgent.teacherCapability()),
+                AiClient.Msg("system", aiSystemPrompt + buildAiContext() + "\n【课悟 App 里此刻能看到的全部信息（以此为准，作业截止、提交、批阅、签到等直接引用）】\n" + com.kewu.app.AiContext.teacher() + "\n\n" + AiAgent.teacherCapability()),
                 AiClient.Msg("user", q),
             ),
             onDelta = emit,
@@ -521,7 +521,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     }
                 }
             }
-            val snapshot = messages.toList()
+            // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃）
+            val snapshot = messages.distinctBy { it.id }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().weight(1f).nestedScroll(pullConnection),
@@ -541,7 +542,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     )
                 }
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
-                    Box(Modifier.animateItem()) {
+                    Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                         TaBubble(pageBackdrop, msg)
                     }
                     Spacer(Modifier.height(10.dp))
@@ -549,7 +550,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 // 流式回答草稿（思考中占位 → 逐段增长；结束后由正式消息替换）
                 if (streamText != null) {
                     item(key = "ai-streaming") {
-                        Box(Modifier.animateItem()) {
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                             TaBubble(
                                 pageBackdrop,
                                 TaMsg(false, streamText.ifEmpty { "小悟正在思考…" }.lines()

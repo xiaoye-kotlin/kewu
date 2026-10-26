@@ -1,5 +1,8 @@
 package com.kewu.app.ui
 
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -68,7 +71,11 @@ import kotlin.math.sin
  * - 数据：每 5 秒拉一次 GET /api/teacher/recording/devices（后端只返回 45 秒内有心跳的录音设备）。
  */
 @Composable
-fun RecordingRadar(backdrop: LayerBackdrop, sessionId: String, modifier: Modifier = Modifier) {
+fun RecordingRadar(
+    backdrop: LayerBackdrop?,
+    sessionId: String,
+    modifier: Modifier = Modifier,
+) {
     val cs = COUITheme.colorScheme
     val myId = remember { platformDeviceId() }
     var devices by remember { mutableStateOf<List<RecordingDevice>>(emptyList()) }
@@ -85,7 +92,7 @@ fun RecordingRadar(backdrop: LayerBackdrop, sessionId: String, modifier: Modifie
                 devices = others
             }
             loaded = true
-            delay(5_000)
+            delay(3_000) // 3 秒一轮：新加入 / 停止录音的设备最多 3 秒内反映到雷达上
         }
     }
 
@@ -94,10 +101,7 @@ fun RecordingRadar(backdrop: LayerBackdrop, sessionId: String, modifier: Modifie
     val pulse = inf.animateFloat(0f, 1f, infiniteRepeatable(tween(1800, easing = LinearEasing)), label = "pulse")
     val breathe = inf.animateFloat(0.6f, 1f, infiniteRepeatable(tween(1400), RepeatMode.Reverse), label = "breathe")
 
-    KewuGlassCard(
-        backdrop = backdrop, shape = RoundedCornerShape(24.dp), blurRadius = 22.dp, tintAlpha = 0.30f,
-        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
-    ) {
+    RadarShell(backdrop, modifier) {
         Column(Modifier.padding(18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFE5484D)))
@@ -120,12 +124,31 @@ fun RecordingRadar(backdrop: LayerBackdrop, sessionId: String, modifier: Modifie
             Spacer(Modifier.height(14.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RadarStat("我", "录音中", KewuBlue)
-                RadarStat("手机", "${devices.count { !it.type.equals("screen", true) }} 台", KewuGreen)
-                RadarStat("大屏", if (devices.any { it.type.equals("screen", true) }) "在线" else "未连接", Color(0xFF7A5AF8))
+                RadarStat("同学", "${devices.count { !it.role.equals("teacher", true) && !it.type.equals("screen", true) }} 台", KewuGreen)
+                RadarStat("老师", if (devices.any { it.role.equals("teacher", true) }) "在录" else "未录", TeacherYellow)
             }
         }
     }
 }
+
+/** 外壳：首页用液态玻璃卡（采样页面灰底）；嵌在教师上课面板里（本身已是卡片）时用 coui 卡，避免玻璃套玻璃。 */
+@Composable
+private fun RadarShell(backdrop: LayerBackdrop?, modifier: Modifier, content: @Composable () -> Unit) {
+    if (backdrop != null) {
+        KewuGlassCard(
+            backdrop = backdrop, shape = RoundedCornerShape(24.dp), blurRadius = 22.dp, tintAlpha = 0.30f,
+            modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        ) { content() }
+    } else {
+        Box(
+            modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp))
+                .background(COUITheme.colorScheme.surface.copy(alpha = 0.6f)),
+        ) { content() }
+    }
+}
+
+/** 老师的雷达点颜色（用户指定黄色）。 */
+private val TeacherYellow = Color(0xFFF5B800)
 
 @Composable
 private fun RadarCanvas(
@@ -139,6 +162,9 @@ private fun RadarCanvas(
     val cs = COUITheme.colorScheme
     val ring = cs.onSurface.copy(alpha = 0.10f)
     val grid = cs.onSurface.copy(alpha = 0.05f)
+    val labelColor = cs.onSurface
+    val measurer = rememberTextMeasurer()
+    val labelStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.Medium)
     Canvas(modifier) {
         val c = Offset(size.width / 2f, size.height / 2f)
         val r = size.minDimension / 2f * 0.96f
@@ -184,8 +210,21 @@ private fun RadarCanvas(
             // 扫描束刚扫过时点亮
             val behind = ((sweepDeg - angleDeg) % 360f + 360f) % 360f
             val lit = (1f - behind / 120f).coerceIn(0f, 1f)
-            val color = if (d.type.equals("screen", true)) Color(0xFF7A5AF8) else KewuGreen
-            drawDevice(pos, color, lit, breathe.value)
+            val teacher = d.role.equals("teacher", true)
+            val color = when {
+                teacher -> TeacherYellow
+                d.type.equals("screen", true) -> Color(0xFF7A5AF8)
+                else -> KewuGreen
+            }
+            drawDevice(pos, color, lit, breathe.value, if (teacher) 1.3f else 1f)
+            // 名字标签：点下方居中，老师名字前加「老师 · 」
+            val label = (if (teacher) "老师 · " else "") + d.name.ifBlank { "同学" }.take(8)
+            val layout = measurer.measure(label, labelStyle.copy(color = labelColor.copy(alpha = 0.55f + 0.45f * ease)))
+            val tl = Offset(
+                (pos.x - layout.size.width / 2f).coerceIn(0f, size.width - layout.size.width),
+                (pos.y + 13.dp.toPx()).coerceAtMost(size.height - layout.size.height),
+            )
+            drawText(layout, topLeft = tl)
         }
 
         // 圆心：我
@@ -195,10 +234,10 @@ private fun RadarCanvas(
     }
 }
 
-private fun DrawScope.drawDevice(pos: Offset, color: Color, lit: Float, breathe: Float) {
-    drawCircle(color.copy(alpha = 0.10f + 0.20f * lit), (10f + 6f * breathe).dp.toPx(), pos)
-    drawCircle(Color.White, 6.dp.toPx(), pos)
-    drawCircle(color.copy(alpha = 0.75f + 0.25f * lit), 4.5.dp.toPx(), pos)
+private fun DrawScope.drawDevice(pos: Offset, color: Color, lit: Float, breathe: Float, scale: Float = 1f) {
+    drawCircle(color.copy(alpha = 0.10f + 0.20f * lit), (10f + 6f * breathe).dp.toPx() * scale, pos)
+    drawCircle(Color.White, 6.dp.toPx() * scale, pos)
+    drawCircle(color.copy(alpha = 0.75f + 0.25f * lit), 4.5.dp.toPx() * scale, pos)
 }
 
 /** deviceId → 稳定的极坐标（角度 0–360，半径占比 0.38–0.88）：随机分散、刷新不乱跳。 */

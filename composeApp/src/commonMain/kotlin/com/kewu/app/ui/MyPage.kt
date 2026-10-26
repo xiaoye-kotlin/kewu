@@ -128,6 +128,8 @@ import kotlin.math.roundToLong
  */
 @Composable
 fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
+    val profileScope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
     // 首帧就用已知信息（昵称 / 学号 / 本地资料），避免接口回来前一闪空白
     var profile by remember {
         val uname = KewuApi.username.orEmpty()
@@ -163,9 +165,17 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
         val uname = KewuApi.username ?: u?.user?.id ?: ""
         // 本地存的资料（学校 / 班级 / 手机 / 邮箱）+ 后端的昵称与学号（2026-10-26：不再用演示资料兜底）
         val stored = ProfileStore.load(uname) ?: defaultProfile
+        // 学校 / 班级以后端为准（2026-10-26 起注册时存后端）；后端没有而本机有（老账号）→ 顺手补传一次
+        val serverSchool = u?.user?.school.orEmpty()
+        val serverClass = u?.user?.className.orEmpty()
+        if (u != null && serverSchool.isBlank() && stored.school.isNotBlank()) {
+            KewuApi.updateProfile(school = stored.school, className = stored.className.ifBlank { null })
+        }
         profile = stored.copy(
             name = (u?.user?.nickname ?: stored.name.ifBlank { KewuApi.displayName("同学") }).ifBlank { "同学" },
             studentId = uname.ifBlank { stored.studentId },
+            school = serverSchool.ifBlank { stored.school },
+            className = serverClass.ifBlank { stored.className },
         )
     }
 
@@ -211,6 +221,12 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     onSave = {
                         profile = it
                         ProfileStore.save(KewuApi.username.orEmpty(), it) // 持久化（旧版只在内存，切 tab 就丢）
+                        // 昵称 / 学校 / 班级同步到后端（换机不丢）；失败只提示，本地已保存
+                        val edited = it
+                        profileScope.launch {
+                            KewuApi.updateProfile(edited.name, edited.school, edited.className)
+                                ?.let { err -> snackbar.toast("资料已保存在本机，同步到服务器失败：$err") }
+                        }
                         screen = 0
                     },
                 )

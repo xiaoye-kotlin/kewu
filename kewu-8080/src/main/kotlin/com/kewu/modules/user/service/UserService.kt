@@ -25,7 +25,8 @@ class UserService(private val repository: UserRepository, private val courseRepo
             username = req.username,
             passwordHash = BCrypt.withDefaults().hashToString(12, req.password.toCharArray()),
             nickname = req.nickname ?: req.username,
-            role = role
+            role = role,
+            school = req.school?.trim()?.take(128)?.ifBlank { null }
         )
         repository.createUser(user)
         return Result.success(user.toInfo())
@@ -56,5 +57,16 @@ class UserService(private val repository: UserRepository, private val courseRepo
     fun getBoundCourses(userId: String): List<CourseInfo> =
         courseRepository.findCoursesByIds(repository.getBoundCourseIds(userId)).map { it.toInfo() }
 
-    private fun User.toInfo() = UserInfo(id, username, nickname, role)
+    fun updateProfile(userId: String, req: UpdateProfileRequest): Result<UserInfo> {
+        repository.findUserById(userId) ?: return Result.failure(IllegalArgumentException("用户不存在"))
+        repository.updateProfile(
+            userId,
+            req.nickname?.trim()?.take(64)?.ifBlank { null },
+            req.school?.trim()?.take(128),
+            req.className?.trim()?.take(128)
+        )
+        return Result.success(repository.findUserById(userId)!!.toInfo())
+    }
+
+    private fun User.toInfo() = UserInfo(id, username, nickname, role, school, className)
 }

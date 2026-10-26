@@ -571,7 +571,10 @@ private fun LoginButton(
                 val msg = if (mode == 0) {
                     KewuApi.login(acc, pwd)
                 } else {
-                    val r = KewuApi.register(acc, pwd, name.trim(), if (role == 1) "TEACHER" else "STUDENT")
+                    val r = KewuApi.register(
+                        acc, pwd, name.trim(), if (role == 1) "TEACHER" else "STUDENT",
+                        school = kvGet("kewu_pending_school").orEmpty(),
+                    )
                     if (r == null) {
                         kvGet("kewu_pending_school")?.let { ProfileStore.setSchool(acc, it) }
                         kvSet("kewu_pending_school", null)

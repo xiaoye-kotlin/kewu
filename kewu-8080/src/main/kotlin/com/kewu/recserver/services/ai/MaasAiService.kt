@@ -62,12 +62,21 @@ class MaasAiService : AiService {
      * 流式对话（2026-10-26，App 打字机效果）：以 MaaS 的 `stream=true` SSE 拉取，只把最终回答的
      * `delta.content` 逐段回调给 [onDelta]（思维链 reasoning_content 不外发）。成功结束返回 null，失败返回原因。
      */
-    suspend fun stream(messages: List<Pair<String, String>>, maxTokens: Int, onDelta: suspend (String) -> Unit): String? {
+    suspend fun stream(
+        messages: List<Pair<String, String>>,
+        maxTokens: Int,
+        thinking: Boolean,
+        onDelta: suspend (String) -> Unit,
+    ): String? {
         if (apiKey.isBlank()) return "AI 未配置"
         val body = kotlinx.serialization.json.buildJsonObject {
             put("model", kotlinx.serialization.json.JsonPrimitive(model))
             put("max_tokens", kotlinx.serialization.json.JsonPrimitive(maxTokens))
             put("stream", kotlinx.serialization.json.JsonPrimitive(true))
+            // 关闭思维链：openpangu 默认先想 5–10 秒才出第一个字（2026-10-26 实测 thinking.type=disabled 首字 ~1s）
+            if (!thinking) put("thinking", kotlinx.serialization.json.buildJsonObject {
+                put("type", kotlinx.serialization.json.JsonPrimitive("disabled"))
+            })
             put("messages", kotlinx.serialization.json.JsonArray(messages.map { (role, content) ->
                 kotlinx.serialization.json.buildJsonObject {
                     put("role", kotlinx.serialization.json.JsonPrimitive(role))

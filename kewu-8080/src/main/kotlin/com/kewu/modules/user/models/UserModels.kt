@@ -17,7 +17,16 @@ data class RegisterRequest(
     val username: String,
     val password: String,
     val nickname: String? = null,
-    val role: String? = null // 不传默认学生; 传 TEACHER 就是老师
+    val role: String? = null, // 不传默认学生; 传 TEACHER 就是老师
+    val school: String? = null // 注册时选的学校
+)
+
+// 修改个人资料：只改传了的字段
+@Serializable
+data class UpdateProfileRequest(
+    val nickname: String? = null,
+    val school: String? = null,
+    val className: String? = null
 )
 
 @Serializable
@@ -31,7 +40,9 @@ data class UserInfo(
     val id: String,
     val username: String,
     val nickname: String?,
-    val role: String = UserRole.STUDENT
+    val role: String = UserRole.STUDENT,
+    val school: String? = null,
+    val className: String? = null
 )
 
 @Serializable
@@ -44,5 +55,7 @@ data class User(
     val passwordHash: String,
     val nickname: String?,
     val role: String = UserRole.STUDENT,
-    val courseIds: MutableSet<String> = mutableSetOf()
+    val courseIds: MutableSet<String> = mutableSetOf(),
+    val school: String? = null,
+    val className: String? = null
 )

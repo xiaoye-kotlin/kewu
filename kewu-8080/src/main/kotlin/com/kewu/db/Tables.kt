@@ -10,6 +10,8 @@ object Users : Table("users") {
     val passwordHash = varchar("password_hash", 100)
     val nickname = varchar("nickname", 64).nullable()
     val role = varchar("role", 16)
+    val school = varchar("school", 128).nullable()        // 注册时选的学校（2026-10-26，旧版只存在手机本地，换机就没了）
+    val className = varchar("class_name", 128).nullable() // 班级（个人资料可改）
     override val primaryKey = PrimaryKey(id)
 }
 
@@ -194,11 +196,26 @@ object CourseMaterials : Table("course_materials") {
     override val primaryKey = PrimaryKey(id)
 }
 
+// 一节课的「最佳录音」：下课（手动或开课 90 分钟自动）后由后端择优选出，后续交给华为云语音转文字
+object ClassRecordings : Table("class_recordings") {
+    val sessionId = varchar("session_id", 96)
+    val courseId = varchar("course_id", 64).index()
+    val primaryRecordingId = varchar("primary_recording_id", 64).nullable()
+    val primaryUrl = varchar("primary_url", 1024).nullable()
+    val strategy = varchar("strategy", 128)
+    val candidateCount = integer("candidate_count")
+    val endReason = varchar("end_reason", 16)        // MANUAL / AUTO_90MIN
+    val decidedAt = varchar("decided_at", 32)
+    val transcriptStatus = varchar("transcript_status", 16) // PENDING_ASR / NO_AUDIO / DONE / FAILED
+    val transcript = text("transcript").nullable()
+    override val primaryKey = PrimaryKey(sessionId)
+}
+
 val allTables = arrayOf(
     Users, UserCourses, Courses, ClassNotes,
     Classes, ClassStudents, ClassStates,
     Assignments, Submissions,
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
     Questions,
-    Uploads, CourseMaterials
+    Uploads, CourseMaterials, ClassRecordings
 )

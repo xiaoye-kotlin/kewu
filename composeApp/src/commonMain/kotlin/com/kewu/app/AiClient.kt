@@ -141,6 +141,9 @@ object AiClient {
                 put("model", MODEL)
                 put("stream", true)
                 put("max_tokens", maxTokens)
+                // ★ 2026-10-26 实测：openpangu 默认先输出一大段思维链（不计入可见回答），用户要干等 7 秒以上才见第一个字；
+                //   thinking.type=disabled 后首字约 1–2 秒，流式才有「打字」的感觉。对话场景关掉思考。
+                put("thinking", buildJsonObject { put("type", "disabled") })
                 put("messages", msgsJson(messages))
             }
             val r = streamOnce(ep, body.toString(), auth = true, onDelta = onDelta)
@@ -148,6 +151,7 @@ object AiClient {
         }
         val relayBody = buildJsonObject {
             put("maxTokens", maxTokens)
+            put("thinking", false)
             put("messages", msgsJson(messages))
         }
         streamOnce(STREAM_RELAY_URL, relayBody.toString(), auth = false, onDelta = onDelta)?.let { return it }

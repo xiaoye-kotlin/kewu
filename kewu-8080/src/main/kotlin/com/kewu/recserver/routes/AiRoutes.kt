@@ -28,6 +28,7 @@ fun Route.aiRoutes() {
             val err = maas.stream(
                 req.messages.map { it.role to it.content },
                 (req.maxTokens ?: 4096).coerceIn(256, 8192),
+                req.thinking,
             ) { piece ->
                 write("data: " + kotlinx.serialization.json.buildJsonObject {
                     put("d", kotlinx.serialization.json.JsonPrimitive(piece))
@@ -64,7 +65,12 @@ private data class SummarizeRequest(val transcript: String = "")
 private data class StreamMessage(val role: String = "user", val content: String = "")
 
 @Serializable
-private data class StreamRequest(val messages: List<StreamMessage> = emptyList(), val maxTokens: Int? = null)
+private data class StreamRequest(
+    val messages: List<StreamMessage> = emptyList(),
+    val maxTokens: Int? = null,
+    // false = 关闭模型思维链（对话场景，首字快）；true = 保留（出题等需要推理的场景）
+    val thinking: Boolean = false,
+)
 
 @Serializable
 private data class AnswerRequest(val question: String = "", val context: String = "", val maxTokens: Int? = null)

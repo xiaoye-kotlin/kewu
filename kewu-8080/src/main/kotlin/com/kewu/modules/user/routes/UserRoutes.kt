@@ -42,6 +42,17 @@ fun Routing.userRoutes(userService: UserService) {
                 )
             }
 
+            // 修改个人资料（昵称 / 学校 / 班级），2026-10-26
+            post("/profile") {
+                val principal = call.principal<JWTPrincipal>()!!
+                val userId = principal.payload.getClaim(JwtConfig.CLAIM_USER_ID).asString()
+                val req = call.receive<UpdateProfileRequest>()
+                userService.updateProfile(userId, req).fold(
+                    onSuccess = { call.respond(ApiResponse(0, "已保存", it)) },
+                    onFailure = { call.respond(HttpStatusCode.BadRequest, ApiResponse<String>(1, it.message ?: "保存失败")) }
+                )
+            }
+
             get("/me") {
                 val principal = call.principal<JWTPrincipal>()!!
                 val userId = principal.payload.getClaim(JwtConfig.CLAIM_USER_ID).asString()

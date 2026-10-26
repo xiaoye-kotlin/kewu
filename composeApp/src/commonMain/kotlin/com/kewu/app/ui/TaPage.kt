@@ -343,7 +343,10 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             }
             // 2026-10-26：流式输出——回答边生成边上屏（打字机效果），不再干等整段
             AssistantHub.askStream(ChatHistory.KEY_STUDENT) { emit ->
-                val reply = AiClient.chatStream(listOf(AiClient.Msg("system", system)) + history, onDelta = emit)
+                // 2026-10-26：把软件里看得到的全部信息（作业截止 / 状态 / 成绩、课程、签到、录音…）给小悟
+                val fullSystem = system + "\n\n以下是该学生在课悟 App 里此刻能看到的全部信息，回答时以此为准" +
+                    "（问到截止时间、成绩、要交哪些作业等直接引用；没有的信息如实说明）：\n" + com.kewu.app.AiContext.student()
+                val reply = AiClient.chatStream(listOf(AiClient.Msg("system", fullSystem)) + history, onDelta = emit)
                 if (reply == null) {
                     // 直连 / 代理 / 8081 中转全部失败：如实告知，不再用随机占位语冒充回答
                     AssistantHub.Reply("小悟暂时连不上 AI 服务（网络不通或服务繁忙），请稍后再试～")
@@ -551,10 +554,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         textAlign = TextAlign.Center,
                     )
                 }
-                messages.forEach { msg ->
+                // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃，历史合并 / 回补时可能出现重复）
+                messages.distinctBy { it.id }.forEach { msg ->
                     // 2026-10-24：稳定 key + animateItem —— 新消息滑入，聊天更丝滑
                     item(key = msg.id, contentType = msg.isUser) {
-                        Box(Modifier.animateItem()) {
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                             if (msg.isUser) {
                                 UserBubble(
                                     msg,
@@ -584,7 +588,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 // 流式回答草稿：思考中显示占位，吐字后逐段增长；结束后由正式消息替换
                 if (streamText != null) {
                     item(key = "ai-streaming") {
-                        Box(Modifier.animateItem()) {
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                             AiBubble(
                                 ChatMsg(streamText.ifEmpty { "小悟正在思考…" }, isUser = false, id = -1L, ts = nowMs()),
                                 pageBackdrop, reportBounds = false, onBounds = {},

@@ -1040,6 +1040,19 @@ private fun TeacherRecordingPanel(courseId: String) {
                 }
                 RecordingStatus.Idle, is RecordingStatus.Recording -> {}
             }
+            // 2026-10-26：老师录音时也显示课堂录音雷达（看得到哪些学生在同步录音；老师自己在圆心）。
+            // 面板本身是卡片 → 雷达用非玻璃外壳（backdrop = null），避免玻璃套玻璃
+            androidx.compose.animation.AnimatedVisibility(
+                visible = recording,
+                enter = androidx.compose.animation.expandVertically(androidx.compose.animation.core.spring(dampingRatio = 0.86f, stiffness = 360f)) +
+                    androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+            ) {
+                Column {
+                    Spacer(Modifier.height(12.dp))
+                    RecordingManager.currentSessionId()?.let { sid -> RecordingRadar(backdrop = null, sessionId = sid) }
+                }
+            }
         }
     }
 }

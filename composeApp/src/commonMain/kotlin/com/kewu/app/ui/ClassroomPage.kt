@@ -958,12 +958,30 @@ private fun MiniStatCard(
 private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseInfo>?) {
     val cs = COUITheme.colorScheme
 
-    val activeCourse = courseInfos?.firstOrNull()
-    val classId = activeCourse?.id
-    val courseName = activeCourse?.name ?: "课堂"
-
     // 录音状态单源：单例 StateFlow（旋屏 / 切 tab / 页面销毁均不影响录音进程）
     val st = RecordingManager.status.collectAsState().value
+
+    // ★ 2026-10-26 用户口径：只有「老师发起了签到（正在上课）+ 我已经签到」的那门课才出现课堂录音按钮，
+    //   录音也绑定到这门课（旧版无条件显示、固定绑第一门课）。每 20 秒复查一次；录音 / 上传进行中不受影响。
+    var liveCourse by remember { mutableStateOf<CourseInfo?>(null) }
+    LaunchedEffect(courseInfos) {
+        val me = KewuApi.username.orEmpty()
+        while (true) {
+            liveCourse = courseInfos.orEmpty().firstOrNull { c ->
+                val on = KewuApi.getClassState(c.id)?.state == "ON"
+                val todays = KewuApi.getAttendances(c.id).orEmpty().filter { it.createdAt.startsWith(todayCn()) }
+                (on || todays.any { it.state.equals("OPEN", true) }) && me.isNotBlank() &&
+                    todays.any { s -> KewuApi.getMyAttendance(s.id, me) != null }
+            }
+            kotlinx.coroutines.delay(20_000)
+        }
+    }
+    val busy = st !is RecordingStatus.Idle
+    if (liveCourse == null && !busy) return
+
+    val activeCourse = liveCourse ?: courseInfos?.firstOrNull()
+    val classId = activeCourse?.id
+    val courseName = activeCourse?.name ?: "课堂"
 
     // 课堂协同会话：RecordingManager 上传时带 sessionId = classSessionId(课程, 今天)，
     // 同课同日的教师端 / 学生端落到同一会话由 8081 择优融合。这里只查一下会话是否存在，
