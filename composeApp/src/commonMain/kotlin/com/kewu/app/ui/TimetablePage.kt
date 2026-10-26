@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -121,10 +122,46 @@ private fun mockWeek(): List<DaySchedule> = listOf(
  * 顶部「周一到周日」日条用 **coui 原生 Card**（未选中 = 白底 + dividerLine 描边，
  * 选中 = KewuBlue 蓝底白字），芯片仍浮在列表上方，保留浮动感。
  */
+/**
+ * 本周真实课表（2026-10-26 起由老师导入，替代旧示例数据）：按东八区算本周一到周日的日期，
+ * 每天的课按开始时间排；今天的课按当前时间判定「已上 / 上课中 / 未开始」，之前的日子算已上。
+ */
+private fun buildWeek(entries: List<com.kewu.app.ScheduleEntry>): Pair<List<DaySchedule>, Int> {
+    val nowMs = kotlin.time.Clock.System.now().toEpochMilliseconds() + 8 * 3_600_000L
+    val dayIndex = ((nowMs / 86_400_000L + 3) % 7).toInt() // 0 = 周一
+    val minuteNow = ((nowMs / 60_000L) % (24 * 60)).toInt()
+    val mondayMs = nowMs - dayIndex * 86_400_000L
+    fun dateLabel(i: Int): String {
+        val parts = com.kewu.app.todayCn(mondayMs - 8 * 3_600_000L + i * 86_400_000L).split("-")
+        return "${parts[1].toInt()}/${parts[2].toInt()}"
+    }
+    fun minutes(t: String) = t.split(":").let { (it.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (it.getOrNull(1)?.toIntOrNull() ?: 0) }
+    val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+    val week = (0..6).map { i ->
+        val slots = entries.filter { it.weekday == i + 1 }.sortedBy { it.startTime }.map { e ->
+            val state = when {
+                i < dayIndex -> SlotState.ATTENDED
+                i > dayIndex -> SlotState.UPCOMING
+                minuteNow >= minutes(e.endTime) -> SlotState.ATTENDED
+                minuteNow >= minutes(e.startTime) -> SlotState.LIVE
+                else -> SlotState.UPCOMING
+            }
+            ClassSlot(e.courseName, e.location.ifBlank { "地点待定" }, e.teacherName.ifBlank { "老师待定" } +
+                (if (e.teacherName.isNotBlank() && !e.teacherName.endsWith("老师")) "老师" else ""), e.startTime, e.endTime, state)
+        }
+        DaySchedule(names[i], dateLabel(i), isToday = i == dayIndex, slots = slots)
+    }
+    return week to dayIndex
+}
+
 @Composable
 fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
-    val week = remember { mockWeek() }
-    var selected by remember { mutableIntStateOf(4) } // 默认选中今天（周五）
+    // 2026-10-26：真实课表（老师导入），拉不到时显示空周 + 提示，不再显示示例数据
+    var schedule by remember { mutableStateOf<List<com.kewu.app.ScheduleEntry>?>(null) }
+    LaunchedEffect(Unit) { schedule = com.kewu.app.KewuApi.getMySchedule() ?: emptyList() }
+    val built = remember(schedule) { buildWeek(schedule.orEmpty()) }
+    val week = built.first
+    var selected by remember { mutableIntStateOf(built.second) } // 默认选中今天
     val scrollState = rememberScrollState()
 
     // 与课堂页同款：向下浏览收起底部导航栏，回顶展开
@@ -180,7 +217,7 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                             val d = week[sel]
                             Column {
                                 if (d.slots.isEmpty()) {
-                                    EmptyDayCard()
+                                    EmptyDayCard(d.label, week.all { it.slots.isEmpty() })
                                 } else {
                                     d.slots.forEachIndexed { i, slot -> ClassBlock(slot, i) }
                                 }
@@ -213,7 +250,7 @@ private fun TimetableHeader(onBack: () -> Unit) {
     KewuTopBar(
         title = "课表",
         // 2026-10-26：后端还没有排课数据，本页为示例课表；旧版写死「第 7 周 · 10月12日-10月18日」像真实数据
-        subtitle = "示例课表 · 教务排课接入后自动同步",
+        subtitle = "本周课表 · 由任课老师导入",
         onBack = onBack,
         actions = {
             Box(
@@ -404,7 +441,7 @@ private fun SlotBadge(state: SlotState) {
 
 /** 周日空态：一张 coui Card + 灰色标志性图形。 */
 @Composable
-private fun EmptyDayCard() {
+private fun EmptyDayCard(dayName: String, noSchedule: Boolean) {
     val cs = COUITheme.colorScheme
     Card(
         modifier = Modifier
@@ -418,12 +455,12 @@ private fun EmptyDayCard() {
             ThreeQuarterCheck(size = 44.dp, color = cs.onSurfaceSecondary, alpha = 0.35f)
             Spacer(Modifier.height(14.dp))
             Text(
-                "周日没有安排", color = cs.onSurface, fontSize = 14.sp,
+                "${dayName}没有安排", color = cs.onSurface, fontSize = 14.sp,
                 fontWeight = FontWeight.Medium, maxLines = 1,
             )
             Spacer(Modifier.height(4.dp))
             Text(
-                "好好休息，或提前预习下周课程", color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1,
+                if (noSchedule) "还没有课表：等任课老师在班级里导入后自动出现" else "好好休息，或提前预习下周课程", color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1,
             )
         }
     }

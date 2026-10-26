@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.rememberTextMeasurer
@@ -92,7 +93,7 @@ fun RecordingRadar(
                 devices = others
             }
             loaded = true
-            delay(3_000) // 3 秒一轮：新加入 / 停止录音的设备最多 3 秒内反映到雷达上
+            delay(2_000) // 2 秒一轮：新加入 / 停止录音的设备最多 2 秒内反映到雷达上
         }
     }
 
@@ -108,7 +109,10 @@ fun RecordingRadar(
                 Spacer(Modifier.width(8.dp))
                 Text("课堂录音雷达", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
-                Text(if (loaded) "实时" else "扫描中…", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+                // 我的录音计时（读录音单例，每秒更新）
+                val rec = com.kewu.app.RecordingManager.status.collectAsState().value
+                val mine = (rec as? com.kewu.app.RecordingStatus.Recording)?.elapsedSec ?: 0
+                Text(fmtRecClock(mine), color = Color(0xFFE5484D), fontSize = 17.sp, fontWeight = FontWeight.Bold)
             }
             Spacer(Modifier.height(4.dp))
             Text(
@@ -217,8 +221,10 @@ private fun RadarCanvas(
                 else -> KewuGreen
             }
             drawDevice(pos, color, lit, breathe.value, if (teacher) 1.3f else 1f)
-            // 名字标签：点下方居中，老师名字前加「老师 · 」
-            val label = (if (teacher) "老师 · " else "") + d.name.ifBlank { "同学" }.take(8)
+            // 名字标签：点下方居中，「罗某某同学」「张某某老师」+ 已录时长（2026-10-26 用户要求）
+            val who = d.name.trim().take(8)
+            val label = (if (teacher) (if (who.isBlank()) "老师" else who + "老师") else (if (who.isBlank()) "同学" else who + "同学")) +
+                (if (d.elapsedSec > 0) " · " + fmtRecClock(d.elapsedSec) else "")
             val layout = measurer.measure(label, labelStyle.copy(color = labelColor.copy(alpha = 0.55f + 0.45f * ease)))
             val tl = Offset(
                 (pos.x - layout.size.width / 2f).coerceIn(0f, size.width - layout.size.width),
@@ -271,3 +277,9 @@ private fun RowScope.RadarStat(label: String, value: String, color: Color) {
 }
 
 private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
+
+/** 秒 → "mm:ss"（超过一小时 "h:mm:ss"）。 */
+internal fun fmtRecClock(sec: Int): String {
+    fun p2(v: Int) = if (v < 10) "0$v" else "$v"
+    return if (sec >= 3600) "${sec / 3600}:${p2(sec % 3600 / 60)}:${p2(sec % 60)}" else "${p2(sec / 60)}:${p2(sec % 60)}"
+}

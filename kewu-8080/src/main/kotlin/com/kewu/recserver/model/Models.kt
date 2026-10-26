@@ -100,7 +100,8 @@ data class DeviceStatus(
     val qualityScore: Int = 0,      // 当前音频质量分（0-100）
     val lastHeartbeat: Long? = null, // 最近一次心跳时间戳（ms），可选
     val name: String = "",          // 设备主人的显示名（雷达点下方的名字，2026-10-26）
-    val role: String = ""           // student / teacher（老师的点画成黄色）
+    val role: String = "",          // student / teacher（老师的点画成黄色）
+    val elapsedSec: Int = 0         // 已录时长（秒）
 )
 
 // 雷达图里展示的一个设备点（接口 devices 列表的项）
@@ -111,7 +112,8 @@ data class RecordingDeviceView(
     val status: String,
     val qualityScore: Int,
     val name: String = "",
-    val role: String = ""
+    val role: String = "",
+    val elapsedSec: Int = 0
 )
 
 // 录音设备雷达与状态监控接口的完整返回
@@ -134,5 +136,6 @@ data class DeviceHeartbeat(
     val qualityScore: Int = 0,
     val lastHeartbeat: Long? = null,
     val name: String = "",
-    val role: String = ""
+    val role: String = "",
+    val elapsedSec: Int = 0
 )

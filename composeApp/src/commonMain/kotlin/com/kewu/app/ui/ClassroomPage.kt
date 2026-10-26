@@ -471,11 +471,26 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     val repoCourses by CourseRepo.courses.collectAsState()
     val repoLoaded by CourseRepo.loaded.collectAsState()
     val courseInfos: List<CourseInfo>? = repoCourses
-    val realCourses = remember(repoCourses, repoLoaded) {
+    // 2026-10-26：课程卡带上课表里的时间 / 地点 / 任课老师（今天有课优先显示今天那节，否则显示下一次上课）
+    var schedule by remember { mutableStateOf<List<com.kewu.app.ScheduleEntry>>(emptyList()) }
+    LaunchedEffect(Unit) { schedule = KewuApi.getMySchedule().orEmpty() }
+    val realCourses = remember(repoCourses, repoLoaded, schedule) {
+        val nowMs = kotlin.time.Clock.System.now().toEpochMilliseconds() + 8 * 3_600_000L
+        val todayWd = ((nowMs / 86_400_000L + 3) % 7).toInt() + 1
+        val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
         when {
             repoCourses != null -> repoCourses.orEmpty().map { c ->
+                val mine = schedule.filter { it.courseId == c.id || it.courseName == c.name }
+                // 今天的那节 → 本周之后最近的一节 → 任意一节
+                val next = mine.firstOrNull { it.weekday == todayWd }
+                    ?: mine.minByOrNull { (it.weekday - todayWd + 7) % 7 }
                 Course(
-                    name = c.name, teacher = c.teacher, room = "待定", time = "—",
+                    name = c.name,
+                    teacher = next?.teacherName?.ifBlank { null } ?: c.teacher,
+                    room = next?.location?.ifBlank { null } ?: "待定",
+                    time = next?.let { e ->
+                        (if (e.weekday == todayWd) "" else names[e.weekday - 1] + " ") + e.startTime
+                    } ?: "—",
                     status = CourseStatus.PENDING, summary = c.description,
                 )
             }
@@ -973,10 +988,14 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                 (on || todays.any { it.state.equals("OPEN", true) }) && me.isNotBlank() &&
                     todays.any { s -> KewuApi.getMyAttendance(s.id, me) != null }
             }
-            kotlinx.coroutines.delay(20_000)
+            kotlinx.coroutines.delay(if (liveCourse != null) 10_000 else 20_000)
         }
     }
-    val busy = st !is RecordingStatus.Idle
+    // 下课后（不再「上课中 + 已签到」）按钮消失；只有录音中 / 上传中 / 上传失败待重试时保留
+    val busy = st is RecordingStatus.Recording || st is RecordingStatus.Uploading || st is RecordingStatus.Error
+    val snackbar = LocalKewuSnackbar.current
+    val evt = RecordingManager.events.collectAsState().value
+    LaunchedEffect(evt) { evt?.let { snackbar.toast(it); RecordingManager.consumeEvent() } }
     if (liveCourse == null && !busy) return
 
     val activeCourse = liveCourse ?: courseInfos?.firstOrNull()

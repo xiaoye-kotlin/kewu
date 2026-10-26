@@ -26,6 +26,7 @@ import com.kewu.modules.aistatus.service.AiStatusService
 import com.kewu.modules.questions.routes.questionRoutes
 import com.kewu.modules.questions.service.QuestionService
 import com.kewu.recserver.recordingModule
+import com.kewu.modules.schedule.scheduleRoutes
 import com.kewu.modules.upload.routes.uploadRoutes
 import io.ktor.server.application.*
 import io.ktor.server.response.respond
@@ -69,7 +70,15 @@ fun Application.configureRouting() {
     val classEnd = com.kewu.recserver.ClassEndService(attributes[com.kewu.recserver.RecServicesKey])
     val bg = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     teacherService.onClassEnded = { st, reason ->
-        bg.launch { runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }.onFailure { println("CLASS-END-ERROR: $it") } }
+        bg.launch {
+            // 下课时各端正在自动停止并上传录音：先按现有录音择优一次，2 分钟后再择优一次（把晚到的上传算进去）
+            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }.onFailure { println("CLASS-END-ERROR: $it") }
+            kotlinx.coroutines.delay(120_000)
+            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }
+        }
+    }
+    com.kewu.recserver.ClassEndService.onUpload = { sid ->
+        bg.launch { runCatching { classEnd.refreshIfDecided(sid) } }
     }
     bg.launch {
         while (true) {
@@ -99,6 +108,8 @@ fun Application.configureRouting() {
         recordingModule()
         // 作业附件 /api/uploads + 课前资料 /api/courses/{id}/materials（2026-10-26）
         uploadRoutes(uploadRepository)
+        // 课表导入 / 我的课表 / 崩溃上报（2026-10-26）
+        scheduleRoutes()
         // 某门课历次下课选出的最佳录音（转写状态 PENDING_ASR / DONE…）
         get("/api/courses/{courseId}/class-recordings") {
             call.respond(com.kewu.models.ApiResponse(0, "ok", classEnd.list(call.parameters["courseId"]!!)))

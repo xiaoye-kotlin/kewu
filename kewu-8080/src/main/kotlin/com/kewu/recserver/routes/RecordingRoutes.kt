@@ -111,6 +111,7 @@ fun Route.recordingRoutes() {
             if (sessionId.isNotBlank()) {
                 services.redis.saveRecordingMeta(sessionId, Json.encodeToString(RecordingMeta.serializer(), meta.copy(storedUrl = url)))
             }
+            if (sessionId.isNotBlank()) com.kewu.recserver.ClassEndService.onUpload?.invoke(sessionId)
             call.respond(
                 HttpStatusCode.Created,
                 RecordingUploadResult(recordingId, url, score, Instant.now().toString(), role, finalAvgLevel, analysis.snrDb)
@@ -149,7 +150,8 @@ fun Route.recordingRoutes() {
                 qualityScore = hb.qualityScore,
                 lastHeartbeat = System.currentTimeMillis(), // 一律用服务端时间：手机时钟可能偏差，过期判断才准
                 name = hb.name.take(32),
-                role = hb.role.take(16)
+                role = hb.role.take(16),
+                elapsedSec = hb.elapsedSec
             )
             val json = Json.encodeToString(DeviceStatus.serializer(), status)
             if (services.redis.saveDeviceStatus(hb.sessionId, hb.deviceId, json)) {

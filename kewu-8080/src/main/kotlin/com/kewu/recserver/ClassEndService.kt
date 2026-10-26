@@ -21,6 +21,21 @@ import java.time.format.DateTimeFormatter
  */
 class ClassEndService(private val services: RecServices) {
 
+    companion object {
+        /** 录音上传接口在每次上传后调用：若这节课已下课择优过，就带上新录音重新择优（晚到的上传不丢）。 */
+        @Volatile var onUpload: ((String) -> Unit)? = null
+    }
+
+    /** 已下课的会话：新录音到达时重新择优。 */
+    suspend fun refreshIfDecided(sessionId: String) {
+        val row = transaction {
+            ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.firstOrNull()
+        } ?: return
+        onClassEnded(row[ClassRecordings.courseId], sessionId.substringAfterLast('-').let {
+            if (it.length == 8) "${it.take(4)}-${it.substring(4, 6)}-${it.takeLast(2)}" else null
+        }, row[ClassRecordings.endReason])
+    }
+
     private val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     private val json = Json { ignoreUnknownKeys = true }
 

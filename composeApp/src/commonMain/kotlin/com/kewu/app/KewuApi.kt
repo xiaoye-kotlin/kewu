@@ -92,10 +92,18 @@ data class SubmissionInfo(
     /** 作答用时（秒，2026-10-26 起前端计时随提交上报；老提交为 null）。 */
     val durationSec: Int? = null,
 )
+/** 课表里的一节课（2026-10-26）：weekday 1=周一…7=周日，时间 "08:00"。 */
+data class ScheduleEntry(
+    val id: String = "", val classId: String? = null, val className: String = "",
+    val courseId: String = "", val courseName: String = "", val teacherName: String = "",
+    val weekday: Int = 1, val startTime: String = "", val endTime: String = "",
+    val location: String = "", val weeks: String = "",
+)
+
 /** 录音雷达里的一台设备。 */
 data class RecordingDevice(
     val deviceId: String, val type: String, val status: String, val qualityScore: Int,
-    val name: String = "", val role: String = "",
+    val name: String = "", val role: String = "", val elapsedSec: Int = 0,
 )
 data class AiReason(val item: String, val detail: String, val score: Double)
 data class AiSuggestion(
@@ -296,9 +304,11 @@ private fun JsonElement.asRawOrThrow(): JsonObject {
 
 private fun String.opt(): String = if (isNullOrBlank()) "" else this
 
-private fun JsonElement?.str(): String = this?.jsonPrimitive?.content ?: ""
+private fun JsonElement?.str(): String = if (this == null || this is JsonNull) "" else this.jsonPrimitive.content
 private fun JsonElement?.strOrNull(): String? {
-    val s = this?.jsonPrimitive?.content
+    // ★ JsonNull.content 是字符串 "null"：旧版把后端的 null 学校 / 班级当成了文字「null」显示（2026-10-26）
+    if (this == null || this is JsonNull) return null
+    val s = this.jsonPrimitive.content
     return if (s.isNullOrBlank()) null else s
 }
 private fun JsonElement?.num(): Double = this?.jsonPrimitive?.content?.toDoubleOrNull() ?: 0.0
@@ -558,6 +568,42 @@ object KewuApi {
             else -> "网络异常，请稍后重试"
         }
     }
+
+    /**
+     * 导入课表（老师，2026-10-26）：成功返回 (提示文案, null)，失败返回 (null, 原因)。
+     * 提示里会说明哪些任课老师已自动绑定、哪些还没注册（等其同名同校注册后自动认领）。
+     */
+    suspend fun importSchedule(classId: String?, entries: List<ScheduleEntry>): Pair<String?, String?> = try {
+        val body = mapOf(
+            "teacherId" to teacherId(), "classId" to classId, "replace" to true,
+            "entries" to entries.map {
+                mapOf(
+                    "courseName" to it.courseName, "teacherName" to it.teacherName, "weekday" to it.weekday,
+                    "startTime" to it.startTime, "endTime" to it.endTime, "location" to it.location, "weeks" to it.weeks,
+                )
+            },
+        )
+        val d = postJson("$BASE_URL/api/teacher/schedules/import", body, auth = true).asDataOrThrow() as? JsonObject
+        val pending = (d?.get("pendingTeachers") as? JsonArray).orEmpty().map { it.str() }
+        val n = d?.get("imported").int()
+        ("已导入 $n 节课" + if (pending.isNotEmpty()) "；${pending.joinToString("、")} 老师还没注册，注册后自动绑定" else "") to null
+    } catch (e: ApiException) { null to e.message }
+    catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null to "网络异常，请稍后重试" }
+
+    /** 我的课表（学生看所在班级的，老师看自己任教的）。失败返回 null。 */
+    suspend fun getMySchedule(): List<ScheduleEntry>? = try {
+        val el = getJson(queryUrl("$BASE_URL/api/schedules/my", "userId", currentUser?.user?.id ?: username.orEmpty()), auth = true)
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
+            ScheduleEntry(
+                id = o["id"].str(), classId = o["classId"].strOrNull(), className = o["className"].str(),
+                courseId = o["courseId"].str(), courseName = o["courseName"].str(), teacherName = o["teacherName"].str(),
+                weekday = o["weekday"].int(), startTime = o["startTime"].str(), endTime = o["endTime"].str(),
+                location = o["location"].str(), weeks = o["weeks"].str(),
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 修改个人资料（昵称 / 学校 / 班级，传 null 的不改）。成功返回 null，失败返回原因。 */
     suspend fun updateProfile(nickname: String? = null, school: String? = null, className: String? = null): String? = try {
@@ -1248,7 +1294,7 @@ object KewuApi {
      * 录音设备心跳（2026-10-26 课堂录音雷达）：录音中每 10 秒报一次 status=recording，停止时报 stopped。
      * 后端只画 45 秒内有心跳、且不是 stopped 的设备。时间戳由服务端打（不带客户端时间，避免手机时钟偏差）。
      */
-    suspend fun sendRecordingHeartbeat(sessionId: String, status: String, qualityScore: Int = 80): Boolean = try {
+    suspend fun sendRecordingHeartbeat(sessionId: String, status: String, qualityScore: Int = 80, elapsedSec: Int = 0): Boolean = try {
         val resp = client.post("$OBS_URL/api/teacher/recording/devices/heartbeat") {
             contentType(ContentType.Application.Json)
             setBody(buildJsonObject {
@@ -1260,6 +1306,7 @@ object KewuApi {
                 // 雷达上显示名字；老师的点画成黄色
                 put("name", nameForServer())
                 put("role", if (currentRole() == ROLE_TEACHER) "teacher" else "student")
+                put("elapsedSec", elapsedSec)
             }.toString())
         }
         resp.status.value in 200..299
@@ -1275,7 +1322,7 @@ object KewuApi {
             (o?.get("devices") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map {
                 RecordingDevice(
                     it["deviceId"].str(), it["type"].str(), it["status"].str(), it["qualityScore"].int(),
-                    name = it["name"].str(), role = it["role"].str(),
+                    name = it["name"].str(), role = it["role"].str(), elapsedSec = it["elapsedSec"].int(),
                 )
             }
         }

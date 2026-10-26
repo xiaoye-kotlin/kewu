@@ -29,6 +29,8 @@ class UserService(private val repository: UserRepository, private val courseRepo
             school = req.school?.trim()?.take(128)?.ifBlank { null }
         )
         repository.createUser(user)
+        // 老师注册：认领课表里「同名同校」的课程（2026-10-26）
+        runCatching { com.kewu.modules.schedule.ScheduleService.autoBindTeacher(user.id) }
         return Result.success(user.toInfo())
     }
 
@@ -37,6 +39,7 @@ class UserService(private val repository: UserRepository, private val courseRepo
             ?: return Result.failure(IllegalArgumentException("用户名或密码不对"))
         val ok = BCrypt.verifyer().verify(req.password.toCharArray(), user.passwordHash).verified
         if (!ok) return Result.failure(IllegalArgumentException("用户名或密码不对"))
+        runCatching { com.kewu.modules.schedule.ScheduleService.autoBindTeacher(user.id) }
         val token = JwtConfig.createToken(user.id, user.username)
         return Result.success(LoginResponse(token, user.toInfo(), user.role))
     }
@@ -65,6 +68,8 @@ class UserService(private val repository: UserRepository, private val courseRepo
             req.school?.trim()?.take(128),
             req.className?.trim()?.take(128)
         )
+        // 改了姓名 / 学校后再认领一次课表
+        runCatching { com.kewu.modules.schedule.ScheduleService.autoBindTeacher(userId) }
         return Result.success(repository.findUserById(userId)!!.toInfo())
     }
 

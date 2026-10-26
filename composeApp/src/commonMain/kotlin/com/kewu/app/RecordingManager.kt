@@ -128,6 +128,7 @@ object RecordingManager {
         val st = _status.value
         if (starting || st is RecordingStatus.Recording || st is RecordingStatus.Uploading) return
         starting = true
+        sawClassOn = false
         this.classId = classId
         scope.launch {
             if (audio.isRecording()) { starting = false; return@launch }
@@ -291,11 +292,32 @@ object RecordingManager {
     /** 当前录音所属的课堂会话 id（雷达按它查同堂设备）；没在录为 null。 */
     fun currentSessionId(): String? = classId?.takeIf { isRecording }?.let { KewuApi.classSessionId(it, todayCn()) }
 
-    private fun heartbeat(status: String) {
+    private fun heartbeat(status: String, elapsedSec: Int = 0) {
         val cid = classId ?: return
         val sid = KewuApi.classSessionId(cid, todayCn())
         // 心跳走独立协程，网络慢不拖住计时
-        netScope.launch { KewuApi.sendRecordingHeartbeat(sid, status) }
+        netScope.launch { KewuApi.sendRecordingHeartbeat(sid, status, elapsedSec = elapsedSec) }
+    }
+
+    /** 本次录音期间是否见过「上课中」：见过后再变成「已下课」才自动停（从没开过课的不误停）。 */
+    private var sawClassOn = false
+
+    private val _events = MutableStateFlow<String?>(null)
+
+    /** 一次性提示（如「老师已下课，录音已自动上传」），页面展示后调用 [consumeEvent]。 */
+    val events: StateFlow<String?> = _events.asStateFlow()
+    fun consumeEvent() { _events.value = null }
+
+    private fun checkClassEnded() {
+        val cid = classId ?: return
+        netScope.launch {
+            val st = KewuApi.getClassState(cid)?.state ?: return@launch
+            if (st == "ON") sawClassOn = true
+            else if (sawClassOn && st == "OFF" && isRecording) {
+                _events.value = "老师已下课，课堂录音已自动停止并上传"
+                stopAndUpload()
+            }
+        }
     }
     private val netScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -303,9 +325,13 @@ object RecordingManager {
         ticker?.cancel()
         ticker = scope.launch {
             while (_status.value is RecordingStatus.Recording) {
-                // 每 10 秒一次设备心跳（第 0 秒先报一次），供课堂录音雷达显示「谁在录」
+                // 每 5 秒一次设备心跳（第 0 秒先报一次，带已录时长），供课堂录音雷达显示「谁在录、录了多久」；
+                // 每 10 秒查一次课堂状态：老师下课（上课中 → 已下课）就自动停止并上传（2026-10-26）
                 val cur0 = _status.value
-                if (cur0 is RecordingStatus.Recording && cur0.elapsedSec % 10 == 0) heartbeat("recording")
+                if (cur0 is RecordingStatus.Recording) {
+                    if (cur0.elapsedSec % 5 == 0) heartbeat("recording", cur0.elapsedSec)
+                    if (cur0.elapsedSec % 10 == 5) checkClassEnded()
+                }
                 delay(1000)
                 val cur = _status.value
                 if (cur is RecordingStatus.Recording) {

@@ -14,7 +14,7 @@ import kotlinx.serialization.json.jsonPrimitive
 class RecordingDeviceService(private val redis: RedisService) {
 
     private companion object {
-        const val STALE_MS = 45_000L // App 每 10 秒一次心跳，连续丢 4 次视为离线
+        const val STALE_MS = 20_000L // App 每 5 秒一次心跳，连续丢 4 次视为离线（2026-10-26：45s→20s，停录 / 断网的点更快消失）
     }
 
     // 对外唯一入口：拿一份设备监控报告。任何异常路径都返回"空雷达"（totalDevices=0, devices=[]）。
@@ -53,8 +53,9 @@ class RecordingDeviceService(private val redis: RedisService) {
             val last = obj["lastHeartbeat"]?.jsonPrimitive?.content?.toLongOrNull()
             val name = obj["name"]?.jsonPrimitive?.content ?: ""
             val role = obj["role"]?.jsonPrimitive?.content ?: ""
+            val elapsed = obj["elapsedSec"]?.jsonPrimitive?.intOrNull ?: 0
             DeviceStatus(deviceId = deviceId, type = type, status = status, qualityScore = qualityScore,
-                lastHeartbeat = last, name = name, role = role)
+                lastHeartbeat = last, name = name, role = role, elapsedSec = elapsed)
         } catch (t: Throwable) {
             // 这一条坏了不影响整体，deviceId 兜底用哈希 field，其他给空串/0
             DeviceStatus(deviceId = safeId, type = "", status = "", qualityScore = 0)
@@ -71,7 +72,7 @@ class RecordingDeviceService(private val redis: RedisService) {
         val best = devices.maxByOrNull { it.qualityScore }
         val bestDeviceId = best?.deviceId?.takeIf { it.isNotBlank() }
         val views = devices.map {
-            RecordingDeviceView(it.deviceId, it.type, it.status, it.qualityScore, it.name, it.role)
+            RecordingDeviceView(it.deviceId, it.type, it.status, it.qualityScore, it.name, it.role, it.elapsedSec)
         }
         return RecordingDevicesResponse(
             totalDevices = total,

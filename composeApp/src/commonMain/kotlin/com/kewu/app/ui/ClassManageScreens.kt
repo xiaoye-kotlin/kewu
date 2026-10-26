@@ -157,6 +157,8 @@ internal fun CreateCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
 private sealed class ClassDrill {
     data object LIST : ClassDrill()
     data class STUDENTS(val cls: ClassRoomInfo) : ClassDrill()
+    /** 导入课表（建班成功后自动进入，也可从学生名单页进入更新）。 */
+    data class SCHEDULE(val cls: ClassRoomInfo) : ClassDrill()
 }
 
 /**
@@ -291,6 +293,8 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                                         createResult = true to "已创建《${r.data.name}》，邀请码 ${r.data.inviteCode}"
                                         className = ""
                                         reload()
+                                        // 2026-10-26：建班后紧接着导入本班课表（时间 / 地点 / 任课老师）
+                                        drill = ClassDrill.SCHEDULE(r.data)
                                     } else {
                                         createResult = false to (r.error ?: "创建失败，请稍后重试")
                                     }
@@ -316,7 +320,14 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                     }
                     Spacer(Modifier.height(24.dp))
                 }
-                is ClassDrill.STUDENTS -> ClassStudentsScreen(d.cls, onBack = { drill = ClassDrill.LIST })
+                is ClassDrill.STUDENTS -> ClassStudentsScreen(
+                    d.cls, onBack = { drill = ClassDrill.LIST },
+                    onImportSchedule = { drill = ClassDrill.SCHEDULE(d.cls) },
+                )
+                is ClassDrill.SCHEDULE -> ScheduleImportScreen(
+                    classId = d.cls.id, className = d.cls.name, defaultCourse = d.cls.courseName,
+                    onBack = { drill = ClassDrill.LIST }, onDone = { drill = ClassDrill.LIST },
+                )
             }
         }
     }
@@ -379,13 +390,14 @@ private fun ClassRowCard(cls: ClassRoomInfo, onOpen: () -> Unit) {
 
 /** 班级学生名单（GET /api/teacher/classes/{id}/students）：coui BasicComponent 分组卡。 */
 @Composable
-private fun ClassStudentsScreen(cls: ClassRoomInfo, onBack: () -> Unit) {
+private fun ClassStudentsScreen(cls: ClassRoomInfo, onBack: () -> Unit, onImportSchedule: () -> Unit) {
     val cs = COUITheme.colorScheme
     var students by remember { mutableStateOf<List<ClassStudent>?>(null) }
     LaunchedEffect(cls.id) { students = KewuApi.getClassStudents(cls.id) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
         KewuTopBar("${cls.name} · 学生名单", onBack)
+        KewuSecondaryButton("导入 / 更新本班课表", onImportSchedule, Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp))
         val list = students
         when {
             list == null -> KewuLoading()

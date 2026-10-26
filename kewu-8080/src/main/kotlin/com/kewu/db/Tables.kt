@@ -211,11 +211,44 @@ object ClassRecordings : Table("class_recordings") {
     override val primaryKey = PrimaryKey(sessionId)
 }
 
+// 课表：每节课的星期 / 时间 / 地点 / 任课老师（老师建班后导入；任课老师按姓名 + 学校自动绑定）
+object CourseSchedules : Table("course_schedules") {
+    val id = varchar("id", 40)
+    val classId = varchar("class_id", 64).nullable().index()
+    val className = varchar("class_name", 128)
+    val courseId = varchar("course_id", 64).index()
+    val courseName = varchar("course_name", 128)
+    val teacherName = varchar("teacher_name", 64).index()
+    val teacherId = varchar("teacher_id", 64).nullable()
+    val school = varchar("school", 128).nullable()
+    val weekday = integer("weekday")
+    val startTime = varchar("start_time", 5)
+    val endTime = varchar("end_time", 5)
+    val location = varchar("location", 128)
+    val weeks = varchar("weeks", 64)
+    val createdBy = varchar("created_by", 64)
+    val createdAt = varchar("created_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
+// App 崩溃上报（下次启动时上传上次崩溃原因，含原生崩溃）
+object CrashReports : Table("crash_reports") {
+    val id = varchar("id", 40)
+    val user = varchar("user", 64)
+    val device = varchar("device", 128)
+    val appVersion = varchar("app_version", 32)
+    val reason = varchar("reason", 64)
+    val detail = text("detail")
+    val happenedAt = varchar("happened_at", 32)
+    val receivedAt = varchar("received_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
 val allTables = arrayOf(
     Users, UserCourses, Courses, ClassNotes,
     Classes, ClassStudents, ClassStates,
     Assignments, Submissions,
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
     Questions,
-    Uploads, CourseMaterials, ClassRecordings
+    Uploads, CourseMaterials, ClassRecordings, CourseSchedules, CrashReports
 )
