@@ -105,6 +105,9 @@ fun AssignmentDetailScreen(
     var mySub by remember { mutableStateOf<SubmissionInfo?>(null) }
     var loading by remember { mutableStateOf(true) }
     var loadFailed by remember { mutableStateOf(false) }
+    // 「小悟一题一辅」：当前打开辅导面板的题 + 每题求助次数（随提交上报给老师）
+    var tutorQ by remember { mutableStateOf<Pair<Int, com.kewu.app.Question>?>(null) }
+    val aiHelp = remember { mutableStateMapOf<String, Int>() }
 
     // 作答状态
     val answers = remember { mutableStateMapOf<String, String>() }
@@ -181,7 +184,7 @@ fun AssignmentDetailScreen(
             val durationSec = answerStartMs.takeIf { it > 0 }
                 ?.let { ((kotlin.time.Clock.System.now().toEpochMilliseconds() - it) / 1000).toInt() }
                 ?.takeIf { it > 0 }
-            val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, ans, uploaded, durationSec)
+            val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, ans, uploaded, durationSec, aiHelp.toMap())
             submitting = false
             if (err == null) {
                 // 2026-10-26：提交成功立即退回任务列表并提示（旧版停在原页 reload，用户不知道交没交上）；
@@ -233,6 +236,15 @@ fun AssignmentDetailScreen(
                                 readOnly = readOnly,
                                 result = if (readOnly) results[q.id] else null,
                             )
+                            if (!readOnly) {
+                                // 作答中：每题可叫小悟分级提示（不给答案）
+                                val used = aiHelp[q.id] ?: 0
+                                KewuSecondaryButton(
+                                    if (used == 0) "卡住了？问小悟（只给提示，不给答案）" else "继续问小悟 · 已求助 $used 次",
+                                    { haptic(HapticKind.Tick); tutorQ = (i + 1) to q },
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 6.dp),
+                                )
+                            }
                             Spacer(Modifier.height(10.dp))
                         }
                     } else {
@@ -321,6 +333,17 @@ fun AssignmentDetailScreen(
                 }
             },
         )
+        tutorQ?.let { (idx, q) ->
+            AiTutorSheet(
+                show = true,
+                sessionKey = assignmentId + "#" + q.id,
+                question = q, index = idx,
+                courseName = CourseRepo.courses.value?.firstOrNull { it.id == assignment?.courseId }?.name ?: "",
+                currentAnswer = answers[q.id].orEmpty(),
+                onDismiss = { tutorQ = null },
+                onUsed = { aiHelp[q.id] = (aiHelp[q.id] ?: 0) + 1 },
+            )
+        }
     }
 }
 

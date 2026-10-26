@@ -32,6 +32,7 @@ class AssignmentRepository {
                 it[publisher] = a.publisher
                 it[createdAt] = a.createdAt
                 it[questions] = kewuJson.encodeToString(a.questions)
+                it[targetStudents] = if (a.targetStudents.isEmpty()) null else kewuJson.encodeToString(a.targetStudents)
             }
         }
     }
@@ -69,6 +70,7 @@ class AssignmentRepository {
                     it[questionResults] = kewuJson.encodeToString(s.questionResults)
                     it[attachments] = kewuJson.encodeToString(s.attachments)
                     it[durationSec] = s.durationSec
+                    it[aiHelp] = kewuJson.encodeToString(s.aiHelp)
                 }
             } else {
                 Submissions.insert {
@@ -90,6 +92,7 @@ class AssignmentRepository {
                     it[questionResults] = kewuJson.encodeToString(s.questionResults)
                     it[attachments] = kewuJson.encodeToString(s.attachments)
                     it[durationSec] = s.durationSec
+                    it[aiHelp] = kewuJson.encodeToString(s.aiHelp)
                 }
             }
         }
@@ -128,7 +131,8 @@ class AssignmentRepository {
             knowledgePoints = runCatching { kewuJson.decodeFromString<List<String>>(this[Assignments.knowledgePoints]) }.getOrElse { emptyList() },
             publisher = this[Assignments.publisher],
             createdAt = this[Assignments.createdAt],
-            questions = decodeList(this[Assignments.questions].orEmpty())
+            questions = decodeList(this[Assignments.questions].orEmpty()),
+            targetStudents = decodeList(this[Assignments.targetStudents].orEmpty())
         )
 
     private fun org.jetbrains.exposed.sql.ResultRow.toSubmission(): Submission =
@@ -150,7 +154,8 @@ class AssignmentRepository {
             answers = decodeList(this[Submissions.answers].orEmpty()),
             questionResults = decodeList(this[Submissions.questionResults].orEmpty()),
             attachments = decodeList(this[Submissions.attachments].orEmpty()),
-            durationSec = this[Submissions.durationSec]
+            durationSec = this[Submissions.durationSec],
+            aiHelp = decodeList(this[Submissions.aiHelp].orEmpty())
         )
 
     // 老数据 JSON 脏了也不能让整个接口挂掉, 退化成空值

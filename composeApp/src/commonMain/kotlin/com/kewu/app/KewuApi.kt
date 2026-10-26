@@ -75,6 +75,8 @@ data class AssignmentInfo(
     val publisher: String, val createdAt: String,
     /** 题目列表（2026-10-25 作业题目系统）。后端若落原生字段则用之，否则从 description 透传块提取。 */
     val questions: List<Question> = emptyList(),
+    /** 指定学生（学号）：AI 分层补救作业只发给某一层；空 = 全班（2026-10-26）。 */
+    val targetStudents: List<String> = emptyList(),
 )
 data class AssignmentStats(
     val submittedCount: Int, val reviewedCount: Int, val pendingCount: Int,
@@ -98,6 +100,8 @@ data class SubmissionInfo(
     val attachments: List<AttachmentInfo> = emptyList(),
     /** 作答用时（秒，2026-10-26 起前端计时随提交上报；老提交为 null）。 */
     val durationSec: Int? = null,
+    /** 每题向「小悟一题一辅」求助的次数（questionId → 次数）。 */
+    val aiHelp: Map<String, Int> = emptyMap(),
 )
 /** 课表里的一节课（2026-10-26）：weekday 1=周一…7=周日，时间 "08:00"。 */
 data class ScheduleEntry(
@@ -751,6 +755,7 @@ object KewuApi {
                 knowledgePoints = (obj["knowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
                 publisher = obj["publisher"].str(), createdAt = obj["createdAt"].str(),
                 questions = parseAssignmentQuestions(obj),
+                targetStudents = (obj["targetStudents"] as? JsonArray).orEmpty().map { it.str() },
             )
         } }
     } catch (e: CancellationException) { throw e }
@@ -770,6 +775,7 @@ object KewuApi {
             knowledgePoints = (data["knowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
             publisher = data["publisher"].str(), createdAt = data["createdAt"].str(),
             questions = parseAssignmentQuestions(data),
+            targetStudents = (data["targetStudents"] as? JsonArray).orEmpty().map { it.str() },
         )
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
@@ -812,6 +818,7 @@ object KewuApi {
         answers: Map<String, String> = emptyMap(),
         attachments: List<AttachmentInfo> = emptyList(),
         durationSec: Int? = null,
+        aiHelp: Map<String, Int> = emptyMap(),
     ): String? = try {
         val body = mutableMapOf<String, Any?>(
             "studentId" to studentId, "studentName" to studentName, "content" to content,
@@ -822,6 +829,7 @@ object KewuApi {
         }
         // 作答用时（秒，2026-10-26 后端 durationSec），老师端「学生作业详情」展示
         if (durationSec != null) body["durationSec"] = durationSec
+        if (aiHelp.isNotEmpty()) body["aiHelp"] = aiHelp.map { (q, c) -> mapOf("questionId" to q, "count" to c) }
         // 附件（作业附件需求文档 §3）：只传已上传成功的服务端附件
         if (attachments.isNotEmpty()) {
             body["attachments"] = attachments.map { a ->
@@ -890,6 +898,16 @@ object KewuApi {
     } catch (e: ApiException) { e.message }
     catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
+
+    /** 某课的课前资料（最新在前）：(标题, 说明, 附件名列表)。失败返回空。 */
+    suspend fun getCourseMaterials(courseId: String): List<Triple<String, String, List<String>>> = try {
+        val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/materials")
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
+            Triple(o["title"].str(), o["note"].str(),
+                (o["attachments"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.get("name").str().ifBlank { null } })
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { emptyList() }
 
     private fun parseAttachment(o: JsonObject): AttachmentInfo? {
         val url = o["url"].str().takeIf { it.isNotBlank() } ?: return null
@@ -1080,12 +1098,14 @@ object KewuApi {
         courseId: String, title: String, description: String = "", deadline: String = "",
         totalScore: Int = 100, knowledgePoints: List<String> = emptyList(), publisher: String = "",
         questions: List<Question> = emptyList(),
+        targetStudents: List<String> = emptyList(),
     ): AssignmentInfo? = try {
         val body = mutableMapOf<String, Any?>(
             "courseId" to courseId, "title" to title, "description" to description,
             "deadline" to deadline, "totalScore" to totalScore,
             "knowledgePoints" to knowledgePoints, "publisher" to publisher,
         )
+        if (targetStudents.isNotEmpty()) body["targetStudents"] = targetStudents
         // 原生题目字段：直接发结构化数组（后端 3.12 支持，自动判分）。description 不再塞透传块。
         if (questions.isNotEmpty()) {
             body["questions"] = json.parseToJsonElement(QuestionStore.questionsToJson(questions))
@@ -1099,6 +1119,7 @@ object KewuApi {
             knowledgePoints = (data["knowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
             publisher = data["publisher"].str(), createdAt = data["createdAt"].str(),
             questions = parseAssignmentQuestions(data),
+            targetStudents = (data["targetStudents"] as? JsonArray).orEmpty().map { it.str() },
         )
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
@@ -1605,6 +1626,8 @@ object KewuApi {
             attachments = (o["attachments"] as? JsonArray).orEmpty()
                 .mapNotNull { (it as? JsonObject)?.let(::parseAttachment) },
             durationSec = (o["durationSec"] as? JsonPrimitive)?.content?.toIntOrNull(),
+            aiHelp = (o["aiHelp"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+                .associate { it["questionId"].str() to it["count"].int() },
         )
     }
 

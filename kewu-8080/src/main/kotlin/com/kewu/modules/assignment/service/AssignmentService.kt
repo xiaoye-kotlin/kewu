@@ -38,7 +38,8 @@ class AssignmentService(
             knowledgePoints = req.knowledgePoints,
             publisher = req.publisher,
             createdAt = now(),
-            questions = req.questions
+            questions = req.questions,
+            targetStudents = req.targetStudents.map { it.trim() }.filter { it.isNotBlank() }.distinct()
         )
         repository.createAssignment(a)
         return Result.success(a)
@@ -153,7 +154,8 @@ class AssignmentService(
             answers = req.answers,
             questionResults = results,
             attachments = attachments,
-            durationSec = durationSec
+            durationSec = durationSec,
+            aiHelp = req.aiHelp.filter { it.count > 0 }.take(100)
         )
         repository.saveSubmission(s)
         return Result.success(s)

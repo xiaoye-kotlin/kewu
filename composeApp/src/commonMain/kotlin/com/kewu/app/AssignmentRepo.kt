@@ -48,7 +48,9 @@ object AssignmentRepo {
         _items.value?.let { if (now - fetchedAt < maxAgeMs) return@withLock it }
         // 2026-10-26：只看「我的课程」里的作业（旧版拿全站作业，所有学生看到同一批）
         val myIds = (CourseRepo.courses.value ?: CourseRepo.refresh()).orEmpty().map { it.id }.toSet()
-        val list = KewuApi.getAssignments()?.filter { it.courseId in myIds }
+        val me = KewuApi.username.orEmpty()
+        // 指定学生的作业（AI 分层补救）只给名单里的人看
+        val list = KewuApi.getAssignments()?.filter { it.courseId in myIds && (it.targetStudents.isEmpty() || me in it.targetStudents) }
         if (list == null) {
             _failed.value = true
             return@withLock _items.value

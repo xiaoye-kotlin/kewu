@@ -259,6 +259,13 @@ private fun StudentWorkBody(
                 },
             )
             if (sub.version > 1) CompareLine("修改次数", "共提交 ${sub.version} 版，学习投入度较高")
+            // 「小悟一题一辅」求助记录：学生在哪几题向 AI 求助了几次（老师据此看出卡点）
+            val helpTotal = sub.aiHelp.values.sum()
+            CompareLine(
+                "AI 辅导求助",
+                if (helpTotal == 0) "作答时没有求助小悟"
+                else "共 $helpTotal 次：" + a.questions.mapIndexedNotNull { i, q -> sub.aiHelp[q.id]?.let { "第 ${i + 1} 题 $it 次" } }.joinToString("、"),
+            )
         }
     }
 
@@ -449,6 +456,7 @@ private fun buildWorkPrompt(a: AssignmentInfo, s: SubmissionInfo, rank: Int?, cl
         appendLine("学生：${s.studentName.ifBlank { s.studentId }}，第 ${s.version} 次提交")
         appendLine("用时：${fmtDuration(m.durationSec)}" + (medianSec?.let { "（全班中位 ${fmtDuration(it)}）" } ?: ""))
         appendLine("正确率：${fmtPct(m.accuracy)}" + (rank?.let { "，全班第 $it / $classSize 名" } ?: ""))
+        if (s.aiHelp.isNotEmpty()) appendLine("作答时向 AI 辅导求助：" + s.aiHelp.entries.joinToString("、") { (q, c) -> "题 $q $c 次" })
         m.gotScore?.let { appendLine("得分：${fmtNum(it)}") }
         val answerMap = s.answers.associate { it.questionId to it.value }
         val resultMap = s.questionResults.associateBy { it.questionId }

@@ -79,8 +79,13 @@ data class Assignment(
     val knowledgePoints: List<String> = emptyList(), // 知识点标签, 学情分析全靠它
     val publisher: String = "",
     val createdAt: String = "",
-    val questions: List<Question> = emptyList() // 结构化题目; 为空就是老版纯文本作业, 按老样子处理
+    val questions: List<Question> = emptyList(), // 结构化题目; 为空就是老版纯文本作业, 按老样子处理
+    val targetStudents: List<String> = emptyList() // 指定学生(学号); 空 = 全班。AI 分层补救作业用
 )
+
+// 学生向 AI 辅导求助的记录: 第几题求助了几次(老师据此看学生卡在哪)
+@Serializable
+data class AiHelpItem(val questionId: String = "", val count: Int = 0)
 
 // 提交的版本快照 —— 留着学生的修改过程, 用来画"成长曲线"
 @Serializable
@@ -113,7 +118,8 @@ data class Submission(
     val answers: List<QuestionAnswer> = emptyList(),       // 结构化作答, 老提交没有就是空
     val questionResults: List<QuestionResult> = emptyList(), // 逐题判定结果, 前端回显"第1题✓"
     val attachments: List<Attachment> = emptyList(),        // 本版附件(图片/文件/录音), 无附件为 []
-    val durationSec: Int? = null                             // 本版作答用时(秒), 老提交没有
+    val durationSec: Int? = null,                            // 本版作答用时(秒), 老提交没有
+    val aiHelp: List<AiHelpItem> = emptyList()               // 本版作答时向 AI 求助的情况
 )
 
 // 打分细项, 让 AI 给的每一分都能说清楚来历(可解释 AI, 不是黑盒给个分)
@@ -274,7 +280,8 @@ data class CreateAssignmentRequest(
     val totalScore: Int = 100,
     val knowledgePoints: List<String> = emptyList(),
     val publisher: String = "",
-    val questions: List<Question> = emptyList() // 可选, 不传就是老版纯文本作业
+    val questions: List<Question> = emptyList(), // 可选, 不传就是老版纯文本作业
+    val targetStudents: List<String> = emptyList() // 可选, 只发给这些学生(学号)
 )
 
 @Serializable
@@ -284,7 +291,8 @@ data class SubmitRequest(
     val content: String,
     val answers: List<QuestionAnswer> = emptyList(), // 可选, 结构化作答
     val attachments: List<Attachment> = emptyList(), // 可选, 先 POST /api/uploads 拿到的附件对象, 最多 9 个
-    val durationSec: Int? = null                      // 可选, 从打开作业到提交的作答用时(秒)
+    val durationSec: Int? = null,                     // 可选, 从打开作业到提交的作答用时(秒)
+    val aiHelp: List<AiHelpItem> = emptyList()        // 可选, 每题向 AI 辅导求助次数
 )
 
 @Serializable

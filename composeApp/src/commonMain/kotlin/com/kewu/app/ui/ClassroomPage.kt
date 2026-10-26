@@ -444,7 +444,7 @@ internal fun ExclaimMark(
 }
 
 // 课堂主页下钻目标（5 态）；attendanceId 单独存值
-private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE, COURSES }
+private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE, COURSES, MISTAKES, PLAN }
 
 // ───────────────────────── 课堂主页 ─────────────────────────
 
@@ -581,6 +581,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             drill == ClassroomDrill.CODE && attId != null -> 4
             drill == ClassroomDrill.TIMETABLE -> 1
             drill == ClassroomDrill.COURSES -> 5
+            drill == ClassroomDrill.MISTAKES -> 6
+            drill == ClassroomDrill.PLAN -> 7
             else -> 0
         }
         // 返回时 attendanceId 先被置空、旧页还在滑出：记住最后一次的 id，滑出途中签到页内容不消失
@@ -598,6 +600,14 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             onSwipeCommit = { drill = ClassroomDrill.NONE; attendanceId = null },
         ) { key ->
             when (key) {
+                6 -> {
+                    BackHandler { drill = ClassroomDrill.NONE }
+                    MistakeBookScreen(onBack = { drill = ClassroomDrill.NONE })
+                }
+                7 -> {
+                    BackHandler { drill = ClassroomDrill.NONE }
+                    StudyPlanScreen(onBack = { drill = ClassroomDrill.NONE })
+                }
                 2 -> {
                     // 拦截系统返回手势，回到课堂主页，而不是让 Activity 直接 finish 退出 app。
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
@@ -684,6 +694,13 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 onHomework = { onGoToTab(2) },
                             )
                         }
+                        // 2026-10-26 AI 学习中心：课前预习卡 + 错题本 / 学习规划入口
+                        AiPreviewCard(pageBackdrop, Modifier.padding(bottom = 12.dp))
+                        AiStudyEntryRow(
+                            onMistakes = { drill = ClassroomDrill.MISTAKES },
+                            onPlan = { drill = ClassroomDrill.PLAN },
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
                         // 签到卡片（当有进行中的签到时显示）
                         // 身份分流：该签到的发布者（教师）→ 签到详情展示二维码；学生 → 扫码页
                         CheckInCardIfActive(pageBackdrop) { session ->

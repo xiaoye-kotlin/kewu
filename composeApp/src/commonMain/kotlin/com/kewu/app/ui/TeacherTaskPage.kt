@@ -119,6 +119,8 @@ private sealed class TaskDrill {
     data class REVIEW(val submissionId: String, val back: TaskDrill = NONE) : TaskDrill()
     /** 单个学生的作业详情（2026-10-26：老师按学生看作业）。 */
     data class STUDENT(val assignmentId: String, val submissionId: String, val back: TaskDrill = NONE) : TaskDrill()
+    /** AI 分层补救（2026-10-26）。 */
+    data class REMEDIAL(val assignmentId: String, val back: TaskDrill = NONE) : TaskDrill()
     data class PUBLISH(val courseId: String) : TaskDrill()
 }
 
@@ -126,6 +128,7 @@ private fun TaskDrill.parent(): TaskDrill = when (this) {
     is TaskDrill.DETAIL -> back
     is TaskDrill.REVIEW -> back
     is TaskDrill.STUDENT -> back
+    is TaskDrill.REMEDIAL -> back
     else -> TaskDrill.NONE
 }
 
@@ -238,7 +241,9 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                     onBack = { drill = d.back },
                     onReview = { sid -> drill = TaskDrill.REVIEW(sid, back = d) },
                     onOpenStudent = { sid -> drill = TaskDrill.STUDENT(d.assignmentId, sid, back = d) },
+                    onRemedial = { drill = TaskDrill.REMEDIAL(d.assignmentId, back = d) },
                 )
+                is TaskDrill.REMEDIAL -> RemedialScreen(d.assignmentId, onBack = { drill = d.back })
                 is TaskDrill.STUDENT -> StudentWorkScreen(
                     assignmentId = d.assignmentId,
                     submissionId = d.submissionId,
@@ -679,6 +684,7 @@ private fun TeacherAssignmentDetail(
     onBack: () -> Unit,
     onReview: (String) -> Unit,
     onOpenStudent: (String) -> Unit,
+    onRemedial: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -751,6 +757,15 @@ private fun TeacherAssignmentDetail(
                     // 2026-10-26：按学生看作业（每人一行，点进看用时 / 正确率 / 逐题 / AI 总结）
                     KewuSectionTitle("学生作业（${submissions?.size ?: 0} 人已交）")
                     StudentWorkList(submissions, a.totalScore) { onOpenStudent(it.id) }
+                    if (!submissions.isNullOrEmpty() && a.questions.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        // 2026-10-26 AI 分层补救：按掌握程度分层，给每层出针对性练习、只发给该层
+                        KewuPrimaryButton(
+                            "AI 分层补救 · 按掌握程度给每层同学出针对性练习",
+                            onRemedial,
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        )
+                    }
                     Spacer(Modifier.height(6.dp))
 
                     // 2026-10-26：老师也能看到自己布置的题（只读，选择 / 判断题高亮正确答案；填空 / 简答显示参考答案）

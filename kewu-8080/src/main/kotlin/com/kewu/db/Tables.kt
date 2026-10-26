@@ -91,6 +91,8 @@ object Assignments : Table("assignments") {
     // 用可空列而不是 DEFAULT '[]'：MySQL 对 TEXT 列加 DEFAULT 有版本限制（8.0.13 才允许），
     // 老库 ALTER 上去容易踩坑，可空列在任何版本都成立，null 在仓储层按 "[]" 处理
     val questions = text("questions").nullable()
+    // 指定学生（JSON 数组，学号）：AI 分层补救作业只发给某一层的学生；null / [] = 全班（2026-10-26）
+    val targetStudents = text("target_students").nullable()
     override val primaryKey = PrimaryKey(id)
 }
 
@@ -114,6 +116,7 @@ object Submissions : Table("submissions") {
     val questionResults = text("question_results").nullable() // JSON 数组，逐题判定结果
     val attachments = text("attachments").nullable()          // JSON 数组，本版附件（2026-10-26）
     val durationSec = integer("duration_sec").nullable()      // 本次作答用时（秒，前端计时，2026-10-26）
+    val aiHelp = text("ai_help").nullable()                   // JSON：每题向「小悟一题一辅」求助的次数（2026-10-26）
     override val primaryKey = PrimaryKey(id)
 }
 
