@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.TabSwipeLock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -80,6 +81,8 @@ fun TeacherMainScreen(
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
     var navHidden by remember { mutableStateOf(false) }
+    // 下钻子页上锁时暂停内容区横滑切 tab（见 TabSwipeLock）
+    val swipeLock by TabSwipeLock.count.collectAsState()
     var lastPreviewHaptic by remember { mutableStateOf(-1) }
     // 助教（index=1）tab 的 AI 未读红点：仅统计 ChatHistory 里晚于「已读游标」的 assistant 消息，
     // 与首页铃铛通知完全无关（小悟消息在助教页内读，不进铃铛）。进入助教页即清空。
@@ -174,7 +177,8 @@ fun TeacherMainScreen(
                     // ★ 2026-10-26 全局输入法避让（同学生端 MainScreen）：内容区随键盘收缩，聚焦输入框自动进入可视区
                     .imePadding()
                     .layerBackdrop(backdrop)
-                    .pointerInput(selected) {
+                    // 下钻子页（发布 / 批阅 / 详情…）时暂停横滑切 tab，避免一次斜滑丢掉草稿与批阅进度
+                    .then(if (swipeLock == 0) Modifier.pointerInput(selected) {
                         var acc = 0f
                         detectHorizontalDragGestures(
                             onDragStart = { acc = 0f },
@@ -185,7 +189,7 @@ fun TeacherMainScreen(
                                 else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
                             },
                         )
-                    },
+                    } else Modifier),
             ) {
                 Box(Modifier.fillMaxSize()) {
                     when (selected) {

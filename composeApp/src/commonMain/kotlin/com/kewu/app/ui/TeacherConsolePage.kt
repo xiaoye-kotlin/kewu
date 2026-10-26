@@ -1,5 +1,7 @@
 package com.kewu.app.ui
 
+import kotlinx.coroutines.isActive
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -128,6 +130,7 @@ fun TeacherConsolePage(
 
     var drill by remember { mutableStateOf<ConsoleDrill>(ConsoleDrill.NONE) }
     BackHandler(enabled = drill != ConsoleDrill.NONE) { drill = ConsoleDrill.NONE }
+    LockTabSwipe(drill != ConsoleDrill.NONE)
 
     // 数据
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
@@ -156,7 +159,7 @@ fun TeacherConsolePage(
             val sid = kvGet("teacher_active_session")
             if (!sid.isNullOrBlank()) {
                 val s = KewuApi.getAttendance(sid)
-                if (s != null && s.state != "closed") activeSession = s
+                if (s != null && !s.state.equals("closed", ignoreCase = true)) activeSession = s
                 else kvSet("teacher_active_session", "")
             }
             // 无本地会话但后端课堂状态 ON（别处在上课/上次杀进程丢 kv）→ 提示仍在上课
@@ -168,7 +171,7 @@ fun TeacherConsolePage(
                 if (onCourseId != null) {
                     // 找到该课今天的 OPEN 签到会话，恢复上课中面板
                     KewuApi.getAttendances(onCourseId)
-                        ?.firstOrNull { it.state == "OPEN" || it.state == "open" }
+                        ?.firstOrNull { it.state.equals("OPEN", ignoreCase = true) }
                         ?.let { s ->
                             activeSession = s
                             kvSet("teacher_active_session", s.id)
@@ -184,7 +187,7 @@ fun TeacherConsolePage(
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) {
-        Notifications.seedIfEmpty(currentRole())
+        // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
         notifUnread = Notifications.unreadCount()
     }
 
@@ -469,8 +472,9 @@ private fun TeacherStatusSection(
         else -> {
             statusTint = KewuGreen
             title = "无课"
-            line2 = "今日课程已全部结束"
-            line3 = "好好休息，或提前准备教案"
+            // 课程数为 0 时旧版写「今日课程已全部结束」，与事实不符
+            line2 = "还没有创建课程"
+            line3 = "在「我的 → 新建课程」创建后即可开课"
         }
     }
 
@@ -739,12 +743,19 @@ private fun LiveSessionCard(
     LaunchedEffect(session.id) {
         code = KewuApi.getAttendanceCode(session.id)?.also { remaining = it.remainingSeconds }
     }
-    LaunchedEffect(code?.sessionId) {
-        while (remaining > 0) {
+    // ★ 2026-10-26：常驻循环；旧版刷新失败时 remaining 停在 0、循环退出不再重试，页面挂着过期码显示「0s 后刷新」
+    LaunchedEffect(session.id) {
+        while (isActive) {
             delay(1000)
-            remaining -= 1
+            if (remaining > 0) remaining -= 1
             if (remaining <= 0) {
-                code = KewuApi.getAttendanceCode(session.id)?.also { remaining = it.remainingSeconds }
+                val next = KewuApi.getAttendanceCode(session.id)
+                if (next != null) {
+                    code = next
+                    remaining = next.remainingSeconds
+                } else {
+                    delay(3000)
+                }
             }
         }
     }
@@ -863,17 +874,22 @@ private fun LiveSessionCard(
             // 仅在确认结束（closing==true）时执行；点「再想想」取消时 closing 仍为 false，跳过。
             if (!closing) return@KewuConfirmDialog
             scope.launch {
-                try {
+                // ★ 2026-10-26：closeAttendance 失败是「返回错误文案」而不是抛异常，旧版忽略返回值 →
+                //   后端签到其实还开着，本地却清掉了上课状态。现在失败就提示并保留上课面板，老师可重试。
+                val err = try {
                     KewuApi.closeAttendance(session.id)
-                    // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
-                    KewuApi.setClassState(session.courseId, "END")
                 } catch (e: Throwable) {
-                    // 关闭失败不应卡住下课流程；提示但不阻断
-                    e.message?.takeIf { it.isNotBlank() }?.let { snackbar.toast(it) }
-                } finally {
-                    closing = false
-                    onClosed()
+                    e.message ?: "网络异常"
                 }
+                if (err != null) {
+                    closing = false
+                    snackbar.toast("结束签到失败：$err，请重试")
+                    return@launch
+                }
+                // 同步下课状态到后端（POST /api/teacher/class-state END）；失败只提示，签到已关不影响下课
+                runCatching { KewuApi.setClassState(session.courseId, "END") }
+                closing = false
+                onClosed()
             }
         },
         onDismiss = { confirmClose = false },

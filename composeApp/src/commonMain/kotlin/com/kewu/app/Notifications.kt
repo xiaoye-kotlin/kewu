@@ -50,7 +50,9 @@ object Notifications {
 
     fun load(): List<Info> = try {
         val raw = kvGet(KEY_LIST) ?: return emptyList()
-        json.parseToJsonElement(raw).jsonArray.mapNotNull { el ->
+        json.parseToJsonElement(raw).jsonArray.filter { el ->
+            (el as? JsonObject)?.get("id")?.jsonPrimitive?.content !in DEMO_IDS
+        }.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
             Info(
                 id = o["id"]?.jsonPrimitive?.content ?: return@mapNotNull null,
@@ -98,28 +100,9 @@ object Notifications {
         save(list.map { if (it.id == id) it.copy(read = true) else it })
     }
 
-    /** 后端未就绪：首次运行按角色种入演示通知，便于验证铃铛红点（仅种一次）。 */
-    fun seedIfEmpty(role: String) {
-        if (kvGet(KEY_LIST) != null) return
-        val now = Clock.System.now().toEpochMilliseconds()
-        save(if (role == ROLE_TEACHER) teacherSeed(now) else studentSeed(now))
-    }
-
-    private fun studentSeed(now: Long) = listOf(
-        Info("s1", TYPE_NEW_ASSIGNMENT, "新作业待完成",
-            "《数据结构》第 4 章习题已发布，截止 10 月 30 日 23:59。", now - 3_600_000, false),
-        Info("s2", TYPE_RECORDING_DONE, "录音转写成功",
-            "你上传的课堂录音已转写为文字，可在「任务」查看转写稿。", now - 7_200_000, false),
-        Info("s3", TYPE_GRADE_PUBLISHED, "成绩已公布",
-            "《高等数学》单元测成绩已出，点击查看详情。", now - 86_400_000, true),
-    )
-
-    private fun teacherSeed(now: Long) = listOf(
-        Info("t1", TYPE_NEW_SUBMISSION, "收到新提交",
-            "学生 张三 提交了《数据结构》第 4 章作业，待批改。", now - 3_600_000, false),
-        Info("t2", TYPE_STUDENT_QUESTION, "学生提问",
-            "李四 在助教对话中向你提问：递归与迭代的区别是什么？", now - 5_400_000, false),
-        Info("t3", TYPE_ATTENDANCE_DONE, "签到已结束",
-            "《操作系统》本节课签到率 96%，可查看签到明细。", now - 86_400_000, true),
-    )
+    /**
+     * 2026-10-26：不再种入演示通知（「张三提交了作业」「成绩已公布」等虚构内容会误导用户）。
+     * 老版本已种入本机的演示条目（固定 id s1–s3 / t1–t3）在读取时过滤掉。
+     */
+    private val DEMO_IDS = setOf("s1", "s2", "s3", "t1", "t2", "t3")
 }

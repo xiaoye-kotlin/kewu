@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.animateColorAsState
@@ -55,24 +56,24 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
+import androidx.compose.runtime.collectAsState
+import com.kewu.app.todayCn
+import com.kewu.app.CourseRepo
+import com.kewu.app.AssignmentRepo
 
-// ───────────────────────── 数据模型（mock） ─────────────────────────
+// ───────────────────────── 数据模型 ─────────────────────────
 
 private data class Task(
     val id: String,
     val title: String,
     val course: String,
     val due: String,
-    val urgent: Boolean = false,
+    /** 标签：被打回 / 今天截止 / 已批阅得分，null 不显示。 */
+    val tag: String? = null,
+    val tagIsWarning: Boolean = false,
 )
 
-private fun mockTasks(): List<Task> = listOf(
-    Task("t1", "习题 3.2 · 特征值与特征向量应用", "线性代数", "今天 23:59", urgent = true),
-    Task("t2", "背诵模仿 Unit 3", "大学英语", "明天 18:00"),
-    Task("t3", "实验报告二 · 排序算法对比", "程序设计", "10月20日"),
-    Task("t4", "读书笔记 · 认识的飞跃", "马克思主义原理", "10月22日"),
-    Task("t5", "作业 5 · 多元函数微分", "高等数学", "10月14日 已交"),
-)
+private fun fmtTaskScore(v: Double): String = if (v % 1.0 == 0.0) v.toInt().toString() else ((v * 10).toInt() / 10.0).toString()
 
 // ───────────────────────── 任务页（tab 2） ─────────────────────────
 
@@ -96,29 +97,48 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var assignmentId by remember { mutableStateOf<String?>(null) }
+    LockTabSwipe(assignmentId != null) // 作答中一次斜滑切走 tab 会丢答案
 
-    // 拉取作业 + 已交标记（首次进入与下拉刷新共用）
-    suspend fun load() {
-        val studentId = KewuApi.username ?: ""
-        val list = KewuApi.getAssignments()
-        if (list != null) {
-            tasks = list.map { a ->
-                Task(id = a.id, title = a.title, course = a.courseId, due = a.deadline.ifBlank { "未设置" })
+    var loadFailed by remember { mutableStateOf(false) }
+
+    // 拉取作业 + 我的提交（首次进入与下拉刷新共用）。
+    // ★ 2026-10-26：改用共享的 AssignmentRepo（4 路并行查「我的提交」，首页待交数 / 助教打回检查共用同一份）；
+    //   被打回（RETURNED）的作业算「待完成」——旧版只要交过就算完成，而已完成卡片点不开，学生没法重交；
+    //   断网不再降级 mock（mock 作业 id 打开必然失败），改失败态 + 重试。
+    val repoItems by AssignmentRepo.items.collectAsState()
+    val repoFailed by AssignmentRepo.failed.collectAsState()
+    LaunchedEffect(repoItems, repoFailed) {
+        val items = repoItems
+        if (items != null) {
+            val courseNames = CourseRepo.courses.value.orEmpty().associate { it.id to it.name }
+            val today = todayCn()
+            tasks = items.map { it ->
+                val a = it.assignment
+                val sub = it.mine
+                val (tag, warn) = when {
+                    sub?.status == "RETURNED" -> "已打回" to true
+                    sub?.status == "REVIEWED" && sub.score != null -> "得分 ${fmtTaskScore(sub.score)}" to false
+                    sub == null && a.deadline.startsWith(today) -> "今天截止" to true
+                    else -> null to false
+                }
+                Task(
+                    id = a.id, title = a.title,
+                    course = courseNames[a.courseId] ?: a.courseId,
+                    due = a.deadline.ifBlank { "未设置" }, tag = tag, tagIsWarning = warn,
+                )
             }
-            val done = mutableSetOf<String>()
-            list.forEach { a ->
-                if (studentId.isNotEmpty() && KewuApi.getMySubmissions(a.id, studentId) != null) done.add(a.id)
-            }
-            doneIds = done
-        } else {
-            // 断网兜底：此时才降级 mock（不是一进来就显示假数据）
-            tasks = mockTasks()
-            doneIds = setOf("t5")
+            doneIds = items.filter { !it.pending }.map { it.assignment.id }.toSet()
+            loading = false
         }
+        loadFailed = repoFailed && items == null
+        if (repoFailed && items == null) loading = false
+    }
+    suspend fun load() {
+        AssignmentRepo.refresh()
     }
     LaunchedEffect(Unit) {
-        load()
-        loading = false
+        // 进页先显示缓存（首页可能刚拉过），再静默刷新
+        AssignmentRepo.refresh(maxAgeMs = 15_000)
     }
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
@@ -164,6 +184,8 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                     tasks = tasks,
                     doneIds = doneIds,
                     loading = loading,
+                    loadFailed = loadFailed,
+                    onRetry = { loading = true; loadFailed = false; scope.launch { load() } },
                     refreshing = refreshing,
                     onRefresh = {
                         // 下拉刷新：保留现有列表、不回 loading 态（否则汇总数字又会「…→N 项」跳一次）
@@ -182,7 +204,10 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                 AssignmentDetailScreen(
                     assignmentId = drillId,
                     onBack = { assignmentId = null },
-                    onSubmitted = { id -> doneIds = doneIds + id },
+                    onSubmitted = { id ->
+                        AssignmentRepo.markSubmitted(id)
+                        scope.launch { AssignmentRepo.refresh() }
+                    },
                 )
             }
         }
@@ -194,6 +219,8 @@ private fun TaskListContent(
     tasks: List<Task>,
     doneIds: Set<String>,
     loading: Boolean,
+    loadFailed: Boolean,
+    onRetry: () -> Unit,
     refreshing: Boolean,
     onRefresh: () -> Unit,
     scrollState: androidx.compose.foundation.ScrollState,
@@ -273,7 +300,7 @@ private fun TaskListContent(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("本周待交", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                        Text("待交作业", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
                         Spacer(Modifier.height(2.dp))
                         Text(
                             if (loading) "…" else "${pending.size} 项", color = cs.onSurface, fontSize = 20.sp,
@@ -294,6 +321,9 @@ private fun TaskListContent(
             if (loading) {
                 // 加载态：不再用 mock 占位（数字跳变 bug 的根因），显示 coui 转圈
                 KewuLoading()
+            } else if (loadFailed) {
+                KewuEmpty("作业加载失败，请检查网络")
+                KewuSecondaryButton("重新加载", onRetry, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
             } else if (tasks.isEmpty()) {
                 // 真实接口返回空：空态提示（不是 bug，是真的没有作业）。
                 // 这块本身是课悟液态玻璃（带凝结入场），按「玻璃件保留」不换 KewuEmpty，只换内部文字。
@@ -323,11 +353,12 @@ private fun TaskListContent(
                     Spacer(Modifier.height(4.dp))
                     SectionLabel("已完成 · ${done.size}", Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 300L), 24f))
                     done.forEachIndexed { i, t ->
+                        // 已完成也能点进去：看得分、评语、逐题判定，或修改后重新提交
                         TaskCard(
                             task = t,
                             done = true,
                             enterIndex = i,
-                            onToggle = { },
+                            onToggle = { onOpenTask(t.id) },
                         )
                     }
                 }
@@ -391,9 +422,10 @@ private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: (
                     color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1,
                 )
             }
-            if (task.urgent && !done) {
+            task.tag?.let { tag ->
                 Spacer(Modifier.width(8.dp))
-                KewuTag("今天截止", cs.errorContainer, cs.onErrorContainer)
+                if (task.tagIsWarning) KewuTag(tag, cs.errorContainer, cs.onErrorContainer)
+                else KewuTag(tag, KewuGreen.copy(alpha = 0.16f), KewuGreen)
             }
         }
     }

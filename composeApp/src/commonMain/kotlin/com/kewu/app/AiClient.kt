@@ -110,12 +110,18 @@ object AiClient {
      */
     suspend fun chat(messages: List<Msg>, maxTokens: Int = 4096): String? {
         val endpoints = endpointOverride?.let { listOf(it) } ?: ENDPOINTS
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         for (ep in endpoints) {
+            // 5 分钟内连不上过的接入点直接跳过（旧版每次都要白等直连 + 局域网各 8s 握手超时）
+            if ((unreachableUntil[ep] ?: 0L) > now) continue
             val r = chatOnce(ep, messages, maxTokens)
             if (r != null) return r
         }
         return relayOnce(messages)
     }
+
+    /** 接入点 → 「连不上」标记的失效时刻（只记网络层失败，HTTP 错误 / 空内容不算）。 */
+    private val unreachableUntil = mutableMapOf<String, Long>()
 
     /**
      * 8081 中转：多轮消息压成 {question = 最后一条用户消息, context = system + 之前的对话}。
@@ -204,6 +210,12 @@ object AiClient {
         throw e
     } catch (e: Exception) {
         logErr("chat", e)
+        // 只有「连不上」（连接被拒 / 握手超时 / DNS 失败）才 5 分钟内跳过这个接入点；
+        // 读超时等「连上了但慢」的错误不算，避免把可用的直连误判掉
+        val name = e::class.simpleName.orEmpty()
+        if (name.contains("Connect") || name.contains("UnknownHost") || name.contains("NoRouteToHost")) {
+            unreachableUntil[endpoint] = kotlin.time.Clock.System.now().toEpochMilliseconds() + 5 * 60_000L
+        }
         null
     }
 

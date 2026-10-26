@@ -1,5 +1,7 @@
 package com.kewu.app.ui
 
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.text.KeyboardOptions
 import com.kewu.app.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
@@ -86,7 +88,9 @@ fun CodeCheckInPage(
     var success by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(sessionId) {
+    var reloadKey by remember { mutableStateOf(0) }
+    LaunchedEffect(sessionId, reloadKey) {
+        loadFailed = false
         session = KewuApi.getAttendance(sessionId)
         loadFailed = session == null
     }
@@ -177,7 +181,10 @@ fun CodeCheckInPage(
             Spacer(Modifier.height(12.dp))
 
             when {
-                loadFailed -> KewuEmpty("签到信息加载失败，请返回后重试")
+                loadFailed -> {
+                    KewuEmpty("签到信息加载失败，请检查网络")
+                    KewuSecondaryButton("重新加载", { reloadKey++ }, Modifier.padding(horizontal = 16.dp))
+                }
                 session == null -> KewuLoading()
                 else -> {
                     val s = session!!
@@ -335,6 +342,8 @@ private fun GlassCodeInput(
                     value = value,
                     onValueChange = onValueChange,
                     singleLine = true,
+                    // 暗号框弹数字键盘（旧版是全键盘，30s 有效期里还要切键盘）
+                    keyboardOptions = if (big) KeyboardOptions(keyboardType = KeyboardType.Number) else KeyboardOptions.Default,
                     textStyle = TextStyle(
                         color = cs.onSurface,
                         fontSize = if (big) 24.sp else 15.sp,

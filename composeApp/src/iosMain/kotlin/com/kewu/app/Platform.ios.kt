@@ -48,3 +48,11 @@ actual fun openAppSettings() = Unit
 actual fun shareText(text: String) = Unit
 // iOS 人机指南：App 不应自行退出，双击返回的第二下不做任何事（提示照常消失由调用方收起）
 actual fun platformExitApp() = Unit
+
+// iOS 暂未接入文件系统（Windows 无法编译 iOS 目标），先给可编译的保守实现
+actual fun platformFileSize(path: String): Long = -1L
+
+actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
+    io.ktor.utils.io.ByteReadChannel(ByteArray(0))
+
+actual fun platformDeleteFile(path: String) = Unit

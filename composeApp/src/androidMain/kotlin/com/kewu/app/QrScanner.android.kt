@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -32,6 +33,11 @@ actual fun QrScannerView(onScanned: (String) -> Unit, modifier: Modifier, enable
     val scanner = remember { BarcodeScanning.getClient() }
     var handled by remember { mutableStateOf(false) }
     var provider by remember { mutableStateOf<ProcessCameraProvider?>(null) }
+    // ★ 2026-10-26：分析器只在首次 update 时创建，直接读参数会永远停在首次组合的值（传 enabled=false 暂停不了）
+    val enabledNow by rememberUpdatedState(enabled)
+    val onScannedNow by rememberUpdatedState(onScanned)
+    // 识别放后台单线程（旧版跑在主线程执行器上，和 UI 抢帧）
+    val analyzerExecutor = remember { java.util.concurrent.Executors.newSingleThreadExecutor() }
 
     // 重新进入 Scanning 态时解除一次性锁
     LaunchedEffect(enabled) { if (enabled) handled = false }
@@ -40,6 +46,7 @@ actual fun QrScannerView(onScanned: (String) -> Unit, modifier: Modifier, enable
         onDispose {
             provider?.unbindAll()
             scanner.close()
+            analyzerExecutor.shutdown()
         }
     }
 
@@ -57,9 +64,9 @@ actual fun QrScannerView(onScanned: (String) -> Unit, modifier: Modifier, enable
                 val analysis = ImageAnalysis.Builder()
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
-                analysis.setAnalyzer(ContextCompat.getMainExecutor(context)) { imageProxy ->
+                analysis.setAnalyzer(analyzerExecutor) { imageProxy ->
                     val media = imageProxy.image
-                    if (media == null || !enabled || handled) {
+                    if (media == null || !enabledNow || handled) {
                         imageProxy.close()
                         return@setAnalyzer
                     }
@@ -69,7 +76,7 @@ actual fun QrScannerView(onScanned: (String) -> Unit, modifier: Modifier, enable
                             val value = barcodes.firstOrNull()?.rawValue
                             if (!handled && value != null) {
                                 handled = true
-                                onScanned(value)
+                                onScannedNow(value)
                             }
                         }
                         .addOnCompleteListener { imageProxy.close() }

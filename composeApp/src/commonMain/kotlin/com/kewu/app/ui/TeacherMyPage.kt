@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -61,6 +62,7 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们（编号与学生端对齐）
     var screen by remember { mutableStateOf(0) }
+    LockTabSwipe(screen != 0)
 
     // 2026-10-24：AI 助教代操作 —— 小悟可经 AiNav 直接打开教师「我的」的子页（发起签到/发布笔记/班级管理等）
     LaunchedEffect(AiNav.teacherMyScreen.value) {

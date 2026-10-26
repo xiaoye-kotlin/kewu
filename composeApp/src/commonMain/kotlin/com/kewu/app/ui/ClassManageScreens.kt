@@ -129,9 +129,14 @@ internal fun CreateCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                 scope.launch {
                     loading = true
                     val r = KewuApi.createTeacherCourse(name.trim(), desc.trim())
+                    if (r.data != null) {
+                        // 新课程立刻出现在发布作业 / 课程筛选里（旧版不刷新用户课程缓存）
+                        KewuApi.me(force = true)
+                        com.kewu.app.CourseRepo.refresh(force = true)
+                    }
                     loading = false
                     result = if (r.data != null) {
-                        true to "已创建《${r.data.name}》（ID: ${r.data.id}）"
+                        true to "已创建《${r.data.name}》，课程号 ${r.data.id}"
                     } else {
                         false to (r.error ?: "创建失败，请稍后重试")
                     }
@@ -451,7 +456,7 @@ internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                     if (r.data != null) {
                         code = ""
                         KewuApi.currentUser = null
-                        KewuApi.me() // 刷新我的课程（最佳努力）
+                        KewuApi.me(force = true) // 刷新我的课程（最佳努力）
                     }
                     result?.let { snackbar.toast(it.second) }
                 }

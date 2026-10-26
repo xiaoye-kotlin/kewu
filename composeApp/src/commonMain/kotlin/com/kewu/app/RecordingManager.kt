@@ -116,13 +116,25 @@ object RecordingManager {
 
     fun hasPermission(): Boolean = audio.hasPermission()
 
-    /** 开始录音；已在录音中则忽略（防连点）。 */
+    /** 「开始」已受理但录音器还没起来的窗口期标记（主线程同步置位，防连点）。 */
+    @kotlin.concurrent.Volatile private var starting = false
+
+    /**
+     * 开始录音；录音中 / 正在启动 / 上传中一律忽略（防连点）。
+     * ★ 2026-10-26：旧版状态要等 startRecording 返回才变 Recording，第二下点击会再排一次启动，
+     *   被录音器拒绝后把状态改成 Error——界面显示「启动失败」，麦克风却还开着、且再也停不掉。
+     */
     fun start(classId: String) {
-        if (_status.value is RecordingStatus.Recording) return
+        val st = _status.value
+        if (starting || st is RecordingStatus.Recording || st is RecordingStatus.Uploading) return
+        starting = true
         this.classId = classId
         scope.launch {
+            if (audio.isRecording()) { starting = false; return@launch }
             val out = platformCacheDir() + "/kewu_rec_${Clock.System.now().toEpochMilliseconds()}.pcm"
-            if (audio.startRecording(out)) {
+            val ok = audio.startRecording(out)
+            starting = false
+            if (ok) {
                 _status.value = RecordingStatus.Recording(0)
                 startTicker()
             } else {
@@ -152,6 +164,16 @@ object RecordingManager {
         }
     }
 
+    /** 退出登录等场景：正在录音就停止并丢弃（不上传，避免录音挂在下一个账号名下）。 */
+    fun cancelIfRecording() {
+        if (_status.value !is RecordingStatus.Recording && !starting) return
+        ticker?.cancel()
+        scope.launch {
+            audio.stopRecording()?.let { platformDeleteFile(it) }
+            _status.value = RecordingStatus.Idle
+        }
+    }
+
     /** 重试上传（Error 且本地文件还在时有效）。 */
     fun retryUpload() {
         val cur = _status.value
@@ -169,8 +191,8 @@ object RecordingManager {
     private suspend fun upload(path: String, durationSec: Int) {
         _status.value = RecordingStatus.Uploading(durationSec)
         try {
-            val bytes = platformReadFile(path)
-            if (bytes == null) {
+            val size = platformFileSize(path)
+            if (size <= 0) {
                 _status.value = RecordingStatus.Error("录音文件读取失败，请稍后重试", durationSec, path)
                 return
             }
@@ -180,18 +202,21 @@ object RecordingManager {
             val sid = KewuApi.classSessionId(cid, todayCn(now))
             val role = if (kvGet("kewu_role") == ROLE_TEACHER) "teacher" else "student"
             val filename = "kewu_${cid}_$now.wav"
-            val res = KewuApi.uploadRecording(bytes, filename, cid, sid, durationSec.toDouble(), role)
+            val res = KewuApi.uploadRecording(path, filename, cid, sid, durationSec.toDouble(), role)
             val record = RecordingRecord(
                 localId = path, classId = cid, sessionId = sid, role = role,
-                durationSec = durationSec, sizeBytes = bytes.size.toLong(), at = now,
+                durationSec = durationSec, sizeBytes = size, at = now,
                 uploaded = res != null,
                 recordingId = res?.recordingId.orEmpty(), url = res?.url.orEmpty(),
                 score = res?.score ?: 0.0, avgLevelDb = res?.avgLevelDb, snrDb = res?.snrDb,
                 filePath = if (res == null) path else null,
             )
             putHistory(record)
+            if (res != null) platformDeleteFile(path) // 已上传成功，清掉本地 WAV（旧版只增不删）
             _status.value = if (res != null) RecordingStatus.Success(res.recordingId)
             else RecordingStatus.Error("录音上传失败，请稍后重试", durationSec, path)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             _status.value = RecordingStatus.Error("录音上传失败，请稍后重试", durationSec, path)
         }
@@ -201,13 +226,13 @@ object RecordingManager {
     fun retryRecord(record: RecordingRecord, onDone: (String?) -> Unit) {
         val path = record.filePath ?: return onDone("本地录音文件已不存在")
         scope.launch {
-            val bytes = platformReadFile(path)
-            if (bytes == null) { onDone("本地录音文件已不存在"); return@launch }
+            if (platformFileSize(path) <= 0) { onDone("本地录音文件已不存在"); return@launch }
             val res = KewuApi.uploadRecording(
-                bytes, "kewu_${record.classId}_${record.at}.wav", record.classId,
+                path, "kewu_${record.classId}_${record.at}.wav", record.classId,
                 record.sessionId, record.durationSec.toDouble(), record.role,
             )
             if (res == null) { onDone("录音上传失败，请稍后重试"); return@launch }
+            platformDeleteFile(path)
             putHistory(record.copy(
                 uploaded = true, recordingId = res.recordingId, url = res.url, score = res.score,
                 avgLevelDb = res.avgLevelDb, snrDb = res.snrDb, filePath = null,
@@ -241,7 +266,8 @@ object RecordingManager {
                 r.filePath?.let { put("filePath", JsonPrimitive(it)) }
             })
         })
-        kvSet(HISTORY_KEY, arr.toString())
+        // 存储失败（如 desktop kv 超限）只影响本地记录，绝不能把「已上传成功」误报成上传失败
+        runCatching { kvSet(HISTORY_KEY, arr.toString()) }
     }
 
     private fun loadHistory(): List<RecordingRecord> = try {

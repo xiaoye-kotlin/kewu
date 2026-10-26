@@ -8,6 +8,10 @@ import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import kotlinx.coroutines.CancellationException
+import io.ktor.client.request.forms.ChannelProvider
+import kotlinx.coroutines.sync.withLock
+import io.ktor.client.plugins.timeout
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.request.forms.MultiPartFormDataContent
 import io.ktor.client.request.forms.formData
 import io.ktor.http.Headers
@@ -295,7 +299,22 @@ class ApiException(message: String) : Exception(message)
 object KewuApi {
     val BASE_URL = "http://47.99.42.168:8080"
     val OBS_URL = "http://47.99.42.168:8081"
-    private val client = platformHttpClient()
+    // ★ 2026-10-26：业务请求统一 20s 超时（平台引擎 read 超时是给大模型用的 120s，业务接口不该挂那么久）；
+    //   录音 / 附件上传在调用处单独放宽。
+    private val client = platformHttpClient().config {
+        install(HttpTimeout) {
+            requestTimeoutMillis = 20_000
+            connectTimeoutMillis = 10_000
+            socketTimeoutMillis = 20_000
+        }
+    }
+
+    /** 登录失效事件（任一接口返回 401 时 +1）；App 根部监听后提示并回到登录页。 */
+    val sessionExpired = kotlinx.coroutines.flow.MutableStateFlow(0)
+
+    /** 同一时刻只拉一次 /user/me，30s 内重复调用直接复用结果（8 个页面都会「没有就拉」）。 */
+    private val meLock = kotlinx.coroutines.sync.Mutex()
+    private var meFetchedAt = 0L
 
     var token: String? = kvGet("kewu_token")
     var username: String? = kvGet("kewu_username")
@@ -306,26 +325,57 @@ object KewuApi {
 
     /** 通用 GET（8080 壳）。返回原始 JsonElement；业务错误抛 [ApiException]。 */
     private suspend fun getJson(url: String, auth: Boolean = false): JsonElement {
-        val resp = try {
-            client.get(url) { if (auth) authHeaders().forEach { (k, v) -> header(k, v) } }
-        } catch (e: ResponseException) {
-            throw ApiException(e.response.bodyAsText().let { parseError(it) })
+        // 带 token 就带上（后端整改鉴权后所有业务接口都要；未整改前多带一个头无副作用）
+        val resp = client.get(url) { authHeaders().forEach { (k, v) -> header(k, v) } }
+        return parseBody(resp)
+    }
+
+    /**
+     * 统一解析响应（2026-10-26）：Ktor 默认不对 4xx/5xx 抛异常，旧代码 catch ResponseException 是死代码，
+     * 非 JSON 的错误页（网关 502 HTML 等）解析失败只能显示「网络异常」。现在：
+     * 401 → 清登录态 + [sessionExpired] 事件；其它非 2xx 且不是 JSON → 明确的「服务器开小差（HTTP xxx）」。
+     */
+    private suspend fun parseBody(resp: io.ktor.client.statement.HttpResponse): JsonElement {
+        val code = resp.status.value
+        if (code == 401) {
+            onUnauthorized()
+            throw ApiException("登录已过期，请重新登录")
         }
-        return json.parseToJsonElement(resp.bodyAsText())
+        val text = resp.bodyAsText()
+        return try {
+            json.parseToJsonElement(text)
+        } catch (e: CancellationException) { throw e }
+    catch (e: Exception) {
+            if (code !in 200..299) throw ApiException("服务器开小差了（HTTP $code），请稍后重试")
+            throw e
+        }
+    }
+
+    private fun onUnauthorized() {
+        if (token == null) return
+        token = null
+        kvSet("kewu_token", null)
+        sessionExpired.value = sessionExpired.value + 1
+    }
+
+    /** 退出登录：清 token / 账号 / 内存里的用户信息（各本地缓存由调用方清）。 */
+    fun logout() {
+        token = null
+        username = null
+        currentUser = null
+        meFetchedAt = 0L
+        kvSet("kewu_token", null)
+        kvSet("kewu_username", null)
     }
 
     /** 通用 POST（8080 壳）。[bodyObj] 为 Kotlin Map/List，转 JSON 字符串发送。 */
     private suspend fun postJson(url: String, bodyObj: Any?, auth: Boolean = false): JsonElement {
-        val resp = try {
-            client.post(url) {
-                if (auth) authHeaders().forEach { (k, v) -> header(k, v) }
-                contentType(ContentType.Application.Json)
-                setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(bodyObj)))
-            }
-        } catch (e: ResponseException) {
-            throw ApiException(e.response.bodyAsText().let { parseError(it) })
+        val resp = client.post(url) {
+            authHeaders().forEach { (k, v) -> header(k, v) }
+            contentType(ContentType.Application.Json)
+            setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(bodyObj)))
         }
-        return json.parseToJsonElement(resp.bodyAsText())
+        return parseBody(resp)
     }
 
     /** 从错误响应体里尽量抽出 message / error 字段。 */
@@ -335,7 +385,8 @@ object KewuApi {
             (el as? JsonObject)?.get("message")?.jsonPrimitive?.content
                 ?: (el as? JsonObject)?.get("error")?.jsonPrimitive?.content
                 ?: text
-        } catch (_: Exception) { text }
+        } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { text }
     }
 
     /** 把普通 Kotlin 值转成 kotlinx JsonElement（用于 POST body）。
@@ -475,10 +526,15 @@ object KewuApi {
         el.asDataOrThrow()
         null
     } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
     /** 我的资料（需 token），填充 [currentUser]；失败返回 message。 */
-    suspend fun me(): String? = try {
+    suspend fun me(force: Boolean = false): String? = meLock.withLock { meLocked(force) }
+
+    private suspend fun meLocked(force: Boolean): String? = try {
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        if (!force && currentUser != null && now - meFetchedAt < 30_000) return null
         val el = getJson("$BASE_URL/api/user/me", auth = true)
         val data = el.asDataOrThrow() as? JsonObject
             ?: throw ApiException("服务器响应异常，请稍后重试")
@@ -489,8 +545,10 @@ object KewuApi {
             user = u?.let { UserInfo(it["id"].str(), it["username"].str(), it["nickname"].strOrNull(), it["role"].str()) },
             courses = courses,
         )
+        meFetchedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
         null
     } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
     // ── 课程模块 ──
@@ -501,14 +559,16 @@ object KewuApi {
         el.dataArrayOrEmpty("data").mapNotNull { (it as? JsonObject)?.let { o ->
             CourseInfo(o["id"].str(), o["name"].str(), o["description"].str(), o["teacher"].str())
         } }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 课程详情（无需 token）。 */
     suspend fun getCourse(courseId: String): CourseInfo? = try {
         val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}")
         val data = el.dataObjectOrNull("data") ?: return null
         CourseInfo(data["id"].str(), data["name"].str(), data["description"].str(), data["teacher"].str())
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 课堂纪要列表（无需 token）。失败返回 null（调用方降级 mock）。 */
     suspend fun getNotes(courseId: String): List<ClassNoteInfo>? = try {
@@ -519,7 +579,8 @@ object KewuApi {
                 it["author"].str(), it["createdAt"].str(),
             )
         }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 单条纪要（无需 token）。 */
     suspend fun getNote(courseId: String, noteId: String): ClassNoteInfo? = try {
@@ -529,7 +590,8 @@ object KewuApi {
             data["id"].str(), data["courseId"].str(), data["title"].str(), data["content"].str(),
             data["author"].str(), data["createdAt"].str(),
         )
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     // ── 作业模块 ──
 
@@ -550,7 +612,8 @@ object KewuApi {
                 questions = parseAssignmentQuestions(obj),
             )
         } }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 作业详情（无需 token）。 */
     suspend fun getAssignment(id: String): AssignmentInfo? = try {
@@ -567,7 +630,8 @@ object KewuApi {
             publisher = data["publisher"].str(), createdAt = data["createdAt"].str(),
             questions = parseAssignmentQuestions(data),
         )
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /**
      * 解析作业题目（2026-10-25）：后端若落原生 `questions` 字段优先用之；否则从 `description`
@@ -598,7 +662,8 @@ object KewuApi {
             avgVersions = d["avgVersions"].num(), aiGapAvg = d["aiGapAvg"].num(),
             highRiskCount = d["highRiskCount"].int(),
         )
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 提交作业（无需 token；同一个学生会自动版本+1）。[answers] 非空时按文档 3.12 原生字段发送（客观题服务端自动判分）。 */
     suspend fun submitAssignment(
@@ -626,6 +691,7 @@ object KewuApi {
         el.asDataOrThrow()
         null
     } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
     /**
@@ -644,6 +710,7 @@ object KewuApi {
             })
         })
         val resp = client.post("$BASE_URL/api/uploads") {
+            timeout { requestTimeoutMillis = 300_000; socketTimeoutMillis = 120_000 }
             authHeaders().forEach { (k, v) -> header(k, v) }
             setBody(content)
         }
@@ -672,19 +739,22 @@ object KewuApi {
     suspend fun getMySubmissions(id: String, studentId: String): SubmissionInfo? = try {
         val el = getJson(queryUrl("$BASE_URL/api/assignments/${pathSegment(id)}/my", "studentId", studentId))
         parseSubmission(el.dataObjectOrNull("data") ?: return null)
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 全部提交（老师看）。失败返回 null。 */
     suspend fun getSubmissions(id: String): List<SubmissionInfo>? = try {
         val el = getJson("$BASE_URL/api/assignments/${pathSegment(id)}/submissions")
         el.dataArrayOrEmpty("data").map { parseSubmission(it as JsonObject) }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 提交详情（含历史版本）。失败返回 null。 */
     suspend fun getSubmission(id: String): SubmissionInfo? = try {
         val el = getJson("$BASE_URL/api/submissions/${pathSegment(id)}")
         parseSubmission(el.dataObjectOrNull("data") ?: return null)
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** AI 预批阅（POST {}）。失败返回 null。 */
     suspend fun aiPrereview(submissionId: String): AiSuggestion? = try {
@@ -704,7 +774,8 @@ object KewuApi {
                 sharedFragments = (it["sharedFragments"] as? JsonArray).orEmpty().map { f -> f.str() },
             )
         }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 智能批阅队列。失败返回 null。 */
     suspend fun getReviewQueue(id: String): List<ReviewQueueItem>? = try {
@@ -718,7 +789,8 @@ object KewuApi {
                 aiSuggestedScore = it["aiSuggestedScore"].num(),
             )
         }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 知识点学情画像。失败返回 null。 */
     suspend fun getAnalytics(courseId: String): Analytics? = try {
@@ -737,7 +809,8 @@ object KewuApi {
                 ScoreTrendItem(to["label"].str(), to["avgScore"].num())
             },
         )
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 批阅打分 / 打回（无需 token，当前用参数区分身份）。 */
     suspend fun reviewSubmission(
@@ -755,6 +828,7 @@ object KewuApi {
         el.asDataOrThrow()
         null
     } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
     /** 8081 健康检查。成功返回服务原文，失败返回可展示错误。 */
@@ -912,7 +986,8 @@ object KewuApi {
     suspend fun getAttendances(courseId: String): List<AttendanceSession>? = try {
         val data = getJson(queryUrl("$BASE_URL/api/attendance", "courseId", courseId)).asDataOrThrow()
         (data as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::parseAttendanceSession) }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     suspend fun getAttendance(id: String): AttendanceSession? = try {
         val data = getJson("$BASE_URL/api/attendance/${pathSegment(id)}").asDataOrThrow()
@@ -920,12 +995,14 @@ object KewuApi {
         // 后端该接口现在是 {session:{...}, stats:{...}} 包一层；兼容旧的扁平 session 对象
         val s = (o["session"] as? JsonObject) ?: o
         parseAttendanceSession(s)
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     suspend fun getAttendanceCode(id: String): AttendanceCode? = try {
         val o = getJson("$BASE_URL/api/attendance/${pathSegment(id)}/code").asDataOrThrow() as? JsonObject ?: return null
         AttendanceCode(o["sessionId"].str(), o["code"].str(), o["qrContent"].str(), o["windowSeconds"].int(), o["remainingSeconds"].int())
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /**
      * 学生签到（第 4 节完整版）。[courseId] 非空时签到成功后顺带把到场状态写进 8081 简易签到缓存
@@ -946,12 +1023,14 @@ object KewuApi {
     suspend fun getAttendanceRecords(id: String): List<AttendanceRecord>? = try {
         val data = getJson("$BASE_URL/api/attendance/${pathSegment(id)}/records").asDataOrThrow()
         (data as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::parseAttendanceRecord) }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     suspend fun getMyAttendance(id: String, studentId: String): AttendanceRecord? = try {
         val data = getJson(queryUrl("$BASE_URL/api/attendance/${pathSegment(id)}/my", "studentId", studentId)).asDataOrThrow()
         (data as? JsonObject)?.let(::parseAttendanceRecord)
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     suspend fun closeAttendance(id: String): String? = try {
         postJson("$BASE_URL/api/attendance/${pathSegment(id)}/close", emptyMap<String, Any?>(), auth = true).asDataOrThrow()
@@ -961,17 +1040,20 @@ object KewuApi {
     suspend fun getAttendanceStats(id: String): AttendanceStats? = try {
         val o = getJson("$BASE_URL/api/attendance/${pathSegment(id)}/stats").asDataOrThrow() as? JsonObject ?: return null
         AttendanceStats(o["expected"].int(), o["checked"].int(), o["late"].int(), o["absent"].int(), o["checkRate"].num(), o["avgSeconds"].num())
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     suspend fun getAttendanceRisk(id: String): List<AttendanceRisk>? = try {
         val data = getJson("$BASE_URL/api/attendance/${pathSegment(id)}/risk").asDataOrThrow()
         (data as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::parseAttendanceRisk) }
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     suspend fun getAttendanceRealtime(id: String): AttendanceRealtime? = try {
         val o = getJson("$BASE_URL/api/attendance/${pathSegment(id)}/realtime").asDataOrThrow() as? JsonObject ?: return null
         AttendanceRealtime(o["expected"].int(), o["checked"].int(), o["checkRate"].num(), o["elapsedSeconds"].int().toLong(), (o["latest"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.let(::parseAttendanceRealtimeItem) })
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 上传录音（multipart）。[bytes] 为音频字节，[filename] 含扩展名。失败返回 null.
      *  ★ Ktor 2.3.12 已移除 2-arg `submitFormWithBinaryData(url, block)`，必须改用
@@ -981,7 +1063,7 @@ object KewuApi {
      *    用 `formData { }` 构建器它会自动补全。也不要手动 `contentType(MultiPart.FormData)`，
      *    会丢掉 boundary，让 [MultiPartFormDataContent] 自己设。 */
     suspend fun uploadRecording(
-        bytes: ByteArray, filename: String, classId: String, sessionId: String?, durationSec: Double?,
+        path: String, filename: String, classId: String, sessionId: String?, durationSec: Double?,
         role: String = if (kvGet("kewu_role") == ROLE_TEACHER) "teacher" else "student",
         avgLevel: Double? = null,
     ): RecordingUploadResult? = try {
@@ -995,13 +1077,18 @@ object KewuApi {
             if (sessionId != null) append("sessionId", sessionId)
             if (durationSec != null) append("durationSec", durationSec.toString())
             if (avgLevel != null) append("avgLevel", avgLevel.toString())
-            append("audio", bytes, Headers.build {
+            // ★ 2026-10-26：流式上传（ChannelProvider 按需读文件），不再把整段录音读进内存
+            val size = platformFileSize(path)
+            if (size <= 0) throw ApiException("录音文件不存在或为空")
+            append("audio", ChannelProvider(size) { platformFileChannel(path) }, Headers.build {
                 append(HttpHeaders.ContentType, "audio/wav")
                 append(HttpHeaders.ContentDisposition, "filename=\"${safeFilename(filename)}\"")
             })
         })
         val resp = try {
             client.post("$OBS_URL/api/recordings/upload") {
+                // 录音文件可能上百 MB：上传单独放宽到 10 分钟
+                timeout { requestTimeoutMillis = 600_000; socketTimeoutMillis = 120_000 }
                 setBody(content)
             }
         } catch (e: ResponseException) {
@@ -1082,7 +1169,8 @@ object KewuApi {
             sessionId = el["sessionId"].str(), classId = el["classId"].str(),
             startedAt = el["startedAt"].str(), state = el["state"].str(),
         )
-    } catch (_: Exception) { null }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     // ── 教师端（文档第 5 节，2026-10-20 新增） ──
     //

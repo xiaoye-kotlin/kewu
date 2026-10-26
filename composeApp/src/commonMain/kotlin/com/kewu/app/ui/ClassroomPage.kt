@@ -1,5 +1,9 @@
 package com.kewu.app.ui
 
+import com.kewu.app.LockTabSwipe
+import androidx.compose.runtime.rememberCoroutineScope
+import com.kewu.app.ROLE_TEACHER
+import com.kewu.app.AssignmentRepo
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -472,12 +476,17 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     status = CourseStatus.PENDING, summary = c.description,
                 )
             }
-            // 断网兜底：重试耗尽仍失败才降级 mock（用户看到的是「加载失败后的备用数据」，不是闪烁）
-            repoLoaded -> mockToday()
+            // 2026-10-26：断网不再降级 mock 课程（假课程点进去必然失败，还误导用户），状态卡给「点此重试」
             else -> emptyList()
         }
     }
     val coursesLoaded = repoCourses != null || repoLoaded
+    val coursesFailed = repoCourses == null && repoLoaded
+    val homeScope = rememberCoroutineScope()
+    // 作业待交：与任务页共用 AssignmentRepo（旧版首页写死 "3"）；首页进来静默刷新一次（1 分钟内复用）
+    val assignmentItems by AssignmentRepo.items.collectAsState()
+    val pendingHomework = assignmentItems?.count { it.pending }
+    LaunchedEffect(Unit) { AssignmentRepo.refresh(maxAgeMs = 60_000) }
     val today = realCourses
     val history = emptyList<Course>()
     val courses = if (showAll) today + history else today
@@ -512,12 +521,14 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     // （课表是「查看排课」的一次性入口，签到详情也是临时查看，均不需跨 tab 保留）。
     var drill by remember { mutableStateOf(ClassroomDrill.NONE) }
     var attendanceId by remember { mutableStateOf<String?>(null) }
+    var pendingCode by remember { mutableStateOf("") }
+    LockTabSwipe(drill != ClassroomDrill.NONE)
 
     // 通知中心：铃铛未读数 + 弹窗显隐（首页右上角系统通知，与助教 AI 红点无关）
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
     LaunchedEffect(Unit) {
-        Notifications.seedIfEmpty(currentRole())
+        // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
         notifUnread = Notifications.unreadCount()
     }
 
@@ -586,6 +597,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                         // 签到成功 → 返回首页；失败（如需答随堂问题）→ 带暗号跳暗号签到页继续
                         onDone = { drill = ClassroomDrill.NONE; attendanceId = null },
                         onOpenCodeCheckIn = { sid, code ->
+                            // 扫码拿到的暗号一起带过去（旧版丢掉了，学生要在 30s 有效期内重新手输）
+                            pendingCode = code
                             attendanceId = sid
                             drill = ClassroomDrill.CODE
                         },
@@ -598,8 +611,9 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     val aid = attId ?: return@AnimatedContent
                     CodeCheckInPage(
                         sessionId = aid,
-                        onBack = { drill = ClassroomDrill.NONE; attendanceId = null },
-                        onDone = { drill = ClassroomDrill.NONE; attendanceId = null },
+                        initialCode = pendingCode,
+                        onBack = { drill = ClassroomDrill.NONE; attendanceId = null; pendingCode = "" },
+                        onDone = { drill = ClassroomDrill.NONE; attendanceId = null; pendingCode = "" },
                     )
                 }
                 1 -> {
@@ -628,8 +642,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 name = displayName,
                                 unread = notifUnread,
                                 onOpenNotifications = {
-                                    notifUnread = 0
-                                    Notifications.markAllRead()
+                                    // 先打开再标记已读（旧版先 markAllRead 再打开，列表里的未读点永远看不到）
                                     showNotif = true
                                 },
                             ) { onGoToTab(3) }
@@ -641,6 +654,9 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 // 与课表页今天的 3 节对齐
                                 todayCount = today.count { it.time.length == 5 && it.time[2] == ':' },
                                 loading = !coursesLoaded,
+                                failed = coursesFailed,
+                                pendingHomework = pendingHomework,
+                                onRetry = { homeScope.launch { CourseRepo.refresh(force = true) } },
                                 onAllCourses = { drill = ClassroomDrill.COURSES },
                                 onTodayCourses = { drill = ClassroomDrill.TIMETABLE },
                                 onHomework = { onGoToTab(2) },
@@ -650,16 +666,15 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                         // 身份分流：该签到的发布者（教师）→ 签到详情展示二维码；学生 → 扫码页
                         CheckInCardIfActive(pageBackdrop) { session ->
                             attendanceId = session.id
-                            val me = KewuApi.currentUser?.user?.nickname ?: KewuApi.username
-                            drill = if (me != null && session.publisher.isNotBlank() && session.publisher == me) {
-                                ClassroomDrill.ATTENDANCE
-                            } else {
-                                ClassroomDrill.SCAN
-                            }
+                            // 2026-10-26：按登录角色分流（旧版比「发布者 == 我的昵称」，同名学生会进教师视图）
+                            drill = if (currentRole() == ROLE_TEACHER) ClassroomDrill.ATTENDANCE else ClassroomDrill.SCAN
                         }
                         RecordingOverlay(backdrop = pageBackdrop, courseInfos = courseInfos)
                         courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
-                        MoreBar(showAll, Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 220L), 24f)) { showAll = !showAll }
+                        // 「查看全部课程」直接进课程列表（旧版只切换一个永远为空的历史列表，点了没效果）
+                        MoreBar(showAll, Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 220L), 24f)) {
+                            drill = ClassroomDrill.COURSES
+                        }
                         Spacer(Modifier.height(24.dp))
                     }
                 }
@@ -667,7 +682,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
         }
         NotificationSheet(show = showNotif, onDismiss = {
             showNotif = false
-            notifUnread = Notifications.unreadCount()
+            Notifications.markAllRead()
+            notifUnread = 0
         })
     }
 }
@@ -749,6 +765,9 @@ private fun StatusSection(
     courses: List<Course>,
     todayCount: Int,
     loading: Boolean = false,
+    failed: Boolean = false,
+    pendingHomework: Int? = null,
+    onRetry: () -> Unit = {},
     onAllCourses: () -> Unit,
     onTodayCourses: () -> Unit,
     onHomework: () -> Unit,
@@ -778,7 +797,7 @@ private fun StatusSection(
             cornerRadius = 22.dp,
             insideMargin = PaddingValues(0.dp),
             colors = kewuCardColors(),
-            onClick = { haptic(HapticKind.Tick); onAllCourses() },
+            onClick = { haptic(HapticKind.Tick); if (failed) onRetry() else onAllCourses() },
         ) {
             // 内容裁剪层（双保险：coui 遮罩之外再挂一层矩形 clipToBounds）。
             // ★ 裁剪节点必须留在卡片原点：水印子节点带 offset，若把 clip 挂到
@@ -808,17 +827,26 @@ private fun StatusSection(
                         color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                     )
                     Spacer(Modifier.height(2.dp))
+                    // 2026-10-26：后端课程还没有上课时间 / 教室，旧版这里同时出现「无课 / 下节课：X · 待定 /
+                    // 今天没有排课」三句互相矛盾的话；排课数据接入前只陈述能确定的事实
                     Text(
-                        if (live != null) "${live.name} · ${live.room}"
-                        else (next?.let { "下节课：${it.name} · ${it.room}" } ?: "今日课程已全部结束"),
-                        color = cs.onSurfaceSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                        when {
+                            live != null -> "${live.name} · ${live.room}"
+                            loading -> "正在同步课程…"
+                            failed -> "课程加载失败"
+                            courses.isEmpty() -> "还没有加入课程"
+                            else -> "共 ${courses.size} 门课程"
+                        },
+                        color = if (failed) cs.error else cs.onSurfaceSecondary,
+                        fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                     )
                     Text(
                         when {
-                            loading -> "正在同步课程…"
                             live != null -> "已总结 $done / ${courses.size} 节"
-                            todayCount == 0 -> "今天没有排课"
-                            else -> "今天共 $todayCount 节课"
+                            failed -> "点此重试"
+                            loading -> ""
+                            todayCount > 0 -> "今天共 $todayCount 节课"
+                            else -> "点击查看全部课程"
                         },
                         color = cs.onSurfaceSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                     )
@@ -837,7 +865,7 @@ private fun StatusSection(
             Spacer(Modifier.height(12.dp))
             MiniStatCard(
                 label = "作业待交",
-                value = "3", // mock：与任务页「本周待交」对齐
+                value = pendingHomework?.toString() ?: "—", // 真实待交数（未交 + 被打回），加载中显示 —
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 onClick = onHomework,
             )
@@ -1042,11 +1070,30 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
 
 @Composable
 private fun Waveform(active: Boolean = false) {
-    val t by rememberInfiniteTransition().animateFloat(
+    // 2026-10-26：只在录音时创建无限动画（旧版空闲也一直在跑，且位于玻璃卡内，每帧都要重绘）；
+    // 动画值只在 Canvas 的 draw 阶段读，不触发重组
+    val color = COUITheme.colorScheme.primary
+    if (!active) {
+        Canvas(Modifier.size(36.dp, 26.dp)) {
+            val n = 5
+            val bw = size.width / (n * 2f)
+            for (i in 0 until n) {
+                val h = 0.12f * size.height
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(i * 2f * bw + bw * 0.25f, (size.height - h) / 2f),
+                    size = Size(bw * 0.5f, h),
+                    cornerRadius = CornerRadius(bw * 0.25f),
+                )
+            }
+        }
+        return
+    }
+    val tState = rememberInfiniteTransition().animateFloat(
         0f, 1f, infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     )
-    val color = COUITheme.colorScheme.primary
     Canvas(Modifier.size(36.dp, 26.dp)) {
+        val t = tState.value
         val n = 5
         val bw = size.width / (n * 2f)
         val pi = 3.1415927f

@@ -107,7 +107,9 @@ import kotlin.random.Random
 private fun optionLetter(i: Int): String = ('A' + i).toString()
 
 /** 新题目 id（仅在创建时生成，保持稳定）。 */
-private fun newQuestionId(): String = "q${System.nanoTime().toString(36)}${Random.nextInt(100, 999)}"
+// commonMain 不能用 System.nanoTime（JVM 专有，iOS 编不过）
+private fun newQuestionId(): String =
+    "q${kotlin.time.Clock.System.now().toEpochMilliseconds().toString(36)}${Random.nextInt(1000, 9999)}"
 
 /** 默认 N 个空选项（教师编辑时再填文本）。 */
 private fun defaultOptions(n: Int): List<String> = List(n) { "" }
@@ -332,12 +334,13 @@ private fun AnimatedQuestionItem(
             p.animateTo(1f, spring(dampingRatio = 0.78f, stiffness = 320f))
         }
     }
-    val v = p.value.coerceIn(0f, 1f)
+    // 动画值只在 layout lambda 里读（旧版组合阶段读 p.value，进出场期间整张题卡逐帧重组）
     Box(
         Modifier
             .fillMaxWidth()
             .followGrowth { follow() && !removing }
             .layout { measurable, constraints ->
+                val v = p.value.coerceIn(0f, 1f)
                 val placeable = measurable.measure(constraints)
                 val h = (placeable.height * v).toInt()
                 layout(placeable.width, h) {
@@ -472,7 +475,7 @@ private fun QuestionEditItem(
                                 haptic(HapticKind.Tick)
                                 val newOpts = q.options.toMutableList().also { it.removeAt(oi) }
                                 onReplace(q.copy(options = newOpts,
-                                    answer = normalizeAnswer(q.type, newOpts.size, q.answer)))
+                                    answer = normalizeAnswer(q.type, newOpts.size, shiftAnswerAfterRemove(q.answer, oi))))
                             })
                         }
                     }
@@ -513,6 +516,20 @@ private fun QuestionEditItem(
             backgroundMode = TextFieldMode.Rectangle, label = "学生提交后可见的解析", minLines = 1)
     }
 }
+
+/**
+ * 删掉第 [removed] 个选项后，把答案字母跟着前移（2026-10-26）：删掉的就是答案 → 去掉；排在它后面的字母减一。
+ * 旧版不重排：答案 C、删掉 B 后，C 实际指向原来的 D。
+ */
+private fun shiftAnswerAfterRemove(answer: String, removed: Int): String =
+    answerSet(answer).mapNotNull { l ->
+        val idx = l[0] - 'A'
+        when {
+            idx == removed -> null
+            idx > removed -> optionLetter(idx - 1)
+            else -> l
+        }
+    }.sorted().joinToString(",")
 
 /** 答案串 → 字母集合（"A,C" / "A，C" / "AC" 均可）。 */
 private fun answerSet(answer: String): Set<String> =
@@ -574,11 +591,12 @@ internal fun OptionGlassRow(
     ) {
         if (selected) Box(Modifier.matchParentSize().background(KewuBlue.copy(alpha = 0.08f)))
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 46.dp).padding(horizontal = 10.dp, vertical = 4.dp),
+            // 标记热区 40dp（视觉 28dp）：左内边距相应收到 4dp，视觉位置与旧版一致
+            Modifier.fillMaxWidth().heightIn(min = 46.dp).padding(start = 4.dp, end = 10.dp, top = 3.dp, bottom = 3.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             OptionBadge(badge, selected, square, onBadge)
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(4.dp))
             content()
         }
     }
@@ -588,16 +606,24 @@ internal fun OptionGlassRow(
 private fun OptionBadge(text: String, selected: Boolean, square: Boolean, onClick: (() -> Unit)?) {
     val cs = COUITheme.colorScheme
     val shape = if (square) RoundedCornerShape(8.dp) else CircleShape
+    // 外层 40dp 热区（旧版只有 28dp 的字母本身可点，太难点中），内层 28dp 视觉标记
     Box(
         Modifier
-            .size(28.dp)
-            .clip(shape)
-            .background(if (selected) KewuBlue else Color.Transparent)
-            .border(1.5.dp, if (selected) KewuBlue else cs.onSurfaceVariantSummary.copy(alpha = 0.55f), shape)
+            .size(40.dp)
+            .clip(CircleShape)
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = if (selected) Color.White else cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        Box(
+            Modifier
+                .size(28.dp)
+                .clip(shape)
+                .background(if (selected) KewuBlue else Color.Transparent)
+                .border(1.5.dp, if (selected) KewuBlue else cs.onSurfaceVariantSummary.copy(alpha = 0.55f), shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(text, color = if (selected) Color.White else cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
     }
 }
 

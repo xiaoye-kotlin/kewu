@@ -1,5 +1,9 @@
 package com.kewu.app.ui
 
+import com.kewu.app.CourseRepo
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
+import com.kewu.app.AssignmentRepo
 import com.kewu.app.BackHandler
 import com.kewu.app.AiAgent
 import com.kewu.app.AiClient
@@ -184,7 +188,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
     }
     // 今天的聊天记录：有历史就不重复显示欢迎语（2026-10-24 用户反馈：每天第一条消息才需要问候）
-    val todayEntries = chatStore.filter { it.ts >= visibleCutoff }
+    val todayEntries = remember(chatStore) { chatStore.filter { it.ts >= visibleCutoff } } // 旧版每敲一个字都全量过滤
     var messages by remember {
         mutableStateOf(
             buildList {
@@ -214,8 +218,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     // ★ 引用预览（第三轮 12.8）：引用不再塞进输入框，而是在输入框**上方**单独显示一条灰色小条，
     //   发送时随消息带上（ChatMsg.quote），× 可一键取消。
     var quotePreview by remember { mutableStateOf<String?>(null) }
-    var courseCount by remember { mutableIntStateOf(2) }
-    var pendingCount by remember { mutableIntStateOf(2) }
+    // 初值 0（旧版初值 2，接口失败时这个假数会进 AI 的 system prompt）
+    var courseCount by remember { mutableIntStateOf(0) }
+    var pendingCount by remember { mutableIntStateOf(0) }
     var assignmentTitles by remember { mutableStateOf<List<String>>(emptyList()) }
     var suggestions by remember {
         mutableStateOf(listOf("这节课的笔记", "作业什么时候交？", "帮我规划一下复习"))
@@ -243,13 +248,14 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     // 上下文 chip + 建议提问：真实接口（/api/courses、/api/assignments），失败保留 mock
     LaunchedEffect(Unit) {
-        KewuApi.getCourses()?.let { courseCount = it.size }
-        KewuApi.getAssignments()?.let { list ->
-            // AssignmentInfo 无 done 字段，待交数先用作业总数近似（提交状态接口细化后再改）
-            pendingCount = list.size
-            assignmentTitles = list.map { it.title }
-            list.firstOrNull()?.let { first ->
-                suggestions = listOf("「${first.title}」怎么做？") + suggestions
+        CourseRepo.refresh()?.let { courseCount = it.size }
+        // 待交数用 AssignmentRepo 的真实口径（未交 + 被打回；旧版是作业总数）
+        AssignmentRepo.refresh(maxAgeMs = 60_000)?.let { items ->
+            val pending = items.filter { it.pending }
+            pendingCount = pending.size
+            assignmentTitles = items.map { it.assignment.title }
+            (pending.firstOrNull() ?: items.firstOrNull())?.let { first ->
+                suggestions = listOf("「${first.assignment.title}」怎么做？") + suggestions
             }
         }
     }
@@ -418,8 +424,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             // ── AI 人格区 + 上下文 chip：键盘弹出时自动收起，把空间让给对话列 ──
             AnimatedVisibility(
                 visible = !imeVisible,
-                enter = fadeIn(tween(200)) + slideInVertically { -it / 3 },
-                exit = fadeOut(tween(150)) + slideOutVertically { -it / 3 },
+                // 2026-10-26：去掉 fade——这里包着玻璃上下文 chip，采样者祖先禁 alpha（coui 首帧 SIGSEGV 约束）
+                enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + slideInVertically { -it / 3 },
+                exit = shrinkVertically(tween(150)) + slideOutVertically { -it / 3 },
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(14.dp))
@@ -581,14 +588,19 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 enter = slideInVertically(
                     animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
                     initialOffsetY = { it }, // 从自身高度下方升上来（不再从半高起跳）
-                ) + fadeIn(tween(150)),
+                ), // 2026-10-26：去掉 fade（面板是玻璃采样者，祖先禁 alpha），纯滑入滑出
                 exit = slideOutVertically(
                     animationSpec = tween(150),
                     targetOffsetY = { it },
-                ) + fadeOut(tween(110)),
+                ),
             ) {
                 when (shownPanel) {
-                    AssistantPanel.ATTACH -> AttachPanel(backdrop = pageBackdrop) {
+                    // 2026-10-26：图片 / 文件 / 语音提问需要多模态与语音转写，当前大模型只收文字；
+                    // 旧版点附件没反应、语音「发送」后落一条空语音气泡（AI 也不会回）。改为如实提示后收起。
+                    AssistantPanel.ATTACH -> AttachPanel(backdrop = pageBackdrop, onPick = { label ->
+                        panel = AssistantPanel.NONE
+                        scope.launch { snackbar.toast("「$label」提问即将上线，先用文字描述问题吧") }
+                    }) {
                         panel = AssistantPanel.NONE
                     }
                     AssistantPanel.VOICE -> VoiceRecordPanel(
@@ -596,9 +608,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         voiceSecs = voiceSecs,
                         onCancel = { panel = AssistantPanel.NONE },
                         onSend = {
-                            messages = messages + ChatMsg("", isUser = true, isVoice = true,
-                                voiceSecs = voiceSecs, id = ChatHistory.nextId(), ts = nowMs())
                             panel = AssistantPanel.NONE
+                            scope.launch { snackbar.toast("语音提问即将上线，先用文字问小悟吧") }
                         },
                     )
                     AssistantPanel.NONE -> Unit
@@ -1291,7 +1302,7 @@ private fun SendBtn(
 
 /** QQ 式附件面板：相册 / 拍照 / 文件（后端接入前点击仅反馈 + 收起）。 */
 @Composable
-private fun AttachPanel(backdrop: LayerBackdrop, onClose: () -> Unit) {
+private fun AttachPanel(backdrop: LayerBackdrop, onPick: (String) -> Unit, onClose: () -> Unit) {
     val cs = COUITheme.colorScheme
     Box(
         Modifier
@@ -1312,20 +1323,20 @@ private fun AttachPanel(backdrop: LayerBackdrop, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AttachOption("相册", COUIIcons.Photos)
-                AttachOption("拍照", COUIIcons.Scan)
-                AttachOption("文件", COUIIcons.File)
+                AttachOption("相册", COUIIcons.Photos) { onPick("图片") }
+                AttachOption("拍照", COUIIcons.Scan) { onPick("拍照") }
+                AttachOption("文件", COUIIcons.File) { onPick("文件") }
             }
         }
     }
 }
 
 @Composable
-private fun AttachOption(label: String, icon: ImageVector) {
+private fun AttachOption(label: String, icon: ImageVector, onClick: () -> Unit) {
     val cs = COUITheme.colorScheme
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.pressBounce { /* 相册/拍照/文件选择器：后端接入后补 */ },
+        modifier = Modifier.pressBounce { onClick() },
     ) {
         Surface(
             modifier = Modifier.size(56.dp),

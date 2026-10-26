@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.runtime.State
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -195,6 +196,8 @@ fun LoginScreen(onLogin: () -> Unit) {
     var loginError by remember { mutableStateOf("") }
 
     val pageBackdrop = rememberLayerBackdrop()
+    // 2026-10-26：呼吸相位以 State 传递、只在 drawBehind 里读 .value —— 旧版在组合阶段读 Float，
+    // 无限动画让整个登录页每帧重组（键盘输入、玻璃卡都跟着重组）
     val breath = rememberBreathPhase()
 
     // 首次组合 → 触发整页进场
@@ -223,7 +226,7 @@ fun LoginScreen(onLogin: () -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface)
                 .drawBehind {
-                    val t = breath
+                    val t = breath.value
                     val w = size.width
                     val h = size.height
                     val minD = if (w < h) w else h
@@ -448,7 +451,8 @@ fun LoginScreen(onLogin: () -> Unit) {
             SchoolPickerSheet(
                 selected = school,
                 onDismiss = { schoolSheetOpen = false },
-                onSelect = { school = it; schoolSheetOpen = false },
+                // 选的学校先暂存，注册成功后写进本地资料（后端注册接口暂不收学校字段）
+                onSelect = { school = it; schoolSheetOpen = false; kvSet("kewu_pending_school", it) },
             )
         }
     }
@@ -456,15 +460,14 @@ fun LoginScreen(onLogin: () -> Unit) {
 
 /** 背景光斑的呼吸相位（0..1 循环，~9s 周期）——drawBehind 里每帧读取。 */
 @Composable
-private fun rememberBreathPhase(): Float {
+private fun rememberBreathPhase(): State<Float> {
     val transition = rememberInfiniteTransition(label = "breath")
-    val phase by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(9000, easing = LinearEasing), RepeatMode.Restart),
         label = "breathPhase",
     )
-    return phase
 }
 
 /**
@@ -567,6 +570,10 @@ private fun LoginButton(
                     KewuApi.login(acc, pwd)
                 } else {
                     val r = KewuApi.register(acc, pwd, name.trim(), if (role == 1) "TEACHER" else "STUDENT")
+                    if (r == null) {
+                        kvGet("kewu_pending_school")?.let { ProfileStore.setSchool(acc, it) }
+                        kvSet("kewu_pending_school", null)
+                    }
                     if (r == null) KewuApi.login(acc, pwd) else r
                 }
                 if (msg == null) {

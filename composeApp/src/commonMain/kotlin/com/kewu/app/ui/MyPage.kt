@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -127,10 +128,19 @@ import kotlin.math.roundToLong
  */
 @Composable
 fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
-    var profile by remember { mutableStateOf(defaultProfile) }
+    // 首帧就用已知信息（昵称 / 学号 / 本地资料），避免接口回来前一闪空白
+    var profile by remember {
+        val uname = KewuApi.username.orEmpty()
+        val stored = ProfileStore.load(uname) ?: defaultProfile
+        mutableStateOf(stored.copy(
+            name = KewuApi.currentUser?.user?.nickname ?: stored.name.ifBlank { uname },
+            studentId = uname.ifBlank { stored.studentId },
+        ))
+    }
     // 0=主页 1=编辑资料 2=录音管理 3=课程绑定 4=加入班级 6=通知设置 7=关于我们
     // （原 4/5 教师工具的发起签到/发布笔记 —— 学生端已移除，2026-10-18）
     var screen by remember { mutableStateOf(0) }
+    LockTabSwipe(screen != 0)
 
     // 2026-10-24：AI 助教代操作 —— 小悟可经 AiNav 直接打开「我的」的子页（录音管理/课程绑定/加入班级等）
     LaunchedEffect(AiNav.studentMyScreen.value) {
@@ -151,9 +161,11 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
         if (KewuApi.currentUser == null) KewuApi.me()
         val u = KewuApi.currentUser
         val uname = KewuApi.username ?: u?.user?.id ?: ""
-        profile = defaultProfile.copy(
-            name = (u?.user?.nickname ?: uname).ifBlank { defaultProfile.name },
-            studentId = uname.ifBlank { defaultProfile.studentId },
+        // 本地存的资料（学校 / 班级 / 手机 / 邮箱）+ 后端的昵称与学号（2026-10-26：不再用演示资料兜底）
+        val stored = ProfileStore.load(uname) ?: defaultProfile
+        profile = stored.copy(
+            name = (u?.user?.nickname ?: stored.name.ifBlank { uname }).ifBlank { "同学" },
+            studentId = uname.ifBlank { stored.studentId },
         )
     }
 
@@ -196,7 +208,11 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 1 -> EditProfilePage(
                     profile, pageBackdrop,
                     onBack = { screen = 0 },
-                    onSave = { profile = it; screen = 0 },
+                    onSave = {
+                        profile = it
+                        ProfileStore.save(KewuApi.username.orEmpty(), it) // 持久化（旧版只在内存，切 tab 就丢）
+                        screen = 0
+                    },
                 )
                 2 -> RecordingManagePage(pageBackdrop, onBack = { screen = 0 })
                 3 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
@@ -328,9 +344,9 @@ private fun MyHome(
                             fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp, maxLines = 1)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text(profile.school, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    Text(profile.school.ifBlank { "未填写学校" }, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
                     Spacer(Modifier.height(4.dp))
-                    Text(profile.className, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    Text(profile.className.ifBlank { "未填写班级" }, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
                 }
                 // 编辑入口：coui 图标按钮（铅笔，轻提示「资料可改」）
                 IconButton(
@@ -348,7 +364,8 @@ private fun MyHome(
 
         // 我的课程列表
         GroupLabel("我的课程", Modifier.myEnter(1))
-        MyCoursesList(myCourses, coursesLoading, backdrop, Modifier.myEnter(2)) { exitTarget = it }
+        // glass = true：这里是玻璃卡（空态）/ 玻璃卡的父 Column，只能用位移入场（采样者祖先禁 alpha/scale）
+        MyCoursesList(myCourses, coursesLoading, backdrop, Modifier.myEnter(2, glass = true)) { exitTarget = it }
 
         // 校园功能（学生端：教师工具已移除，2026-10-18）—— 五行并成一张 coui 分组卡
         GroupLabel("校园功能", Modifier.myEnter(3))
@@ -397,22 +414,16 @@ private fun MyHome(
                 onDismiss = { exitTarget = null },
                 title = "退出课程",
             ) { close ->
+                // ★ 2026-10-26：后端还没有退出课程接口。旧版本地移出列表冒充成功，下次刷新课程又回来了；
+                //   现在如实说明（接口上线后在这里调 KewuApi.leaveCourse 并 CourseRepo.remove）
                 Text(
-                    exitCourse.name,
+                    "「${exitCourse.name}」暂不支持自助退出。如需退课，请联系任课老师在「班级管理」中将你移出。",
                     color = cs.onSurfaceSecondary,
-                    fontSize = 13.sp,
+                    fontSize = 13.5.sp,
+                    lineHeight = 20.sp,
                     modifier = Modifier.padding(bottom = 14.dp),
                 )
-                SheetConfirmButton(
-                    text = "退出课程",
-                    danger = true,
-                ) {
-                    // 后端暂无退出课程接口（KewuApi 无 leaveCourse）：本地移出列表，
-                    // 接口后补后在这里调 KewuApi.leaveCourse(courseId)
-                    myCourses = myCourses?.filter { it.id != exitCourse.id }
-                    CourseRepo.remove(exitCourse.id)
-                    close()
-                }
+                SheetConfirmButton(text = "我知道了") { close() }
             }
         }
 

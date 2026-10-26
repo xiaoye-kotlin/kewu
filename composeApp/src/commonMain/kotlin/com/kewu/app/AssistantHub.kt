@@ -139,11 +139,13 @@ object AssistantHub {
     suspend fun checkReturnedAssignments() {
         if (!returnCheckLock.tryLock()) return
         try {
-            val studentId = KewuApi.username?.takeIf { it.isNotBlank() } ?: return
-            val assignments = KewuApi.getAssignments() ?: return
+            if (KewuApi.username.isNullOrBlank()) return
+            // 与任务页 / 首页共用 AssignmentRepo（并行查询，1 分钟内复用），不再自己逐个串行请求
+            val items = AssignmentRepo.refresh(maxAgeMs = 60_000) ?: return
             val notified = kvGet(KEY_RETURN_NOTIFIED).orEmpty().split(',').filter { it.isNotBlank() }.toMutableSet()
-            for (a in assignments) {
-                val sub = KewuApi.getMySubmissions(a.id, studentId) ?: continue
+            for (item in items) {
+                val a = item.assignment
+                val sub = item.mine ?: continue
                 if (sub.status != "RETURNED") continue
                 val mark = "${sub.id}#${sub.version}"
                 if (mark in notified) continue

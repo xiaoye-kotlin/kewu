@@ -47,6 +47,10 @@ private fun copyToCache(uri: Uri): PickedFile? = try {
             if (!c.isNull(1)) size = c.getLong(1)
         }
     }
+    // 2026-10-26：超过附件上限的不再拷贝（旧版先整份拷进缓存再判断，超限的副本也不删）
+    if (size > ATTACHMENT_MAX_BYTES) {
+        return PickedFile(name = name, path = "", mime = cr.getType(uri) ?: "application/octet-stream", size = size)
+    }
     val mime = cr.getType(uri) ?: "application/octet-stream"
     val dir = File(appContext.cacheDir, "attach").apply { mkdirs() }
     val safe = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")

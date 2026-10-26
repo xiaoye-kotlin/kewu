@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.TabSwipeLock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.AnimationVector1D
@@ -120,6 +121,8 @@ fun MainScreen(
     var previewFloat by remember { mutableStateOf(0f) }
     // 向下浏览内容时收起底部导航栏（课堂页滚动时回调），回到顶部自动展开
     var navHidden by remember { mutableStateOf(false) }
+    // 下钻子页上锁时暂停内容区横滑切 tab（见 TabSwipeLock）
+    val swipeLock by TabSwipeLock.count.collectAsState()
     // 助教（index=1）tab 的 AI 未读红点：仅统计 ChatHistory 里晚于「已读游标」的 assistant 消息，
     // 与首页铃铛通知完全无关（详见通知系统需求文档）。进入助教页即清空。
     // 2026-10-26：未读数改由 AssistantHub 统一维护（在助教页里看着回答的不算未读；切走后才到的、
@@ -283,7 +286,7 @@ fun MainScreen(
                     // ★ 2026-10-19：**助教页关闭横滑**（输入框/气泡长按/录音手势多，横滑易误触切页）；
                     //   其它页保留。key 用 selected，切换后手势闭包里的 selected 始终最新。
                     .then(
-                        if (selected != ASSISTANT_TAB) {
+                        if (selected != ASSISTANT_TAB && swipeLock == 0) {
                             Modifier.pointerInput(selected) {
                                 var acc = 0f
                                 detectHorizontalDragGestures(

@@ -264,14 +264,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 }
             }
         }
-        if (watch.isEmpty()) {
-            watch += listOf(
-                WatchStudent("张明", "近两次作业得分下滑 18 分", 0),
-                WatchStudent("李婷", "连续两次签到风险分偏高", 1),
-                WatchStudent("王浩", "作业提交质量波动大，建议面谈", 2),
-            )
-            watchFromMock = true
-        }
+        // 2026-10-26：不再用「张明 / 李婷 / 王浩」示例名单兜底——旧版示例学生会写进聊天记录、还会作为
+        // 学情上下文发给大模型，老师以为是真实学生。没有数据就如实说没有。
         watchList = watch.distinctBy { it.name }.take(5)
         dataReady = true
 
@@ -282,7 +276,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         if (kvGet(KEY_TA_BRIEF_DAY)?.toLongOrNull() == visibleCutoff) {
             return@LaunchedEffect
         }
-        kvSet(KEY_TA_BRIEF_DAY, visibleCutoff.toString())
+        // ★ 2026-10-26：「今日已播报」标记挪到三条都发完之后再写（旧版先写标记，播报途中切走 tab
+        //   剩下的简报当天就再也不发了）
 
         delay(500)
         push(TaMsg(false, buildList {
@@ -307,9 +302,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }), persist = true)
         delay(650)
         push(TaMsg(false, buildList {
-            add(TaBlock.Text(if (watchFromMock) "以下学生近期需要关注（示例数据）：" else "以下学生近期需要关注：",
-                emphasis = true))
-            add(TaBlock.Students(watchList))
+            if (watchList.isEmpty()) {
+                add(TaBlock.Text("近期没有发现需要特别关注的学生（签到风险与作业预批阅均正常）。"))
+            } else {
+                add(TaBlock.Text("以下学生近期需要关注：", emphasis = true))
+                add(TaBlock.Students(watchList))
+            }
         }), persist = true)
         delay(650)
         push(TaMsg(false, buildList {
@@ -322,6 +320,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             }
             add(TaBlock.Text("有问题随时问我，比如「谁退步了」「作业质量怎么样」「谁没签到」。"))
         }), persist = true)
+        kvSet(KEY_TA_BRIEF_DAY, visibleCutoff.toString())
     }
 
     // 新消息平滑滑到底；键盘弹起 / 收起等视口变化时保持贴底（2026-10-26 改用 ChatAutoScroll，
@@ -384,8 +383,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     /** 本地规则兜底：AI 不可用（断网/超时/鉴权失败）时保证问答可用。 */
     fun answer(q: String): List<TaBlock> = when {
         q.contains("关注") || q.contains("退步") || q.contains("学生") -> buildList {
-            add(TaBlock.Text(if (watchFromMock) "重点关注名单（示例数据）：" else "重点关注名单：", emphasis = true))
-            add(TaBlock.Students(watchList))
+            if (watchList.isEmpty()) {
+                add(TaBlock.Text("当前没有需要特别关注的学生。", emphasis = true))
+            } else {
+                add(TaBlock.Text("重点关注名单：", emphasis = true))
+                add(TaBlock.Students(watchList))
+            }
             add(TaBlock.Text("建议：退步学生优先一对一沟通，风险学生核实签到设备与代签可能。"))
         }
         q.contains("作业") || q.contains("批阅") || q.contains("提交") -> buildList {
@@ -732,18 +735,11 @@ private fun TaInputBar(
 @Composable
 private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> Unit) {
     val cs = COUITheme.colorScheme
-    var pressed by remember { mutableStateOf(false) }
     val onClickState = rememberUpdatedState(onClick)
-    val scaleV by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (pressed) 0.88f else 1f,
-        animationSpec = androidx.compose.animation.core.spring(
-            dampingRatio = 0.34f, stiffness = 320f, visibilityThreshold = 0.0005f),
-        label = "taSendPress",
-    )
+    // 2026-10-26：删掉包住玻璃钮的 .scale（违反「采样者祖先禁 scale」，且 pressed 从未置 true，本就无效果）
     Box(
         Modifier
             .size(46.dp)
-            .scale(scaleV)
             .pointerInput(enabled) {
                 detectTapGestures(
                     onTap = { if (enabled) onClickState.value() },

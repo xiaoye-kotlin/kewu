@@ -19,6 +19,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -124,7 +125,8 @@ fun NotificationSheet(
     onDismiss: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    val list = Notifications.load()
+    // 只在打开时读一次（旧版每次重组都读 kv + 解析 JSON，弹窗没打开也在读）
+    val list = remember(show) { Notifications.load() } // 打开 / 关闭时各读一次，退场动画期间列表不清空
     OverlayDialog(
         show = show,
         title = "通知",

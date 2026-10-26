@@ -1,6 +1,12 @@
 package com.kewu.app
 
 import kotlin.time.Clock
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -34,6 +40,34 @@ object ChatHistory {
     private const val KEY_SEED_FLAG = "kewu_chat_seeded_"
     private val json = Json { ignoreUnknownKeys = true }
 
+    // ── 2026-10-26 性能 + 隐私 ──
+    // ① 内存缓存：旧版每次切 tab / 每 60s 红点重算 / 每发一条消息都在主线程把整份记录（≤400 条）
+    //    从 kv 读出来重新解析，正好压在切页动画上。现在首次解析后常驻内存，写盘丢到后台串行执行。
+    // ② 按账号隔离：旧版只按角色分 key，同一台手机换账号能看到上一个人的对话。
+    private val cache = mutableMapOf<String, List<Entry>>()
+    private val writeScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private val writeLock = Mutex()
+
+    /** 实际存储 key = 逻辑 key + 当前账号；未登录时退回逻辑 key。 */
+    private fun storeKey(key: String): String {
+        val user = KewuApi.username?.takeIf { it.isNotBlank() } ?: return key
+        val sk = "${key}_u_$user"
+        // 一次性迁移：老版本（不分账号）的记录归给升级后第一个登录的账号
+        if (kvGet(sk) == null && kvGet("${sk}_migrated") == null) {
+            kvSet("${sk}_migrated", "1")
+            kvGet(key)?.let { legacy ->
+                kvSet(sk, legacy)
+                kvSet(key, null)
+                kvGet(KEY_READ_PREFIX + key)?.let { kvSet(KEY_READ_PREFIX + sk, it) }
+                kvGet(KEY_SEED_FLAG + key)?.let { kvSet(KEY_SEED_FLAG + sk, it) }
+            }
+        }
+        return sk
+    }
+
+    /** 退出登录时调用：清内存缓存（磁盘上按账号分开存，不必删）。 */
+    fun clearCache() = cache.clear()
+
     data class Entry(
         val id: Long,
         val role: String,   // "user" / "assistant"
@@ -53,8 +87,13 @@ object ChatHistory {
         return (ts + tz8) / 86_400_000L * 86_400_000L - tz8
     }
 
-    fun loadAll(key: String): List<Entry> = try {
-        val raw = kvGet(key) ?: return emptyList()
+    fun loadAll(key: String): List<Entry> {
+        val sk = storeKey(key)
+        return cache.getOrPut(sk) { parseStored(sk) }
+    }
+
+    private fun parseStored(sk: String): List<Entry> = try {
+        val raw = kvGet(sk) ?: return emptyList()
         val arr = json.parseToJsonElement(raw).jsonArray
         arr.mapNotNull { el ->
             val o = el as? JsonObject ?: return@mapNotNull null
@@ -74,7 +113,25 @@ object ChatHistory {
      *  desktop 端 kv 是 java.util.prefs（Windows 注册表单值上限 8KB），超长会抛异常 ——
      *  这里渐进丢弃最旧消息直到能写下，绝不把异常抛给页面（2026-10-24 desktop 崩溃修复）。 */
     fun saveAll(key: String, entries: List<Entry>) {
-        var kept = entries.sortedBy { it.ts }.takeLast(CAP)
+        val sk = storeKey(key)
+        val sorted = entries.sortedBy { it.ts }.takeLast(CAP)
+        cache[sk] = sorted
+        // 序列化 + 写 kv 放后台串行执行；后台线程只碰不可变快照 + 锁内的序号表，
+        // 并发的多次保存按序号「新者覆盖旧者」，乱序到达的旧快照直接跳过
+        val seq = ++writeSeq
+        writeScope.launch {
+            writeLock.withLock {
+                if (seq < (writtenSeq[sk] ?: 0L)) return@withLock
+                writtenSeq[sk] = seq
+                writeStored(sk, sorted)
+            }
+        }
+    }
+    private var writeSeq = 0L
+    private val writtenSeq = mutableMapOf<String, Long>() // 仅在 writeLock 内访问
+
+    private fun writeStored(sk: String, entries: List<Entry>) {
+        var kept = entries
         while (true) {
             val arr = buildJsonArray {
                 kept.forEach { e ->
@@ -88,11 +145,11 @@ object ChatHistory {
                 }
             }
             try {
-                kvSet(key, arr.toString())
+                kvSet(sk, arr.toString())
                 return
             } catch (_: Exception) {
                 if (kept.size <= 10) {
-                    try { kvSet(key, "[]") } catch (_: Exception) { }
+                    try { kvSet(sk, "[]") } catch (_: Exception) { }
                     return
                 }
                 kept = kept.takeLast(kept.size / 2)
@@ -123,7 +180,7 @@ object ChatHistory {
      * ★ 仅用于底部导航栏第二个「助教」tab 的红点；与首页铃铛通知完全独立。
      */
     fun getUnreadAssistantCount(key: String): Int {
-        val readTs = kvGet(KEY_READ_PREFIX + key)?.toLongOrNull() ?: 0L
+        val readTs = kvGet(KEY_READ_PREFIX + storeKey(key))?.toLongOrNull() ?: 0L
         if (readTs == 0L) {
             // 从未打开过助教：全部历史 assistant 消息都算未读
             return loadAll(key).count { it.role == "assistant" }
@@ -133,7 +190,7 @@ object ChatHistory {
 
     /** 进入助教页时调用：把已读游标推到当前时刻 → 清空未读红点。 */
     fun markAllAssistantRead(key: String) {
-        kvSet(KEY_READ_PREFIX + key, Clock.System.now().toEpochMilliseconds().toString())
+        kvSet(KEY_READ_PREFIX + storeKey(key), Clock.System.now().toEpochMilliseconds().toString())
     }
 
     /**
@@ -141,8 +198,9 @@ object ChatHistory {
      * 已存在历史则不覆盖。
      */
     fun seedWelcomeIfEmpty(key: String) {
-        if (kvGet(KEY_SEED_FLAG + key) != null) return
-        kvSet(KEY_SEED_FLAG + key, "1")
+        val flag = KEY_SEED_FLAG + storeKey(key)
+        if (kvGet(flag) != null) return
+        kvSet(flag, "1")
         if (loadAll(key).isNotEmpty()) return
         val now = Clock.System.now().toEpochMilliseconds()
         saveAll(key, listOf(

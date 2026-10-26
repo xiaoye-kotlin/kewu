@@ -83,9 +83,16 @@ fun AttachmentPicker(
         }
     }
     // 弹窗关闭 / 页面销毁时若还在录，停掉麦克风（录音文件丢弃）
+    // ★ 2026-10-26：页面销毁时 rememberCoroutineScope 紧接着被取消，旧版在这里 scope.launch 停录音大概率不执行，
+    //   麦克风一直开着。改用进程级 GlobalScope 停止并删掉这段录音文件。
     DisposableEffect(Unit) {
         onDispose {
-            if (recorder?.isRecording() == true) scope.launch { runCatching { recorder.stopRecording() } }
+            if (recorder?.isRecording() == true) {
+                @OptIn(kotlinx.coroutines.DelicateCoroutinesApi::class)
+                kotlinx.coroutines.GlobalScope.launch {
+                    runCatching { recorder.stopRecording()?.let { com.kewu.app.platformDeleteFile(it) } }
+                }
+            }
         }
     }
 

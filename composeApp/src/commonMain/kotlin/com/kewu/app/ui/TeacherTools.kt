@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.kvSet
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -193,7 +194,9 @@ internal fun BindCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                 val err = KewuApi.bindCourse(courseId.trim())
                 loading = false
                 if (err == null) {
-                    if (KewuApi.currentUser == null) KewuApi.me()
+                    // 绑定后强制刷新（旧版只在 currentUser 为空时才刷，此时它必不为空 → 新课程在发布页 / 筛选里看不到）
+                    KewuApi.me(force = true)
+                    com.kewu.app.CourseRepo.refresh(force = true)
                     bound = KewuApi.currentUser?.courses ?: bound
                     result = true to "绑定成功"
                 } else {
@@ -226,8 +229,13 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
     var duration by remember { mutableStateOf(10) }
     var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var loading by remember { mutableStateOf(false) }
+    var started by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { courses = KewuApi.getCourses() }
+    // 2026-10-26：只列老师自己的课（旧版 getCourses() 是全站课程，可能给别人的课发起签到）
+    LaunchedEffect(Unit) {
+        KewuApi.me()
+        courses = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
         KewuTopBar("发起签到", onBack)
@@ -251,12 +259,27 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
             }
         }
         Spacer(Modifier.height(4.dp))
-        ToolButton(if (loading) "正在发起…" else "发起签到", enabled = selectedId != null && title.isNotBlank() && !loading) {
+        // 发起成功后按钮锁定（旧版可再点，会重复建会话）；会话写入 teacher_active_session，控制台据此显示「上课中」面板
+        ToolButton(
+            when {
+                loading -> "正在发起…"
+                started -> "签到进行中 · 可在控制台查看"
+                else -> "发起签到"
+            },
+            enabled = selectedId != null && title.isNotBlank() && !loading && !started,
+        ) {
             scope.launch {
                 loading = true
-                val session = KewuApi.createAttendance(selectedId ?: return@launch, title.trim(), durationMinutes = duration)
+                val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
+                val session = KewuApi.createAttendance(
+                    selectedId ?: return@launch, title.trim(), durationMinutes = duration, publisher = publisher,
+                )
                 loading = false
-                result = if (session != null) true to "签到已发起 · 会话 ${session.id}"
+                if (session != null) {
+                    started = true
+                    kvSet("teacher_active_session", session.id)
+                }
+                result = if (session != null) true to "签到已发起，学生现在可以扫码或输入暗号签到"
                 else false to "签到发起失败，请稍后重试"
                 result?.let { snackbar.toast(it.second) }
             }
@@ -282,11 +305,20 @@ internal fun PostNoteScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
     var loading by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { courses = KewuApi.getCourses() }
-    // 选课后拉取已有笔记作草稿（仅当尚未手动编辑时填充）
+    LaunchedEffect(Unit) {
+        KewuApi.me()
+        courses = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+    }
+    // 选课后拉取该课已有笔记作草稿。★ 2026-10-26：记住草稿来自哪门课——切到另一门课时，
+    // 若内容还是上一门课自动带出的笔记（老师没改过）就整体替换，避免 A 课的笔记被发到 B 课。
+    var draftFrom by remember { mutableStateOf<Pair<String, String>?>(null) } // 课程 id -> 自动带出的原文
     LaunchedEffect(selectedId) {
-        selectedId?.let { id ->
-            KewuApi.getNoteCache(id)?.let { existing -> if (content.isEmpty()) content = existing }
+        val id = selectedId ?: return@LaunchedEffect
+        val untouched = content.isEmpty() || draftFrom?.second == content
+        val existing = KewuApi.getNoteCache(id).orEmpty()
+        if (untouched) {
+            content = existing
+            draftFrom = id to existing
         }
     }
 

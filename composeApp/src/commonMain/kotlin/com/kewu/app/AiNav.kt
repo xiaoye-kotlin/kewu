@@ -39,3 +39,20 @@ object AiNav {
         teacherTab.value = 3
     }
 }
+
+/**
+ * 横滑切 tab 锁（2026-10-26）：任一页面处在下钻子页（作答 / 批阅 / 发布 / 课程详情 / 设置子页…）时上锁，
+ * 主界面暂停「内容区左右滑切 tab」。旧版下钻时一次斜滑就切走 tab，页面状态（作答草稿、批阅进度）全部丢失。
+ */
+object TabSwipeLock {
+    val count = kotlinx.coroutines.flow.MutableStateFlow(0)
+}
+
+/** 在 [active] 为 true 期间给主界面上横滑锁（离开组合或 active 变 false 自动解锁）。 */
+@androidx.compose.runtime.Composable
+fun LockTabSwipe(active: Boolean) {
+    androidx.compose.runtime.DisposableEffect(active) {
+        if (active) TabSwipeLock.count.value += 1
+        onDispose { if (active) TabSwipeLock.count.value -= 1 }
+    }
+}

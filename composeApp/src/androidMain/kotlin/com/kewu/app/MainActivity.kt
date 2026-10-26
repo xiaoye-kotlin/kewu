@@ -129,4 +129,14 @@ class MainActivity : ComponentActivity() {
             App()
         }
     }
+
+    // 2026-10-26：释放静态引用（旧版 appActivity / 各回调从不置空，Activity 销毁后仍被持有）
+    override fun onDestroy() {
+        if (appActivity === this) appActivity = null
+        audioPermissionCallback = null
+        cameraPermissionCallback = null
+        notificationPermissionCallback = null
+        pickCallback = null
+        super.onDestroy()
+    }
 }

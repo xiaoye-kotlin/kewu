@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
@@ -204,21 +205,27 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
 @Composable
 private fun TimetableHeader(onBack: () -> Unit) {
     // 右侧小绿点呼吸（今天有课在录）：alpha + 缩放双通道，1.1s 一个来回
-    val dotPulse by rememberInfiniteTransition().animateFloat(
+    // 2026-10-26：动画值只在 graphicsLayer 的 lambda 里读（旧版组合阶段读，顶栏每帧重组）；这个小点不是玻璃采样者
+    val dotPulse = rememberInfiniteTransition().animateFloat(
         0.65f, 1f, infiniteRepeatable(tween(1100), RepeatMode.Reverse),
         label = "dotPulse",
     )
     KewuTopBar(
         title = "课表",
-        subtitle = "第 7 周 · 10月12日 - 10月18日",
+        // 2026-10-26：后端还没有排课数据，本页为示例课表；旧版写死「第 7 周 · 10月12日-10月18日」像真实数据
+        subtitle = "示例课表 · 教务排课接入后自动同步",
         onBack = onBack,
         actions = {
             Box(
                 Modifier
                     .padding(end = 20.dp)
                     .size(8.dp)
-                    .scale(0.75f + 0.25f * dotPulse)
-                    .alpha(0.55f + 0.45f * dotPulse)
+                    .graphicsLayer {
+                        val p = dotPulse.value
+                        scaleX = 0.75f + 0.25f * p
+                        scaleY = 0.75f + 0.25f * p
+                        alpha = 0.55f + 0.45f * p
+                    }
                     .background(KewuGreen, CircleShape),
             )
         },
