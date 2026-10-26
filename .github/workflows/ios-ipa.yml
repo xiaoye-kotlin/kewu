@@ -1,0 +1,89 @@
+# 编译 iOS 未签名 IPA（2026-10-26）：手动触发或推送到 main 时运行，产物在 Actions 页面的 Artifacts 里下载。
+# 未签名 IPA 需要用 Sideloadly / AltStore / 爱思助手等工具用你自己的 Apple ID 重签后安装（或 TrollStore 直装）。
+name: iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "composeApp/**"
+      - "iosApp/**"
+      - "gradle/**"
+      - "*.gradle.kts"
+      - ".github/workflows/ios-ipa.yml"
+
+concurrency:
+  group: ios-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.konan
+          key: gradle-ios-${{ hashFiles('**/*.gradle.kts', 'gradle/libs.versions.toml', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-ios-
+
+      - name: Prepare Gradle (macOS)
+        run: |
+          chmod +x gradlew
+          # 本地 Windows 专用配置不能带到 macOS：去掉写死的 JDK 路径
+          sed -i '' '/org.gradle.java.home/d' gradle.properties || true
+          # Android SDK 路径（composeApp 同时有 android 目标，配置阶段需要）
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: iosApp
+        run: xcodegen generate
+
+      - name: Build app (unsigned)
+        run: |
+          mkdir -p build
+          xcodebuild \
+            -project iosApp/Kewu.xcodeproj \
+            -scheme Kewu \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build > build/xcodebuild.log 2>&1 || true
+          grep -E "error:|^e: |BUILD (SUCCEEDED|FAILED)" build/xcodebuild.log | head -80 || true
+          test -d "build/ios/Build/Products/Release-iphoneos/Kewu.app"
+
+      - name: Package IPA
+        run: |
+          mkdir -p dist/Payload
+          cp -R "build/ios/Build/Products/Release-iphoneos/Kewu.app" dist/Payload/
+          cd dist && zip -qry Kewu-unsigned.ipa Payload && ls -la Kewu-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Kewu-unsigned-ipa
+          path: dist/Kewu-unsigned.ipa
+          retention-days: 14
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
