@@ -95,6 +95,7 @@ import io.github.suqi8.coui.kmp.basic.TextFieldMode
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Folder
 import io.github.suqi8.coui.kmp.icon.extended.AddCircle
 import io.github.suqi8.coui.kmp.icon.extended.Alarm
 import io.github.suqi8.coui.kmp.icon.extended.Back
@@ -155,7 +156,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
             studentId = uname.ifBlank { stored.studentId },
         ))
     }
-    // 0=主页 1=编辑资料 2=录音管理 3=课程绑定 4=加入班级 6=通知设置 7=关于我们
+    // 0=主页 1=编辑资料 2=录音管理 3=课程绑定 4=加入班级 6=通知设置 7=关于我们 8=内存管理
     // （原 4/5 教师工具的发起签到/发布笔记 —— 学生端已移除，2026-10-18）
     var screen by remember { mutableStateOf(0) }
     LockTabSwipe(screen != 0)
@@ -236,6 +237,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     onJoinClass = { screen = 4 },
                     onNotification = { screen = 6 },
                     onAbout = { screen = 7 },
+                    onStorage = { screen = 8 },
                     onLogout = onLogout,
                 )
                 1 -> EditProfilePage(
@@ -259,6 +261,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 4 -> JoinClassScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
+                8 -> StorageManagePage(onBack = { screen = 0 })
             }
         }
     }
@@ -306,6 +309,7 @@ private fun MyHome(
     onJoinClass: () -> Unit,
     onNotification: () -> Unit,
     onAbout: () -> Unit,
+    onStorage: () -> Unit,
     onLogout: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
@@ -416,6 +420,7 @@ private fun MyHome(
         }
         KewuCardGroup(Modifier.myEnter(5)) {
             FuncRow(2, "通知设置", "签到提醒、纪要推送与权限管理", backdrop, onClick = onNotification)
+            FuncRow(9, "内存管理", "清理聊天记录、图片与缓存文件", backdrop, onClick = onStorage)
             FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout)
         }
 
@@ -527,6 +532,7 @@ private fun funcIcon(glyph: Int) = when (glyph) {
     1 -> COUIIcons.RecordingTape
     2 -> COUIIcons.Alarm
     3 -> COUIIcons.Info
+    9 -> COUIIcons.Folder // 内存管理（与「关于我们」的 Info 区分开）
     5 -> COUIIcons.Community
     6 -> COUIIcons.AddCircle
     7 -> COUIIcons.Scan

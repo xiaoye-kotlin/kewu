@@ -218,7 +218,7 @@ private fun TeacherMyHome(
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(2))) {
             FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop, onClick = onCreateCourse)
             FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop, onClick = onClasses)
-            FuncRow(5, "同学通讯录", "查看每位同学的联系方式与个人主页，可移出班级", backdrop, onClick = onDirectory)
+            FuncRow(5, "同学管理", "查看同学信息，管理班级成员", backdrop, onClick = onDirectory)
             FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop, onClick = onBindCourse)
             FuncRow(7, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop, onClick = onCreateAttendance)
             FuncRow(8, "发布笔记", "记录课堂要点，学生端即时可见", backdrop, onClick = onPostNote)
