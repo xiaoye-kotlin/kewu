@@ -25,6 +25,7 @@ import com.kewu.modules.aistatus.routes.aiStatusRoutes
 import com.kewu.modules.aistatus.service.AiStatusService
 import com.kewu.modules.questions.routes.questionRoutes
 import com.kewu.modules.questions.service.QuestionService
+import com.kewu.recserver.recordingModule
 import io.ktor.server.application.*
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
@@ -74,5 +75,8 @@ fun Application.configureRouting() {
         analyticsRoutes(radarService)
         questionRoutes(questionService)
         aiStatusRoutes(aiStatusService)
+        // 原 8081：/health、/api/recordings/*、/api/notes、/api/checkin、/api/sessions、/api/ai/*、
+        // /api/teacher/recording/devices*（2026-10-26 合并，路径与 8080 原有接口无重叠）
+        recordingModule()
     }
 }

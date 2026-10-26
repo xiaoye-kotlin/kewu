@@ -298,7 +298,9 @@ class ApiException(message: String) : Exception(message)
 
 object KewuApi {
     val BASE_URL = "http://47.99.42.168:8080"
-    val OBS_URL = "http://47.99.42.168:8081"
+    // 2026-10-26：原 8081 录音 / 纪要 / 会话 / AI 服务已并入 8080，对外只剩一个端口；
+    // 保留 OBS_URL 这个名字只为少改调用处（这些接口仍是不套壳的裸 JSON，解析方式不变）
+    val OBS_URL = BASE_URL
     // ★ 2026-10-26：业务请求统一 20s 超时（平台引擎 read 超时是给大模型用的 120s，业务接口不该挂那么久）；
     //   录音 / 附件上传在调用处单独放宽。
     private val client = platformHttpClient().config {

@@ -42,3 +42,5 @@ AI 模块（总结/问答）先留了接口没接，等能力就绪替换 `NoOpA
 - `Dockerfile`：两阶段构建，产出 `kewu-server` 镜像（`gradle :server:installDist` → JRE 运行时）
 - `codearts-pipeline.yml`：CodeArts 流水线 YAML 骨架（构建 → 推 SWR → 部署），把两个 `jobId` 占位符换成自己账号下的任务 ID 即可用
 - 生产环境把 `application.conf` 里 `app.storage.mode` 改成 `obs`，并配上 `OBS_AK` / `OBS_SK` 环境变量
+
+> **2026-10-26 起本模块已并入 `kewu-8080/`（包 `com.kewu.recserver`），线上只跑 8080 一个端口。** 本目录仅作历史参考，改录音 / AI / 课堂缓存接口请改 `kewu-8080/src/main/kotlin/com/kewu/recserver/`。

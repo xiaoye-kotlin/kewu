@@ -60,7 +60,8 @@ object AiClient {
      * 服务器用自己的环境变量调同一个 MaaS）。部分校园网 / 运营商会拦 api.modelarts-maas.com:443，
      * 而业务后端 47.99.42.168 是 App 必须能连的，所以把它放在最后兜底（2026-10-26 用户反馈「AI 又不可用」）。
      */
-    private const val RELAY_URL = "http://47.99.42.168:8081/api/ai/answer"
+    // 2026-10-26 起与业务后端同一端口（8081 已并入 8080）
+    private const val RELAY_URL = "http://47.99.42.168:8080/api/ai/answer"
 
     private val endpointOverride: String? = kvGet("kewu_ai_endpoint")?.takeIf { it.isNotBlank() }
 
@@ -117,7 +118,7 @@ object AiClient {
             val r = chatOnce(ep, messages, maxTokens)
             if (r != null) return r
         }
-        return relayOnce(messages)
+        return relayOnce(messages, maxTokens)
     }
 
     /** 接入点 → 「连不上」标记的失效时刻（只记网络层失败，HTTP 错误 / 空内容不算）。 */
@@ -127,7 +128,7 @@ object AiClient {
      * 8081 中转：多轮消息压成 {question = 最后一条用户消息, context = system + 之前的对话}。
      * 服务器未配置 / 调用失败时也会回 200 + 可读文案，这里只认非空 answer。
      */
-    private suspend fun relayOnce(messages: List<Msg>): String? = try {
+    private suspend fun relayOnce(messages: List<Msg>, maxTokens: Int): String? = try {
         val lastUser = messages.indexOfLast { it.role == "user" }
         val question = messages.getOrNull(lastUser)?.content.orEmpty()
         val context = buildString {
@@ -143,10 +144,12 @@ object AiClient {
         }
         val resp = client.post(RELAY_URL) {
             contentType(ContentType.Application.Json)
-            timeout { requestTimeoutMillis = 120_000 }
+            timeout { requestTimeoutMillis = 180_000 }
             setBody(buildJsonObject {
                 put("question", question)
                 put("context", context)
+                // 合并后的后端支持 maxTokens（旧 8081 写死 768，多题出题必失败）；服务端会夹在 256..8192
+                put("maxTokens", maxTokens)
             }.toString())
         }
         val bodyText = resp.bodyAsText()
