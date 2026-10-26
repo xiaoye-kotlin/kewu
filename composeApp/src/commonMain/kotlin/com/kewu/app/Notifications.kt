@@ -100,6 +100,32 @@ object Notifications {
         save(list.map { if (it.id == id) it.copy(read = true) else it })
     }
 
+    /** 写入一条通知（同 id 已存在则忽略，用于轮询去重）。返回是否真的新增。 */
+    fun add(id: String, type: String, title: String, body: String): Boolean {
+        val list = load()
+        if (list.any { it.id == id }) return false
+        save(list + Info(id, type, title, body, Clock.System.now().toEpochMilliseconds(), read = false))
+        return true
+    }
+
+    /**
+     * 课堂纪要通知（2026-10-27）：下课后服务端择优选出主录音 → 华为云 SIS 转写 → AI 生成课堂纪要，
+     * 这里轮询「我的课程」的 /api/courses/{id}/class-recordings，纪要生成好就写一条通知（每节课一条）。
+     * 学生端 / 教师端首页在前台时每分钟调用一次。返回本次新增的通知标题（给首页弹提示）。
+     */
+    suspend fun pollClassNotes(): List<String> {
+        val courses = KewuApi.myCourses().orEmpty()
+        val added = mutableListOf<String>()
+        for (c in courses) {
+            for ((date, notes) in KewuApi.getClassNotes(c.id, 3)) {
+                val title = "${c.name.ifBlank { "课程" }} $date 课堂纪要已生成"
+                val body = notes.trim().take(800) + if (notes.length > 800) "…" else ""
+                if (add("notes-${c.id}-$date", TYPE_RECORDING_DONE, title, body)) added += title
+            }
+        }
+        return added
+    }
+
     /**
      * 2026-10-26：不再种入演示通知（「张三提交了作业」「成绩已公布」等虚构内容会误导用户）。
      * 老版本已种入本机的演示条目（固定 id s1–s3 / t1–t3）在读取时过滤掉。

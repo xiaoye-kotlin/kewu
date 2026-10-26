@@ -16,27 +16,29 @@ import kotlin.text.Charsets.UTF_8
 object HuaweiSigner {
 
     // 计算 Authorization 请求头的值。dateStamp 必须是 UTC 的 yyyyMMdd'T'HHmmss'Z' 格式。
+    // ★ 2026-10-27 按华为云 APIG 官方签名规范（apig-sdk Signer）重写：旧版是仿 AWS SigV4 的
+    //   「派生密钥 + scope + Credentials=」写法，华为云网关不认，SIS 会回 401 / APIG.0301。
+    //   规范：CanonicalURI 末尾补 "/"；StringToSign = 算法、时间、hex(sha256(规范请求)) 三行；
+    //   签名 = hex(HMAC-SHA256(SK, StringToSign))；头为 "SDK-HMAC-SHA256 Access=AK, SignedHeaders=..., Signature=..."。
+    //   region / service 参数保留只为兼容旧调用，APIG 签名不使用。
+    @Suppress("UNUSED_PARAMETER")
     fun authHeader(
         ak: String, sk: String,
         method: String, uri: String, body: String,
         host: String, region: String, service: String,
         dateStamp: String
     ): String {
-        val bodyHash = sha256Hex(body.toByteArray(UTF_8))
-        // 只签 host + x-sdk-date（华为云允许的最小签名头集），避免 content-type 细节不一致导致签名失败
+        val path = uri.substringBefore('?')
+        val canonicalUri = if (path.endsWith("/")) path else "$path/"
+        val canonicalQuery = uri.substringAfter('?', "").split('&').filter { it.isNotEmpty() }.sorted().joinToString("&")
+        // 只签 host + x-sdk-date（华为云允许的最小签名头集），请求里必须同时带这两个头
         val canonicalHeaders = "host:$host\nx-sdk-date:$dateStamp\n"
         val signedHeaders = "host;x-sdk-date"
-        val canonicalRequest = "$method\n$uri\n\n$canonicalHeaders\n$signedHeaders\n$bodyHash"
-
-        val date = dateStamp.substring(0, 8) // 取 YYYYMMDD 部分
-        val scope = "$date/$region/$service/signed-request"
-        val stringToSign = "SDK-HMAC-SHA256\n$dateStamp\n$scope\n" +
-            sha256Hex(canonicalRequest.toByteArray(UTF_8))
-
-        val signingKey = deriveSigningKey(sk, date, region, service)
-        val signature = hex(hmacSha256(signingKey, stringToSign.toByteArray(UTF_8)))
-
-        return "SDK-HMAC-SHA256 Credentials=$ak/$scope, SignedHeaders=$signedHeaders, Signature=$signature"
+        val canonicalRequest = "$method\n$canonicalUri\n$canonicalQuery\n$canonicalHeaders\n$signedHeaders\n" +
+            sha256Hex(body.toByteArray(UTF_8))
+        val stringToSign = "SDK-HMAC-SHA256\n$dateStamp\n" + sha256Hex(canonicalRequest.toByteArray(UTF_8))
+        val signature = hex(hmacSha256(sk.toByteArray(UTF_8), stringToSign.toByteArray(UTF_8)))
+        return "SDK-HMAC-SHA256 Access=$ak, SignedHeaders=$signedHeaders, Signature=$signature"
     }
 
     private fun sha256Hex(data: ByteArray): String =
@@ -46,15 +48,6 @@ object HuaweiSigner {
         val mac = Mac.getInstance("HmacSHA256")
         mac.init(SecretKeySpec(key, "HmacSHA256"))
         return mac.doFinal(data)
-    }
-
-    // 逐级派生签名密钥：SDK-HMAC-SHA256+SK -> date -> region -> service -> signed-request
-    private fun deriveSigningKey(sk: String, date: String, region: String, service: String): ByteArray {
-        var key = hmacSha256("SDK-HMAC-SHA256$sk".toByteArray(UTF_8), date.toByteArray(UTF_8))
-        key = hmacSha256(key, region.toByteArray(UTF_8))
-        key = hmacSha256(key, service.toByteArray(UTF_8))
-        key = hmacSha256(key, "signed-request".toByteArray(UTF_8))
-        return key
     }
 
     private val HEX = "0123456789abcdef".toCharArray()

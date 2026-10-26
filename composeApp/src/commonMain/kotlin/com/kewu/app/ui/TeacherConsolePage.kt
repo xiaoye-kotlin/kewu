@@ -202,9 +202,19 @@ fun TeacherConsolePage(
     // 通知中心：铃铛未读数 + 弹窗显隐（首页系统通知，与助教 AI 红点无关）
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
+    val notifSnackbar = LocalKewuSnackbar.current
     LaunchedEffect(Unit) {
         // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
         notifUnread = Notifications.unreadCount()
+        // 2026-10-27：课堂纪要生成后写通知（首页在前台时每分钟查一次）
+        while (true) {
+            runCatching { Notifications.pollClassNotes() }.getOrNull()?.firstOrNull()?.let {
+                haptic(HapticKind.Light)
+                notifSnackbar.toast(it + "，点右上角铃铛查看")
+            }
+            notifUnread = Notifications.unreadCount()
+            kotlinx.coroutines.delay(60_000)
+        }
     }
 
     // 导航栏随滚动收起（与学生端同款增量判断）

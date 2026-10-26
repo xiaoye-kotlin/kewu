@@ -552,9 +552,19 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     // 通知中心：铃铛未读数 + 弹窗显隐（首页右上角系统通知，与助教 AI 红点无关）
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
+    val notifSnackbar = LocalKewuSnackbar.current
     LaunchedEffect(Unit) {
         // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
         notifUnread = Notifications.unreadCount()
+        // 2026-10-27：课堂纪要生成后写通知（首页在前台时每分钟查一次）
+        while (true) {
+            runCatching { Notifications.pollClassNotes() }.getOrNull()?.firstOrNull()?.let {
+                haptic(HapticKind.Light)
+                notifSnackbar.toast(it + "，点右上角铃铛查看")
+            }
+            notifUnread = Notifications.unreadCount()
+            kotlinx.coroutines.delay(60_000)
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -1002,7 +1012,7 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                 (on || todays.any { it.state.equals("OPEN", true) }) && me.isNotBlank() &&
                     todays.any { s -> KewuApi.getMyAttendance(s.id, me) != null }
             }
-            kotlinx.coroutines.delay(if (liveCourse != null) 10_000 else 20_000)
+            kotlinx.coroutines.delay(if (liveCourse != null) 10_000 else 6_000)
         }
     }
     // 下课后（不再「上课中 + 已签到」）按钮消失；只有录音中 / 上传中 / 上传失败待重试时保留
@@ -1498,16 +1508,35 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
     val cs = COUITheme.colorScheme
     var currentSession by remember { mutableStateOf<AttendanceSession?>(null) }
 
-    // 获取当前进行中的签到会话（取第一门课的 OPEN 会话）
+    // 获取当前进行中的签到会话：「我的课程」里任一门 state=OPEN 且我还没签的。
+    // ★ 2026-10-27 修「老师开课了学生首页一直不出签到卡」：旧版只在进首页时查一次，之后不再刷新。
+    //   现在首页在前台时每 5 秒轮询一次（切走 tab 本 Composable 离开组合，循环随之停止，不耗电），
+    //   一出现就震动 + 提示；已签到的会话不再显示卡片。
+    val snackbar = LocalKewuSnackbar.current
     LaunchedEffect(Unit) {
-        try {
-            // 2026-10-26：查「我的课程」里任一门正在进行的签到（旧版取全站课程列表的第一门）
-            val courses = CourseRepo.courses.value ?: CourseRepo.refresh()
-            currentSession = courses.orEmpty().firstNotNullOfOrNull { c ->
-                KewuApi.getAttendances(c.id)?.firstOrNull { it.state.equals("OPEN", true) }
+        var lastNotified: String? = null
+        var tick = 0
+        while (true) {
+            try {
+                val courses = (if (tick % 12 == 0) CourseRepo.refresh(force = true) else null) ?: CourseRepo.courses.value ?: CourseRepo.refresh()
+                val me = KewuApi.username.orEmpty()
+                currentSession = courses.orEmpty().firstNotNullOfOrNull { c ->
+                    KewuApi.getAttendances(c.id)?.firstOrNull { it.state.equals("OPEN", true) }
+                }?.takeIf { s -> me.isBlank() || KewuApi.getMyAttendance(s.id, me) == null }
+                currentSession?.let { s ->
+                    if (s.id != lastNotified) {
+                        lastNotified = s.id
+                        haptic(HapticKind.Medium)
+                        snackbar.toast("老师已开始签到，点首页签到卡扫码")
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 网络异常时卡片维持上一次结果，不阻塞首页
             }
-        } catch (e: Exception) {
-            // 网络异常时卡片静默不显示，不阻塞首页
+            tick++
+            kotlinx.coroutines.delay(5_000)
         }
     }
 

@@ -44,7 +44,8 @@ fun loadRecConfig(): AppConfig = AppConfig(
     sis = SisConfig(
         region = env("SIS_REGION") ?: env("OBS_REGION") ?: "cn-north-4",
         projectId = env("SIS_PROJECT_ID") ?: "",
-        endpoint = env("SIS_ENDPOINT") ?: "https://sis.${env("OBS_REGION") ?: "cn-north-4"}.myhuaweicloud.com",
+        // ★ 2026-10-27：SIS 的公网域名是 sis-ext.{region}，旧默认 sis.{region} 根本没有 DNS 记录，转写一律「网络或超时」
+        endpoint = env("SIS_ENDPOINT") ?: "https://sis-ext.${env("SIS_REGION") ?: env("OBS_REGION") ?: "cn-north-4"}.myhuaweicloud.com",
         ak = env("SIS_AK") ?: env("OBS_AK"),
         sk = env("SIS_SK") ?: env("OBS_SK")
     )

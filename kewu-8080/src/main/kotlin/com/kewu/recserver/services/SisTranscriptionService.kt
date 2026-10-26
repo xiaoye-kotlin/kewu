@@ -94,7 +94,8 @@ class SisTranscriptionService(private val cfg: SisConfig) {
                 ?: (el["task_id"] as? JsonPrimitive)?.content
             if (id.isNullOrBlank()) {
                 log.error("SIS 提交任务未返回 job_id，响应前 500 字：${raw.take(500)}")
-                throw TranscriptionException("转写失败，请重试（提交任务未返回任务ID）")
+                // 2026-10-27：Ktor 默认不对 4xx 抛异常，401 / 400 的错误体走到这里——带上 HTTP 状态和错误码
+                throw TranscriptionException("转写失败，请重试（提交任务 HTTP ${resp.status.value}：${raw.take(300)}）")
             }
             log.info("SIS 提交转写任务成功 job_id=$id")
             id
@@ -106,8 +107,9 @@ class SisTranscriptionService(private val cfg: SisConfig) {
         } catch (e: TranscriptionException) {
             throw e // 业务异常原样上抛
         } catch (t: Throwable) {
-            log.error("SIS 提交任务异常：${t.message}")
-            throw TranscriptionException("转写失败，请重试（网络或超时）")
+            log.error("SIS 提交任务异常：$t")
+            // 2026-10-27：把真实原因带出来（旧版一律「网络或超时」，DNS 不存在也看不出来）
+            throw TranscriptionException("转写失败，请重试（提交任务：${t.javaClass.simpleName} ${t.message.orEmpty().take(200)}）")
         }
     }
 
@@ -139,6 +141,11 @@ class SisTranscriptionService(private val cfg: SisConfig) {
                         log.error("SIS 转写任务失败 job_id=$jobId code=$code msg=$msg")
                         throw TranscriptionException("转写失败，请重试（识别任务出错：${code ?: ""} ${msg ?: ""}）".trim())
                     }
+                    null -> {
+                        // 2026-10-27：没有 status 的响应是网关 / 鉴权错误体（4xx 不抛异常），别当成「处理中」空等 10 分钟
+                        log.error("SIS 查询任务 HTTP ${resp.status.value}：${raw.take(500)}")
+                        throw TranscriptionException("转写失败，请重试（查询任务 HTTP ${resp.status.value}：${raw.take(300)}）")
+                    }
                     else -> {
                         log.info("SIS 转写进行中 job_id=$jobId status=$status 第 ${attempt + 1} 次轮询，10s 后重试")
                         delay(10_000)
@@ -151,8 +158,8 @@ class SisTranscriptionService(private val cfg: SisConfig) {
             } catch (e: TranscriptionException) {
                 throw e
             } catch (t: Throwable) {
-                log.error("SIS 查询任务异常：${t.message}")
-                throw TranscriptionException("转写失败，请重试（网络或超时）")
+                log.error("SIS 查询任务异常：$t")
+                throw TranscriptionException("转写失败，请重试（查询任务：${t.javaClass.simpleName} ${t.message.orEmpty().take(200)}）")
             }
         }
         log.error("SIS 转写轮询超时 job_id=$jobId（超过 ${maxAttempts * 10} 秒）")
