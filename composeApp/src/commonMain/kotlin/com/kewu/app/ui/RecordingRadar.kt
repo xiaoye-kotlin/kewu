@@ -126,10 +126,14 @@ fun RecordingRadar(
             Spacer(Modifier.height(14.dp))
             RadarCanvas(devices, bornAt, sweep, pulse, breathe, Modifier.fillMaxWidth().aspectRatio(1f))
             Spacer(Modifier.height(14.dp))
+            // ★ devices 已过滤掉本机：自己是老师且正在录时，「老师」也要算在录（旧版只看别的设备 → 老师自己录永远显示未录）
+            val meRecording = com.kewu.app.RecordingManager.status.collectAsState().value is com.kewu.app.RecordingStatus.Recording
+            val iAmTeacher = com.kewu.app.currentRole() == com.kewu.app.ROLE_TEACHER
+            val teacherOn = (iAmTeacher && meRecording) || devices.any { it.role.equals("teacher", true) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RadarStat("我", "录音中", KewuBlue)
+                RadarStat("我", if (meRecording) "录音中" else "未录", KewuBlue)
                 RadarStat("同学", "${devices.count { !it.role.equals("teacher", true) && !it.type.equals("screen", true) }} 台", KewuGreen)
-                RadarStat("老师", if (devices.any { it.role.equals("teacher", true) }) "在录" else "未录", TeacherYellow)
+                RadarStat("老师", if (teacherOn) "在录" else "未录", TeacherYellow)
             }
         }
     }
