@@ -1,5 +1,9 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.SizeTransform
 import kotlinx.coroutines.isActive
 import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
@@ -114,7 +118,9 @@ import kotlinx.coroutines.launch
 private sealed class ConsoleDrill {
     data object NONE : ConsoleDrill()
     data class SESSIONS(val course: CourseInfo) : ConsoleDrill()
-    data class DETAIL(val attendanceId: String) : ConsoleDrill()
+    data class DETAIL(val attendanceId: String, val back: ConsoleDrill = NONE) : ConsoleDrill()
+    /** 今日签到详情（首页「今日签到率」卡进入，2026-10-26）。 */
+    data object TODAY : ConsoleDrill()
     /** 课前准备：开课前询问是否上传本节资料（2026-10-26），之后才发起签到。 */
     data class PRECLASS(val course: CourseInfo, val durationMinutes: Int) : ConsoleDrill()
 }
@@ -131,7 +137,9 @@ fun TeacherConsolePage(
     val scrollState = rememberScrollState()
 
     var drill by remember { mutableStateOf<ConsoleDrill>(ConsoleDrill.NONE) }
-    BackHandler(enabled = drill != ConsoleDrill.NONE) { drill = ConsoleDrill.NONE }
+    BackHandler(enabled = drill != ConsoleDrill.NONE) {
+        drill = (drill as? ConsoleDrill.DETAIL)?.back ?: ConsoleDrill.NONE
+    }
     LockTabSwipe(drill != ConsoleDrill.NONE)
 
     // 数据
@@ -257,6 +265,7 @@ fun TeacherConsolePage(
                     },
                     onGoToTab = onGoToTab,
                     onPrepare = { c, minutes -> drill = ConsoleDrill.PRECLASS(c, minutes) },
+                    onOpenToday = { drill = ConsoleDrill.TODAY },
                     onStarted = { startedHandler(it) },
                     onClosed = {
                         activeSession = null
@@ -269,6 +278,11 @@ fun TeacherConsolePage(
                     course = d.course,
                     onBack = { drill = ConsoleDrill.NONE },
                     onOpenSession = { drill = ConsoleDrill.DETAIL(it) },
+                )
+                ConsoleDrill.TODAY -> TodayCheckInScreen(
+                    courses = courses,
+                    onBack = { drill = ConsoleDrill.NONE },
+                    onOpenSession = { drill = ConsoleDrill.DETAIL(it, back = ConsoleDrill.TODAY) },
                 )
                 is ConsoleDrill.PRECLASS -> PreClassScreen(
                     course = d.course,
@@ -284,7 +298,7 @@ fun TeacherConsolePage(
                     attendanceId = d.attendanceId,
                     studentId = KewuApi.username ?: "",
                     studentName = teacherName,
-                    onBack = { drill = ConsoleDrill.NONE },
+                    onBack = { drill = d.back },
                 )
             }
         }
@@ -310,6 +324,7 @@ private fun ConsoleHome(
     onOpenNotifications: () -> Unit,
     onGoToTab: (Int) -> Unit,
     onPrepare: (CourseInfo, Int) -> Unit,
+    onOpenToday: () -> Unit,
     onStarted: (AttendanceSession) -> Unit,
     onClosed: () -> Unit,
     onOpenCourse: (CourseInfo) -> Unit,
@@ -347,7 +362,8 @@ private fun ConsoleHome(
                 live = activeSession,
                 loading = !activeLoaded,
                 console = console,
-                onAssistant = { onGoToTab(1) },
+                // 2026-10-26：今日签到率卡 → 今日签到详情（旧版误跳助教页）
+                onAssistant = onOpenToday,
                 onTask = { onGoToTab(2) },
             )
         }
@@ -653,7 +669,18 @@ private fun QuickStartCard(
             Text("发起签到即开课，学生扫码 / 暗号打卡", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(14.dp))
         }
-        if (!expanded) {
+        // 2026-10-26：「开始上课」→ 选课面板改为动画过渡（旧版瞬间跳变）：高度弹簧展开 + 内容淡入，
+        // 收起反向。coui Card 不是玻璃采样者，SizeTransform / fade 都安全。
+        AnimatedContent(
+            targetState = expanded,
+            transitionSpec = {
+                (fadeIn(tween(240, delayMillis = 80)) togetherWith fadeOut(tween(100)))
+                    .using(SizeTransform(clip = true) { _, _ -> spring(dampingRatio = 0.86f, stiffness = 360f) })
+            },
+            label = "quickStartExpand",
+        ) { open ->
+        Column(Modifier.fillMaxWidth()) {
+        if (!open) {
             KewuPrimaryButton(
                 text = "开始上课",
                 onClick = {
@@ -709,6 +736,8 @@ private fun QuickStartCard(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+                }
+        }
         }
         Column(Modifier.padding(horizontal = 18.dp).padding(bottom = 18.dp)) {
             error?.let {

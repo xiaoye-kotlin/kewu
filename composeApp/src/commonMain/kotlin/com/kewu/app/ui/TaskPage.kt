@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.AssignmentInfo
 import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.Animatable
@@ -112,19 +113,8 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
         if (items != null) {
             val courseNames = CourseRepo.courses.value.orEmpty().associate { it.id to it.name }
             val today = todayCn()
-            // 2026-10-26 排序：未到期的按截止时间由近到远（今晚截止的在最前）→ 没设截止的 → 已过期的；
-            // 截止时间相同再按发布先后（先发布的在前）
-            val nowKey = deadlineSortKey(nowCnString()) ?: ""
-            tasks = items.sortedWith(
-                compareBy<AssignmentRepo.Item>(
-                    {
-                        val k = deadlineSortKey(it.assignment.deadline)
-                        when { k == null -> 1; k < nowKey -> 2; else -> 0 }
-                    },
-                    { deadlineSortKey(it.assignment.deadline) ?: "" },
-                    { it.assignment.createdAt },
-                ),
-            ).map { it ->
+            // 排序见 [sortedForDisplay]：未到期按截止由近到远 → 未设截止 → 已截止（放最后）
+            tasks = items.sortedForDisplay { it.assignment }.map { it ->
                 val a = it.assignment
                 val sub = it.mine
                 val (tag, warn) = when {
@@ -439,6 +429,28 @@ private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: (
                 if (task.tagIsWarning) KewuTag(tag, cs.errorContainer, cs.onErrorContainer)
                 else KewuTag(tag, KewuGreen.copy(alpha = 0.16f), KewuGreen)
             }
+        }
+    }
+}
+
+/**
+ * 作业展示顺序（学生任务页 / 教师作业列表共用，2026-10-26 用户口径）：
+ *   1. 未截止的在最前，按截止时间由近到远（今晚截止的排第一）；截止时间相同，**新布置的在前**；
+ *   2. 没设截止时间的，新布置的在前；
+ *   3. 已截止的放最后，刚截止的在前。
+ */
+internal fun <T> List<T>.sortedForDisplay(assignmentOf: (T) -> AssignmentInfo): List<T> {
+    val now = deadlineSortKey(nowCnString()) ?: ""
+    fun group(k: String?) = when { k == null -> 1; k < now -> 2; else -> 0 }
+    return sortedWith { x, y ->
+        val ax = assignmentOf(x); val ay = assignmentOf(y)
+        val kx = deadlineSortKey(ax.deadline); val ky = deadlineSortKey(ay.deadline)
+        val gx = group(kx); val gy = group(ky)
+        when {
+            gx != gy -> gx.compareTo(gy)
+            gx == 0 && kx != ky -> kx!!.compareTo(ky!!)            // 截止近的在前
+            gx == 2 && kx != ky -> ky!!.compareTo(kx!!)            // 刚截止的在前
+            else -> ay.createdAt.compareTo(ax.createdAt)            // 新布置的在前
         }
     }
 }

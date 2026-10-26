@@ -73,6 +73,17 @@ object AiAgent {
 
     // ── 解析 ──
 
+    /** 流式输出过程中可直接上屏的部分：动作指令块（及其未写完的前缀）不显示。 */
+    fun visiblePart(raw: String): String {
+        val i = raw.indexOf(MARK_OPEN)
+        if (i >= 0) return raw.substring(0, i).trimEnd()
+        // 末尾可能是「[KEWU_AC」这种还没写完的标记前缀
+        for (k in MARK_OPEN.length - 1 downTo 1) {
+            if (raw.endsWith(MARK_OPEN.substring(0, k))) return raw.dropLast(k).trimEnd()
+        }
+        return raw
+    }
+
     fun parse(raw: String): Parsed {
         val s = raw.indexOf(MARK_OPEN)
         val e = raw.indexOf(MARK_CLOSE)

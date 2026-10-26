@@ -153,6 +153,7 @@ object RecordingManager {
         val cur = _status.value
         if (cur !is RecordingStatus.Recording) return
         ticker?.cancel()
+        heartbeat("stopped")
         scope.launch {
             _status.value = RecordingStatus.Uploading(cur.elapsedSec)
             val path = audio.stopRecording()
@@ -168,6 +169,7 @@ object RecordingManager {
     fun cancelIfRecording() {
         if (_status.value !is RecordingStatus.Recording && !starting) return
         ticker?.cancel()
+        heartbeat("stopped")
         scope.launch {
             audio.stopRecording()?.let { platformDeleteFile(it) }
             _status.value = RecordingStatus.Idle
@@ -286,10 +288,24 @@ object RecordingManager {
         }
     } catch (_: Exception) { emptyList() }
 
+    /** 当前录音所属的课堂会话 id（雷达按它查同堂设备）；没在录为 null。 */
+    fun currentSessionId(): String? = classId?.takeIf { isRecording }?.let { KewuApi.classSessionId(it, todayCn()) }
+
+    private fun heartbeat(status: String) {
+        val cid = classId ?: return
+        val sid = KewuApi.classSessionId(cid, todayCn())
+        // 心跳走独立协程，网络慢不拖住计时
+        netScope.launch { KewuApi.sendRecordingHeartbeat(sid, status) }
+    }
+    private val netScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     private fun startTicker() {
         ticker?.cancel()
         ticker = scope.launch {
             while (_status.value is RecordingStatus.Recording) {
+                // 每 10 秒一次设备心跳（第 0 秒先报一次），供课堂录音雷达显示「谁在录」
+                val cur0 = _status.value
+                if (cur0 is RecordingStatus.Recording && cur0.elapsedSec % 10 == 0) heartbeat("recording")
                 delay(1000)
                 val cur = _status.value
                 if (cur is RecordingStatus.Recording) {

@@ -437,7 +437,7 @@ private fun QuestionEditItem(
             )
             TextButton(
                 text = "删除", onClick = onRemove,
-                colors = ButtonDefaults.textButtonColorsPrimary(color = cs.error, textColor = cs.onErrorContainer),
+                colors = ButtonDefaults.textButtonColorsPrimary(color = cs.error.copy(alpha = 0.12f), textColor = cs.error),
             )
         }
         Spacer(Modifier.height(10.dp))

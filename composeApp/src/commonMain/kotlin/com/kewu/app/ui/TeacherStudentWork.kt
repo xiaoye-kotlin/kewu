@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -173,7 +174,8 @@ internal fun StudentWorkScreen(
     var all by remember { mutableStateOf<List<SubmissionInfo>?>(null) }
     var loading by remember { mutableStateOf(true) }
 
-    LaunchedEffect(assignmentId, submissionId) {
+    val reviewSaved by ReviewEvents.saved.collectAsState()
+    LaunchedEffect(assignmentId, submissionId, reviewSaved) {
         val aD = async { KewuApi.getAssignment(assignmentId) }
         val sD = async { KewuApi.getSubmissions(assignmentId) }
         assignment = aD.await()

@@ -58,6 +58,57 @@ class MaasAiService : AiService {
         )
     }
 
+    /**
+     * 流式对话（2026-10-26，App 打字机效果）：以 MaaS 的 `stream=true` SSE 拉取，只把最终回答的
+     * `delta.content` 逐段回调给 [onDelta]（思维链 reasoning_content 不外发）。成功结束返回 null，失败返回原因。
+     */
+    suspend fun stream(messages: List<Pair<String, String>>, maxTokens: Int, onDelta: suspend (String) -> Unit): String? {
+        if (apiKey.isBlank()) return "AI 未配置"
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("model", kotlinx.serialization.json.JsonPrimitive(model))
+            put("max_tokens", kotlinx.serialization.json.JsonPrimitive(maxTokens))
+            put("stream", kotlinx.serialization.json.JsonPrimitive(true))
+            put("messages", kotlinx.serialization.json.JsonArray(messages.map { (role, content) ->
+                kotlinx.serialization.json.buildJsonObject {
+                    put("role", kotlinx.serialization.json.JsonPrimitive(role))
+                    put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                }
+            }))
+        }.toString()
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .timeout(Duration.ofSeconds(180))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .header("Authorization", "Bearer $apiKey")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build()
+                val resp = client.send(request, HttpResponse.BodyHandlers.ofLines())
+                if (resp.statusCode() !in 200..299) {
+                    return@withContext "HTTP ${resp.statusCode()}"
+                }
+                val it = resp.body().iterator()
+                while (it.hasNext()) {
+                    val line = it.next().trim()
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    val delta = try {
+                        Json.parseToJsonElement(data).jsonObject["choices"]?.jsonArray?.firstOrNull()
+                            ?.jsonObject?.get("delta")?.jsonObject?.get("content")
+                            ?.let { c -> if (c is kotlinx.serialization.json.JsonNull) null else c.jsonPrimitive.content }
+                    } catch (_: Throwable) { null }
+                    if (!delta.isNullOrEmpty()) onDelta(delta)
+                }
+                null
+            } catch (t: Throwable) {
+                t.message ?: t.javaClass.simpleName
+            }
+        }
+    }
+
     private suspend fun chat(system: String, user: String, maxTokens: Int): String {
         if (apiKey.isBlank()) return "（AI 未配置：缺少环境变量 MAAS_API_KEY）"
         val body = Json.encodeToString(

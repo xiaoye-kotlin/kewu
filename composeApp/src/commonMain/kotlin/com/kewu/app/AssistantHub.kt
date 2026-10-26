@@ -51,6 +51,37 @@ object AssistantHub {
     /** 正在等 AI 回复的会话 key 集合（页面据此显示「小悟正在输入中…」，切走再回来也能接上）。 */
     val pending: StateFlow<Set<String>> = _pending.asStateFlow()
 
+    private val _streaming = MutableStateFlow<Map<String, String>>(emptyMap())
+
+    /** 正在流式输出的回答（会话 key → 已到达的可见文本；「""」= 已发出请求、思考中还没吐字）。 */
+    val streaming: StateFlow<Map<String, String>> = _streaming.asStateFlow()
+
+    /**
+     * 流式版 [ask]（2026-10-26 打字机效果）：[block] 拿到 emit，每到一段回答就 emit（累积文本由这里维护），
+     * 页面订阅 [streaming] 实时显示；结束后照常 [deliver] 落盘并清掉流式草稿。
+     */
+    fun askStream(key: String, block: suspend (emit: (String) -> Unit) -> Reply) {
+        _pending.value = _pending.value + key
+        _streaming.value = _streaming.value + (key to "")
+        val acc = StringBuilder()
+        scope.launch {
+            val reply = try {
+                block { piece ->
+                    acc.append(piece)
+                    _streaming.value = _streaming.value + (key to AiAgent.visiblePart(acc.toString()))
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                Reply("小悟暂时连不上 AI 服务，请稍后再试～")
+            } finally {
+                _pending.value = _pending.value - key
+            }
+            deliver(key, reply.text, reply.payload)
+            _streaming.value = _streaming.value - key
+        }
+    }
+
     /** 一条到达的助手消息：会话 key + 已落盘条目 + 页面自定义的富内容（教师端气泡块等，可空）。 */
     data class Incoming(val key: String, val entry: ChatHistory.Entry, val payload: Any? = null)
 

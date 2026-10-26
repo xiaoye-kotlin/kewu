@@ -197,8 +197,10 @@ fun AttachmentPicker(
                                 text = "移除",
                                 enabled = enabled,
                                 onClick = { haptic(HapticKind.Tick); attachments.remove(a) },
+                                // 2026-10-26：旧版红底 + onErrorContainer（深红）文字 → 字看不见；改为浅红底 + 红字（coui 危险次按钮观感）
                                 colors = ButtonDefaults.textButtonColorsPrimary(
-                                    color = cs.error, textColor = cs.onErrorContainer,
+                                    color = cs.error.copy(alpha = 0.12f), textColor = cs.error,
+                                    disabledColor = cs.error.copy(alpha = 0.06f), disabledTextColor = cs.error.copy(alpha = 0.4f),
                                 ),
                             )
                         },

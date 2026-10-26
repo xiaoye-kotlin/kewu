@@ -13,6 +13,10 @@ import kotlinx.serialization.json.jsonPrimitive
 // 全程高容错：Redis 挂、sessionId 空、某条数据脏，都不会让接口崩，统一降级成空雷达。
 class RecordingDeviceService(private val redis: RedisService) {
 
+    private companion object {
+        const val STALE_MS = 45_000L // App 每 10 秒一次心跳，连续丢 4 次视为离线
+    }
+
     // 对外唯一入口：拿一份设备监控报告。任何异常路径都返回"空雷达"（totalDevices=0, devices=[]）。
     suspend fun getDeviceReport(sessionId: String): RecordingDevicesResponse {
         val devices = readDevices(sessionId)
@@ -25,8 +29,13 @@ class RecordingDeviceService(private val redis: RedisService) {
         val raw = redis.getDeviceStatuses(sessionId)
         if (raw.isEmpty()) return emptyList()
         val out = ArrayList<DeviceStatus>(raw.size)
+        val now = System.currentTimeMillis()
         for ((fieldId, json) in raw) {
-            out.add(parseOne(fieldId, json))
+            val d = parseOne(fieldId, json)
+            // 2026-10-26：雷达只画「正在录」的设备——主动停止（status=stopped）或 45 秒没心跳（杀进程 / 断网）的不算
+            if (d.status.equals("stopped", ignoreCase = true)) continue
+            if (d.lastHeartbeat != null && now - d.lastHeartbeat > STALE_MS) continue
+            out.add(d)
         }
         return out
     }
@@ -41,7 +50,8 @@ class RecordingDeviceService(private val redis: RedisService) {
             val type = obj["type"]?.jsonPrimitive?.content ?: ""
             val status = obj["status"]?.jsonPrimitive?.content ?: ""
             val qualityScore = obj["qualityScore"]?.jsonPrimitive?.intOrNull ?: 0
-            DeviceStatus(deviceId = deviceId, type = type, status = status, qualityScore = qualityScore)
+            val last = obj["lastHeartbeat"]?.jsonPrimitive?.content?.toLongOrNull()
+            DeviceStatus(deviceId = deviceId, type = type, status = status, qualityScore = qualityScore, lastHeartbeat = last)
         } catch (t: Throwable) {
             // 这一条坏了不影响整体，deviceId 兜底用哈希 field，其他给空串/0
             DeviceStatus(deviceId = safeId, type = "", status = "", qualityScore = 0)

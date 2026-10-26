@@ -327,7 +327,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     // 原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳到上面的对话）。
     // messages 是普通 list，靠读 msgVersion 触发重组；key 只取最后一条 id —— 顶部加载更早历史不触发滚底
     val lastMsgId = msgVersion.let { messages.lastOrNull()?.id ?: 0L }
-    ChatAutoScroll(listState, lastMsgId)
+    val streamText = AssistantHub.streaming.collectAsState().value[ChatHistory.KEY_TEACHER]
+    ChatAutoScroll(listState, lastMsgId to (streamText?.length?.div(40) ?: -1))
 
     // ── 真实 AI 问答（2026-10-24 接入）：AiClient 大模型 + 本页已聚合的学情上下文 ──
 
@@ -365,9 +366,14 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             "不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），也不要复述问题。\n\n当前班级学情数据：\n"
 
     /** 真实 AI 回答：成功返回文本块列表；失败返回 null（调用方回退本地规则）。 */
-    suspend fun aiAnswer(q: String): List<TaBlock>? {
-        val reply = AiClient.chat(
-            aiSystemPrompt + buildAiContext() + "\n\n" + AiAgent.teacherCapability(), q,
+    suspend fun aiAnswer(q: String, emit: (String) -> Unit = {}): List<TaBlock>? {
+        // 2026-10-26：流式——边生成边上屏
+        val reply = AiClient.chatStream(
+            listOf(
+                AiClient.Msg("system", aiSystemPrompt + buildAiContext() + "\n\n" + AiAgent.teacherCapability()),
+                AiClient.Msg("user", q),
+            ),
+            onDelta = emit,
         ) ?: return null
         val parsed = AiAgent.parse(reply)
         val blocks = parsed.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }.toMutableList()
@@ -443,9 +449,9 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         push(TaMsg(true, listOf(TaBlock.Text(q))), persist = true)
         input = ""
         haptic(HapticKind.Light)
-        AssistantHub.ask(ChatHistory.KEY_TEACHER) {
-            // 优先真实大模型；失败回退本地规则（学情数据仍有价值），并明确告知用户
-            val blocks = aiAnswer(q) ?: buildList {
+        AssistantHub.askStream(ChatHistory.KEY_TEACHER) { emit ->
+            // 优先真实大模型（流式）；失败回退本地规则（学情数据仍有价值），并明确告知用户
+            val blocks = aiAnswer(q, emit) ?: buildList {
                 add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
                 addAll(answer(q))
             }
@@ -539,6 +545,19 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                         TaBubble(pageBackdrop, msg)
                     }
                     Spacer(Modifier.height(10.dp))
+                }
+                // 流式回答草稿（思考中占位 → 逐段增长；结束后由正式消息替换）
+                if (streamText != null) {
+                    item(key = "ai-streaming") {
+                        Box(Modifier.animateItem()) {
+                            TaBubble(
+                                pageBackdrop,
+                                TaMsg(false, streamText.ifEmpty { "小悟正在思考…" }.lines()
+                                    .filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }),
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                    }
                 }
                 if (!dataReady && snapshot.isEmpty()) {
                     item {

@@ -266,7 +266,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     // 新消息平滑滑到底；键盘弹起 / 收起、人格区展开等视口变化时保持贴底（不再跳到上面的对话）。
     // 2026-10-26 改用 ChatAutoScroll（原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳）
-    ChatAutoScroll(listState, messages.lastOrNull()?.id ?: 0L)
+    // 流式回答每多出一截就跟随到底（按 40 字分桶，避免每个字都触发一次滚动动画）
+    val streamText = AssistantHub.streaming.collectAsState().value[ChatHistory.KEY_STUDENT]
+    ChatAutoScroll(listState, (messages.lastOrNull()?.id ?: 0L) to (streamText?.length?.div(40) ?: -1))
 
     // 录音计时（后端接入前 UI 演示用）
     LaunchedEffect(isRecording) {
@@ -339,8 +341,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 append("\n\n")
                 append(AiAgent.studentCapability())
             }
-            AssistantHub.ask(ChatHistory.KEY_STUDENT) {
-                val reply = AiClient.chat(listOf(AiClient.Msg("system", system)) + history)
+            // 2026-10-26：流式输出——回答边生成边上屏（打字机效果），不再干等整段
+            AssistantHub.askStream(ChatHistory.KEY_STUDENT) { emit ->
+                val reply = AiClient.chatStream(listOf(AiClient.Msg("system", system)) + history, onDelta = emit)
                 if (reply == null) {
                     // 直连 / 代理 / 8081 中转全部失败：如实告知，不再用随机占位语冒充回答
                     AssistantHub.Reply("小悟暂时连不上 AI 服务（网络不通或服务繁忙），请稍后再试～")
@@ -575,6 +578,17 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                     haptic(HapticKind.Medium)
                                 }
                             }
+                        }
+                    }
+                }
+                // 流式回答草稿：思考中显示占位，吐字后逐段增长；结束后由正式消息替换
+                if (streamText != null) {
+                    item(key = "ai-streaming") {
+                        Box(Modifier.animateItem()) {
+                            AiBubble(
+                                ChatMsg(streamText.ifEmpty { "小悟正在思考…" }, isUser = false, id = -1L, ts = nowMs()),
+                                pageBackdrop, reportBounds = false, onBounds = {},
+                            ) {}
                         }
                     }
                 }

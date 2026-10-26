@@ -1,5 +1,8 @@
 package com.kewu.app
 
+import io.ktor.utils.io.readUTF8Line
+import io.ktor.client.statement.bodyAsChannel
+import io.ktor.client.request.preparePost
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.header
@@ -119,6 +122,104 @@ object AiClient {
             if (r != null) return r
         }
         return relayOnce(messages, maxTokens)
+    }
+
+    /** 后端流式中转（2026-10-26）：SSE，`data: {"d":"片段"}` … `data: [DONE]`，失败 `data: {"error":"…"}`。 */
+    private const val STREAM_RELAY_URL = "http://47.99.42.168:8080/api/ai/stream"
+
+    /**
+     * 流式对话（打字机效果，2026-10-26）：回答一段段到达就回调 [onDelta]（只含最终回答，不含思维链），
+     * 返回完整回答；全部失败返回 null。顺序：直连 / 局域网代理（stream=true）→ 后端流式中转 → 非流式兜底（一次性回调全文）。
+     * ★ 已经吐出过内容的通道中途断了不再换下一个（避免重复输出），直接返回已收到的部分。
+     */
+    suspend fun chatStream(messages: List<Msg>, maxTokens: Int = 4096, onDelta: (String) -> Unit): String? {
+        val endpoints = endpointOverride?.let { listOf(it) } ?: ENDPOINTS
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        for (ep in endpoints) {
+            if ((unreachableUntil[ep] ?: 0L) > now) continue
+            val body = buildJsonObject {
+                put("model", MODEL)
+                put("stream", true)
+                put("max_tokens", maxTokens)
+                put("messages", msgsJson(messages))
+            }
+            val r = streamOnce(ep, body.toString(), auth = true, onDelta = onDelta)
+            if (r != null) return r
+        }
+        val relayBody = buildJsonObject {
+            put("maxTokens", maxTokens)
+            put("messages", msgsJson(messages))
+        }
+        streamOnce(STREAM_RELAY_URL, relayBody.toString(), auth = false, onDelta = onDelta)?.let { return it }
+        // 最后兜底：非流式（老后端 / 中转不可用时仍能回答，只是一次性出现）
+        return chat(messages, maxTokens)?.also(onDelta)
+    }
+
+    private fun msgsJson(messages: List<Msg>) = buildJsonArray {
+        messages.forEach { m ->
+            add(buildJsonObject {
+                put("role", m.role)
+                put("content", m.content)
+            })
+        }
+    }
+
+    /**
+     * 读一路 SSE：兼容 OpenAI 格式（choices[0].delta.content）与后端中转格式（{"d":…}）。
+     * 没吐出任何内容就失败 → 返回 null（换下一个通道）；吐过内容 → 返回已累积文本。
+     */
+    private suspend fun streamOnce(url: String, body: String, auth: Boolean, onDelta: (String) -> Unit): String? {
+        val acc = StringBuilder()
+        return try {
+            client.preparePost(url) {
+                if (auth) header(HttpHeaders.Authorization, "Bearer $apiKey")
+                header(HttpHeaders.Accept, "text/event-stream")
+                contentType(ContentType.Application.Json)
+                timeout {
+                    requestTimeoutMillis = 180_000
+                    connectTimeoutMillis = 8_000
+                    socketTimeoutMillis = 90_000
+                }
+                setBody(body)
+            }.execute { resp ->
+                if (resp.status.value !in 200..299) {
+                    lastError = "stream HTTP ${resp.status.value} @ $url"
+                    return@execute
+                }
+                val ch = resp.bodyAsChannel()
+                while (true) {
+                    val line = ch.readUTF8Line() ?: break
+                    val t = line.trim()
+                    if (!t.startsWith("data:")) continue
+                    val data = t.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    val o = runCatching { json.parseToJsonElement(data) as? JsonObject }.getOrNull() ?: continue
+                    if (o["error"] != null) {
+                        lastError = "stream error @ $url: ${o["error"]}"
+                        break
+                    }
+                    val piece = (o["d"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+                        ?: (o["choices"] as? JsonArray)?.firstOrNull()?.let { c ->
+                            ((c as? JsonObject)?.get("delta") as? JsonObject)?.get("content")
+                                ?.let { if (it is kotlinx.serialization.json.JsonNull) null else it.jsonPrimitive.content }
+                        }
+                    if (!piece.isNullOrEmpty()) {
+                        acc.append(piece)
+                        onDelta(piece)
+                    }
+                }
+            }
+            acc.toString().takeIf { it.isNotBlank() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logErr("stream", e)
+            val name = e::class.simpleName.orEmpty()
+            if (acc.isEmpty() && (name.contains("Connect") || name.contains("UnknownHost") || name.contains("NoRouteToHost"))) {
+                unreachableUntil[url] = kotlin.time.Clock.System.now().toEpochMilliseconds() + 5 * 60_000L
+            }
+            acc.toString().takeIf { it.isNotBlank() }
+        }
     }
 
     /** 接入点 → 「连不上」标记的失效时刻（只记网络层失败，HTTP 错误 / 空内容不算）。 */

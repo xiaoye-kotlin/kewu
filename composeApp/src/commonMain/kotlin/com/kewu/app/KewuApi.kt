@@ -1,5 +1,7 @@
 package com.kewu.app
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -86,6 +88,8 @@ data class SubmissionInfo(
     /** 作答用时（秒，2026-10-26 起前端计时随提交上报；老提交为 null）。 */
     val durationSec: Int? = null,
 )
+/** 录音雷达里的一台设备。 */
+data class RecordingDevice(val deviceId: String, val type: String, val status: String, val qualityScore: Int)
 data class AiReason(val item: String, val detail: String, val score: Double)
 data class AiSuggestion(
     val suggestedScore: Double, val confidence: Double,
@@ -1212,6 +1216,38 @@ object KewuApi {
      * [date] 形如 `2026-10-23`。
      */
     fun classSessionId(courseId: String, date: String): String = "$courseId-${date.replace("-", "")}"
+
+    /**
+     * 录音设备心跳（2026-10-26 课堂录音雷达）：录音中每 10 秒报一次 status=recording，停止时报 stopped。
+     * 后端只画 45 秒内有心跳、且不是 stopped 的设备。时间戳由服务端打（不带客户端时间，避免手机时钟偏差）。
+     */
+    suspend fun sendRecordingHeartbeat(sessionId: String, status: String, qualityScore: Int = 80): Boolean = try {
+        val resp = client.post("$OBS_URL/api/teacher/recording/devices/heartbeat") {
+            contentType(ContentType.Application.Json)
+            setBody(buildJsonObject {
+                put("sessionId", sessionId)
+                put("deviceId", platformDeviceId())
+                put("type", "phone")
+                put("status", status)
+                put("qualityScore", qualityScore)
+            }.toString())
+        }
+        resp.status.value in 200..299
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { false }
+
+    /** 同一课堂会话里正在录音的设备（雷达点）。失败返回 null。 */
+    suspend fun getRecordingDevices(sessionId: String): List<RecordingDevice>? = try {
+        val resp = client.get(queryUrl("$OBS_URL/api/teacher/recording/devices", "sessionId", sessionId))
+        if (resp.status.value !in 200..299) null
+        else {
+            val o = json.parseToJsonElement(resp.bodyAsText()) as? JsonObject
+            (o?.get("devices") as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map {
+                RecordingDevice(it["deviceId"].str(), it["type"].str(), it["status"].str(), it["qualityScore"].int())
+            }
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /** 查课堂会话（GET，无会话 404 返回 null）。 */
     suspend fun getSession(sessionId: String): SessionInfo? = try {

@@ -1,5 +1,8 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.SizeTransform
 import com.kewu.app.LockTabSwipe
 import androidx.compose.runtime.rememberCoroutineScope
 import com.kewu.app.ROLE_TEACHER
@@ -677,7 +680,27 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                             drill = if (currentRole() == ROLE_TEACHER) ClassroomDrill.ATTENDANCE else ClassroomDrill.SCAN
                         }
                         RecordingOverlay(backdrop = pageBackdrop, courseInfos = courseInfos)
-                        courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
+                        // 2026-10-26：课堂录音中 → 课程卡区域换成「课堂录音雷达」（同堂正在录音的设备分布在圆心四周）。
+                        // 切换只用 slide（placement 位移）+ 不裁剪的尺寸过渡：玻璃采样者祖先不加 alpha / clip 层。
+                        val recSt by RecordingManager.status.collectAsState()
+                        val recSid = if (recSt is RecordingStatus.Recording) RecordingManager.currentSessionId() else null
+                        AnimatedContent(
+                            targetState = recSid,
+                            transitionSpec = {
+                                (slideInVertically(spring(dampingRatio = 0.82f, stiffness = 360f)) { it / 5 } togetherWith
+                                    slideOutVertically(tween(160)) { it / 8 })
+                                    .using(SizeTransform(clip = false) { _, _ -> spring(dampingRatio = 0.86f, stiffness = 360f) })
+                            },
+                            label = "radarSwap",
+                        ) { sid ->
+                            Column(Modifier.fillMaxWidth()) {
+                                if (sid != null) {
+                                    RecordingRadar(pageBackdrop, sid, Modifier.padding(bottom = 12.dp))
+                                } else {
+                                    courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
+                                }
+                            }
+                        }
                         // 「查看全部课程」直接进课程列表（旧版只切换一个永远为空的历史列表，点了没效果）
                         MoreBar(showAll, Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 220L), 24f)) {
                             drill = ClassroomDrill.COURSES

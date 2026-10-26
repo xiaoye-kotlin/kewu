@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.runtime.collectAsState
 import androidx.compose.foundation.horizontalScroll
 import kotlinx.coroutines.Job
 import com.kewu.app.LockTabSwipe
@@ -106,6 +107,11 @@ import kotlinx.coroutines.async
  * 作业 tab 下钻。[DETAIL] / [REVIEW] 带 `back`：从哪一层进来就回哪一层
  * （总览 → 批阅 → 返回总览；作业详情 → 批阅 → 返回详情），BackHandler 与顶栏返回同一口径。
  */
+/** 批阅保存完成的事件计数：批阅页立刻退出后，后台请求落库时 +1，作业详情 / 学生作业页据此再刷新一次。 */
+internal object ReviewEvents {
+    val saved = kotlinx.coroutines.flow.MutableStateFlow(0)
+}
+
 private sealed class TaskDrill {
     data object NONE : TaskDrill()
     data object PENDING : TaskDrill()
@@ -237,6 +243,8 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                 )
                 is TaskDrill.REVIEW -> ReviewSubmissionScreen(
                     submissionId = d.submissionId,
+                    outerScope = scope,
+                    onSaved = { ReviewEvents.saved.value++; reload() },
                     // 批阅完回上一层时刷新一次待批阅（刚批掉的那份应从总览/顶部卡消失）
                     onBack = { drill = d.back; reload() },
                 )
@@ -418,7 +426,7 @@ private fun TeacherAssignmentList(
             }
             assignments == null -> KewuLoading()
             assignments.isEmpty() -> KewuEmpty("暂无作业，点上方「发布新作业」开始")
-            else -> assignments.forEachIndexed { i, a ->
+            else -> assignments.sortedForDisplay { it }.forEachIndexed { i, a ->
                 val p = rememberEnterProgress(3 + i, stepMs = 50L)
                 TeacherAssignmentRow(a, courseNames[a.courseId] ?: a.courseId, p) { onOpen(a.id) }
             }
@@ -695,7 +703,8 @@ private fun TeacherAssignmentDetail(
             loading = false
         }
     }
-    LaunchedEffect(assignmentId) { reload() }
+    val reviewSaved by ReviewEvents.saved.collectAsState()
+    LaunchedEffect(assignmentId, reviewSaved) { reload() }
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
@@ -936,15 +945,18 @@ private fun composeReviewComment(a: AiSuggestion, totalScore: Int): String = bui
     }
     if (a.missedKnowledgePoints.isNotEmpty()) {
         append("建议重点复习「${a.missedKnowledgePoints.first()}」，做错的题先自己重做一遍再对照答案。")
-        appendLine()
     }
-    append("（本评语由 AI 初评生成，老师可修改后提交）")
-}
+    // 2026-10-26 用户要求：评语末尾不再追加「本评语由 AI 初评生成」——发给学生的是老师的评语
+}.trimEnd()
 
 @Composable
 private fun ReviewSubmissionScreen(
     submissionId: String,
     onBack: () -> Unit,
+    /** 页面级协程作用域：批阅请求在这里跑，本页立刻退出也不会被取消。 */
+    outerScope: kotlinx.coroutines.CoroutineScope,
+    /** 批阅请求结束后（成功或失败）刷新列表 / 待批阅。 */
+    onSaved: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -1019,23 +1031,22 @@ private fun ReviewSubmissionScreen(
         // 传了按题给分，服务端自动按题求和当总分（文档：可不传 score）；这里仍带上求和值，兼容性更稳
         val score = if (qs.isNotEmpty()) qs.sumOf { it.second }.toDouble() else (manual ?: 0.0)
         submitting = true
-        scope.launch {
+        // ★ 2026-10-26 用户要求「点完立刻退出、及时反馈」：校验通过就立即返回上一层并提示，
+        //   请求放到页面级作用域里跑（本页离开组合也不会被取消）；万一失败再提示老师重新批阅。
+        haptic(HapticKind.Light)
+        val c = comment.trim()
+        outerScope.launch {
+            snackbar.toast(if (action == "return") "已打回，学生将收到修改意见" else "批阅完成")
+        }
+        outerScope.launch {
             val err = KewuApi.reviewSubmission(
-                submissionId, score, comment.trim(), reviewer, action,
+                submissionId, score, c, reviewer, action,
                 questionScores = qs.ifEmpty { null },
             )
-            submitting = false
-            if (err == null) {
-                // 结果走全局 coui Snackbar（原内联结果文字行）
-                snackbar.toast(if (action == "return") "已打回" else "批阅完成")
-                // 2026-10-25：批完自动返回上一层（作业详情 / 待批阅 / 作业列表），
-                // onBack 内部会 reload() 刷新待批阅，刚批掉的那份从队列里消失。
-                // 失败则留在当前页，方便老师改完重试。
-                onBack()
-            } else {
-                snackbar.toast(err)
-            }
+            if (err != null) snackbar.toast("批阅保存失败：$err，请重新批阅")
+            onSaved()
         }
+        onBack()
     }
 
     Box(Modifier.fillMaxSize()) {
