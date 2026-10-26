@@ -48,6 +48,22 @@ class MaasAiService : AiService {
         )
     }
 
+    /**
+     * 课堂纪要（2026-10-26，SIS 转写之后调用）：给小悟辅导学生用的结构化纪要。
+     * 转写稿可能很长（45 分钟约 1 万字），截取前 12000 字。
+     */
+    suspend fun classNotes(courseName: String, transcript: String): String {
+        if (transcript.isBlank()) return ""
+        return chat(
+            system = "你是课悟的课堂纪要助手。下面是一节「$courseName」课的语音转写稿（可能有识别错字，请按上下文纠正）。" +
+                "请输出结构化课堂纪要，用中文、不用 Markdown 符号，按以下小标题分段：" +
+                "【本节主题】一句话；【知识点】3-8 条，每条一句话讲清概念或结论；【例题与方法】老师讲过的例题、解题方法；" +
+                "【重点难点】老师强调的易错点；【课后安排】作业、预习、考试提醒（没有就写无）。不要编造转写稿里没有的内容。",
+            user = transcript.take(12000),
+            maxTokens = 2048
+        )
+    }
+
     override suspend fun answer(question: String, context: String, maxTokens: Int): String {
         if (question.isBlank()) return "（问题为空）"
         return chat(

@@ -76,6 +76,9 @@ fun Application.configureRouting() {
             runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }.onFailure { println("CLASS-END-ERROR: $it") }
             kotlinx.coroutines.delay(120_000)
             runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }
+            // 第二轮择优（晚到的上传已算进去）后，用主录音走 SIS 转写 + AI 课堂纪要
+            val sid = st.courseId + "-" + (st.startedAt?.take(10) ?: java.time.LocalDate.now().toString()).replace("-", "")
+            runCatching { classEnd.transcribe(sid) }.onFailure { println("ASR-ERROR: $it") }
         }
     }
     com.kewu.recserver.ClassEndService.onUpload = { sid ->
@@ -114,6 +117,12 @@ fun Application.configureRouting() {
         // 班级通讯录 / 移出学生（2026-10-26）
         rosterRoutes()
         // 某门课历次下课选出的最佳录音（转写状态 PENDING_ASR / DONE…）
+        // 手动重新转写（转写失败 / 后来补了更好的录音时用）：POST /api/class-recordings/{sessionId}/transcribe
+        post("/api/class-recordings/{sessionId}/transcribe") {
+            val sid = call.parameters["sessionId"]!!
+            bg.launch { runCatching { classEnd.transcribe(sid, force = true) } }
+            call.respond(com.kewu.models.ApiResponse(0, "已开始转写，约几分钟后完成", true))
+        }
         get("/api/courses/{courseId}/class-recordings") {
             call.respond(com.kewu.models.ApiResponse(0, "ok", classEnd.list(call.parameters["courseId"]!!)))
         }

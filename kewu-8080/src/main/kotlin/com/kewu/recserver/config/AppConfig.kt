@@ -5,7 +5,8 @@ data class AppConfig(
     val storageMode: String,
     val localDir: String,
     val obs: ObsConfig,
-    val redis: RedisConfig
+    val redis: RedisConfig,
+    val sis: SisConfig
 )
 
 data class ObsConfig(
@@ -38,5 +39,13 @@ fun loadRecConfig(): AppConfig = AppConfig(
         host = env("KEWU_REDIS_HOST") ?: "127.0.0.1",
         port = env("KEWU_REDIS_PORT")?.toIntOrNull() ?: 6379,
         password = env("REDIS_PASSWORD")
+    ),
+    // 华为云 SIS 录音文件识别（2026-10-26 队友交付）：AK/SK 默认复用 OBS 那对；SIS_PROJECT_ID 必填（kewu.env）
+    sis = SisConfig(
+        region = env("SIS_REGION") ?: env("OBS_REGION") ?: "cn-north-4",
+        projectId = env("SIS_PROJECT_ID") ?: "",
+        endpoint = env("SIS_ENDPOINT") ?: "https://sis.${env("OBS_REGION") ?: "cn-north-4"}.myhuaweicloud.com",
+        ak = env("SIS_AK") ?: env("OBS_AK"),
+        sk = env("SIS_SK") ?: env("OBS_SK")
     )
 )

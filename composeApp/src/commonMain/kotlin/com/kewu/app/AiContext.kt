@@ -47,6 +47,10 @@ object AiContext {
                 }
             }
         }.awaitAll().flatten() } ?: listOf("（签到信息加载超时）")
+        // 课堂内容：下课后服务器 SIS 转写 + AI 纪要（每门课最近 2 节），小悟据此知道老师讲了什么
+        val classNotes = withTimeoutOrNull(4_000) {
+            courses.map { c -> async { c.name to KewuApi.getClassNotes(c.id, 2) } }.awaitAll()
+        }.orEmpty().filter { it.second.isNotEmpty() }
         val profile = ProfileStore.load(uname)
         buildString {
             appendLine("【当前时间】${nowCn()}")
@@ -72,6 +76,11 @@ object AiContext {
                     "，状态：$st")
             }
             appendLine("【今天的签到】" + attendance.joinToString("；").ifBlank { "今天还没有签到" })
+            appendLine("【最近课堂内容（课堂录音转写后的 AI 纪要，辅导时以此为准，结合老师讲过的方法讲解）】")
+            if (classNotes.isEmpty()) appendLine("暂无（下课后录音转写完成才会出现）")
+            classNotes.forEach { (course, notes) ->
+                notes.forEach { (date, text) -> appendLine("·《$course》$date：" + text.take(800)) }
+            }
             val rec = RecordingManager.status.value
             appendLine("【课堂录音】" + when (rec) {
                 is RecordingStatus.Recording -> "正在录音（${rec.elapsedSec} 秒）"

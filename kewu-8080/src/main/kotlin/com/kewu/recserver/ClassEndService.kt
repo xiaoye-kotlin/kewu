@@ -50,7 +50,9 @@ class ClassEndService(private val services: RecServices) {
         val endReason: String = "",
         val decidedAt: String = "",
         val transcriptStatus: String = "",
-        val transcript: String? = null
+        val transcript: String? = null,
+        val summary: String? = null,
+        val asrError: String? = null
     )
 
     /** [startedAt] 形如 "2026-10-26 14:00"；取日期部分拼会话 id。 */
@@ -65,7 +67,11 @@ class ClassEndService(private val services: RecServices) {
         val primary = metas.firstOrNull { it.recordingId == fused.primaryRecordingId }
         val now = LocalDateTime.now().format(fmt)
         transaction {
-            val exists = !ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.empty()
+            val old = ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.firstOrNull()
+            val exists = old != null
+            // 主录音没变且已在转写 / 转写完：保留转写状态，别把 DONE 冲回 PENDING_ASR
+            val keepAsr = old != null && old[ClassRecordings.primaryRecordingId] == fused.primaryRecordingId &&
+                old[ClassRecordings.transcriptStatus] in setOf("TRANSCRIBING", "DONE")
             if (exists) {
                 ClassRecordings.update({ ClassRecordings.sessionId eq sessionId }) {
                     it[primaryRecordingId] = fused.primaryRecordingId
@@ -74,7 +80,7 @@ class ClassEndService(private val services: RecServices) {
                     it[candidateCount] = metas.size
                     it[endReason] = reason
                     it[decidedAt] = now
-                    it[transcriptStatus] = if (primary == null) "NO_AUDIO" else "PENDING_ASR"
+                    if (!keepAsr) it[transcriptStatus] = if (primary == null) "NO_AUDIO" else "PENDING_ASR"
                 }
             } else {
                 ClassRecordings.insert {
@@ -93,6 +99,47 @@ class ClassEndService(private val services: RecServices) {
         println("CLASS-END: $sessionId reason=$reason candidates=${metas.size} primary=${fused.primaryRecordingId} (${fused.strategy})")
     }
 
+    /**
+     * 转写 + AI 课堂纪要（2026-10-26）：取这节课择优出的主录音 → 华为云 SIS 录音文件识别（异步，最长约 10 分钟）
+     * → MaaS 生成结构化课堂纪要。状态：PENDING_ASR → TRANSCRIBING → DONE / FAILED。
+     * 学生端小悟辅导、AI 错题讲解等通过 /api/courses/{id}/class-recordings 拿到纪要，知道这节课讲了什么。
+     * [force] = 失败后手动重试。
+     */
+    suspend fun transcribe(sessionId: String, force: Boolean = false) {
+        val row = transaction { ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.firstOrNull() } ?: return
+        val url = row[ClassRecordings.primaryUrl] ?: return
+        val st = row[ClassRecordings.transcriptStatus]
+        if (!force && st != "PENDING_ASR") return
+        if (st == "TRANSCRIBING") return
+        val courseId = row[ClassRecordings.courseId]
+        transaction { ClassRecordings.update({ ClassRecordings.sessionId eq sessionId }) { it[transcriptStatus] = "TRANSCRIBING"; it[asrError] = null } }
+        println("ASR-START: $sessionId url=$url")
+        try {
+            val format = url.substringAfterLast('.', "wav").lowercase().let { if (it in setOf("wav", "mp3", "m4a", "aac", "amr", "ogg")) it else "wav" }
+            val text = services.transcription.transcribe(url, format)
+            val courseName = transaction {
+                com.kewu.db.Courses.selectAll().where { com.kewu.db.Courses.id eq courseId }.firstOrNull()?.get(com.kewu.db.Courses.name)
+            } ?: courseId
+            val notes = (services.ai as? com.kewu.recserver.services.ai.MaasAiService)?.classNotes(courseName, text).orEmpty()
+            transaction {
+                ClassRecordings.update({ ClassRecordings.sessionId eq sessionId }) {
+                    it[transcriptStatus] = if (text.isBlank()) "EMPTY" else "DONE"
+                    it[transcript] = text
+                    it[summary] = notes.ifBlank { null }
+                }
+            }
+            println("ASR-DONE: $sessionId chars=${text.length} notes=${notes.length}")
+        } catch (t: Throwable) {
+            transaction {
+                ClassRecordings.update({ ClassRecordings.sessionId eq sessionId }) {
+                    it[transcriptStatus] = "FAILED"
+                    it[asrError] = (t.message ?: t.javaClass.simpleName).take(500)
+                }
+            }
+            println("ASR-FAILED: $sessionId ${t.message}")
+        }
+    }
+
     fun list(courseId: String): List<ClassRecordingView> = transaction {
         ClassRecordings.selectAll().where { ClassRecordings.courseId eq courseId }
             .orderBy(ClassRecordings.decidedAt, SortOrder.DESC)
@@ -102,7 +149,8 @@ class ClassEndService(private val services: RecServices) {
                     primaryRecordingId = it[ClassRecordings.primaryRecordingId], primaryUrl = it[ClassRecordings.primaryUrl],
                     strategy = it[ClassRecordings.strategy], candidateCount = it[ClassRecordings.candidateCount],
                     endReason = it[ClassRecordings.endReason], decidedAt = it[ClassRecordings.decidedAt],
-                    transcriptStatus = it[ClassRecordings.transcriptStatus], transcript = it[ClassRecordings.transcript]
+                    transcriptStatus = it[ClassRecordings.transcriptStatus], transcript = it[ClassRecordings.transcript],
+                    summary = it[ClassRecordings.summary], asrError = it[ClassRecordings.asrError]
                 )
             }
     }

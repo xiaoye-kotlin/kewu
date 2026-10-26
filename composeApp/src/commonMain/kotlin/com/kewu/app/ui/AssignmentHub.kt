@@ -342,6 +342,7 @@ fun AssignmentDetailScreen(
                 currentAnswer = answers[q.id].orEmpty(),
                 onDismiss = { tutorQ = null },
                 onUsed = { aiHelp[q.id] = (aiHelp[q.id] ?: 0) + 1 },
+                courseId = assignment?.courseId.orEmpty(),
             )
         }
     }

@@ -899,6 +899,24 @@ object KewuApi {
     catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
+    /**
+     * 某课最近几节课的 AI 课堂纪要（2026-10-26：下课后服务器用华为云 SIS 把最佳录音转成文字，再由大模型整理成纪要）。
+     * 返回 (日期 yyyy-MM-dd, 纪要) 列表，最新在前；没有转写完成的课则为空。
+     */
+    suspend fun getClassNotes(courseId: String, limit: Int = 3): List<Pair<String, String>> = try {
+        val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/class-recordings")
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }
+            .filter { it["transcriptStatus"].str() == "DONE" }
+            .mapNotNull { o ->
+                val notes = o["summary"].str().ifBlank { o["transcript"].str().take(1500) }
+                if (notes.isBlank()) null
+                else o["sessionId"].str().substringAfterLast('-').let { d ->
+                    if (d.length == 8) "${d.take(4)}-${d.substring(4, 6)}-${d.takeLast(2)}" else d
+                } to notes
+            }.take(limit)
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { emptyList() }
+
     /** 某课的课前资料（最新在前）：(标题, 说明, 附件名列表)。失败返回空。 */
     suspend fun getCourseMaterials(courseId: String): List<Triple<String, String, List<String>>> = try {
         val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/materials")

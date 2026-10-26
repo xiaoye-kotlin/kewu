@@ -45,6 +45,22 @@ fun Route.aiRoutes() {
         }
     }
 
+    // 录音转文本（华为云 SIS 录音文件识别，队友交付 2026-10-26）：
+    // POST /api/ai/transcribe {"audioUrl":"OBS 音频 URL","audioFormat":"wav"} -> {"text":"转写全文"}
+    // 异步长任务：提交 job → 每 10s 轮询，最长约 10 分钟才返回；失败返回 502 + {"error"}
+    post("/api/ai/transcribe") {
+        val req = call.receive<TranscribeRequest>()
+        if (req.audioUrl.isBlank()) {
+            call.respond(io.ktor.http.HttpStatusCode.BadRequest, mapOf("error" to "audioUrl 必填（传 OBS 上的录音文件 URL）"))
+            return@post
+        }
+        try {
+            call.respond(mapOf("text" to services.transcription.transcribe(req.audioUrl, req.audioFormat.ifBlank { "wav" })))
+        } catch (e: com.kewu.recserver.services.TranscriptionException) {
+            call.respond(io.ktor.http.HttpStatusCode.BadGateway, mapOf("error" to (e.message ?: "转写失败，请重试")))
+        }
+    }
+
     // 课堂转写总结：POST /api/ai/summarize  { "transcript": "..." } -> { "summary": "..." }
     post("/api/ai/summarize") {
         val req = call.receive<SummarizeRequest>()
@@ -60,6 +76,9 @@ fun Route.aiRoutes() {
 
 @Serializable
 private data class SummarizeRequest(val transcript: String = "")
+
+@Serializable
+private data class TranscribeRequest(val audioUrl: String = "", val audioFormat: String = "wav")
 
 @Serializable
 private data class StreamMessage(val role: String = "user", val content: String = "")

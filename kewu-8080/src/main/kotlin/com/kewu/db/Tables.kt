@@ -213,6 +213,8 @@ object ClassRecordings : Table("class_recordings") {
     val decidedAt = varchar("decided_at", 32)
     val transcriptStatus = varchar("transcript_status", 16) // PENDING_ASR / NO_AUDIO / DONE / FAILED
     val transcript = text("transcript").nullable()
+    val summary = text("summary").nullable()      // AI 课堂纪要（转写后由 MaaS 生成，小悟辅导学生时引用）
+    val asrError = text("asr_error").nullable()   // 转写失败原因
     override val primaryKey = PrimaryKey(sessionId)
 }
 

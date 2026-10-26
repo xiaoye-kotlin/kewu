@@ -59,6 +59,9 @@ internal data class TutorMsg(val fromAi: Boolean, val text: String)
 internal object TutorSessions {
     private val map = mutableMapOf<String, SnapshotStateList<TutorMsg>>()
     fun of(key: String): SnapshotStateList<TutorMsg> = map.getOrPut(key) { mutableStateListOf() }
+
+    /** 课程 id → 最近课堂纪要（SIS 转写 + AI 整理），进程内缓存。 */
+    val classNotes = mutableMapOf<String, String>()
 }
 
 private val TUTOR_SYSTEM = """你是课悟 App 的 AI 助教「小悟」，正在用苏格拉底式方法辅导一名学生做作业里的一道题。
@@ -78,9 +81,10 @@ internal fun AiTutorSheet(
     currentAnswer: String,
     onDismiss: () -> Unit,
     onUsed: () -> Unit,
+    courseId: String = "",
 ) {
     KewuBottomSheet(show = show, onDismiss = onDismiss, title = "小悟 · 第 $index 题辅导") { _ ->
-        TutorBody(sessionKey, question, courseName, currentAnswer, onUsed)
+        TutorBody(sessionKey, question, courseName, currentAnswer, onUsed, courseId)
     }
 }
 
@@ -91,8 +95,16 @@ private fun TutorBody(
     courseName: String,
     currentAnswer: String,
     onUsed: () -> Unit,
+    courseId: String,
 ) {
     val cs = COUITheme.colorScheme
+    // 这门课最近的课堂纪要（下课后录音经华为云 SIS 转写 + AI 整理）：小悟按老师课上讲的方法来提示
+    LaunchedEffect(courseId) {
+        if (courseId.isNotBlank() && courseId !in TutorSessions.classNotes) {
+            TutorSessions.classNotes[courseId] = com.kewu.app.KewuApi.getClassNotes(courseId, 2)
+                .joinToString("\n") { (d, t) -> "$d：" + t.take(1200) }
+        }
+    }
     val scope = rememberCoroutineScope()
     val msgs = remember(sessionKey) { TutorSessions.of(sessionKey) }
     var streaming by remember { mutableStateOf<String?>(null) }
@@ -112,6 +124,9 @@ private fun TutorBody(
             appendLine("题目：${question.stem}")
             if (question.options.isNotEmpty()) appendLine("选项：" + question.options.mapIndexed { i, o -> "${'A' + i}. $o" }.joinToString("  "))
             appendLine("学生当前填写的答案：" + currentAnswer.ifBlank { "（还没作答）" })
+            TutorSessions.classNotes[courseId]?.takeIf { it.isNotBlank() }?.let {
+                appendLine("这门课最近的课堂纪要（优先用老师课上讲过的方法和例子来提示）：$it")
+            }
             // 标准答案只给模型判断方向用，铁律已禁止泄露
             if (question.answer.isNotBlank()) appendLine("（仅供你判断方向，严禁透露）标准答案：${question.answer}")
         }

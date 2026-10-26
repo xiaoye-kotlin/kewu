@@ -38,7 +38,8 @@ actual class AudioRecorder actual constructor(context: Any) {
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     companion object {
-        private const val SAMPLE_RATE = 44100
+        // 2026-10-26：44100 → 16000。华为云 SIS 课堂转写用 chinese_16k_media 模型，要求 16kHz；文件也小 64%，上传更快
+        private const val SAMPLE_RATE = 16000
         private const val CHANNEL_CONFIG = AudioFormat.CHANNEL_IN_MONO
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val BUFFER_SIZE_FACTOR = 2

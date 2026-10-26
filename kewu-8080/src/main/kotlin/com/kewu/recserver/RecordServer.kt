@@ -28,7 +28,8 @@ class RecServices(
     val fusion: AudioFusion,
     val analyzer: AudioAnalyzer,
     val ai: AiService,
-    val deviceMonitor: RecordingDeviceService
+    val deviceMonitor: RecordingDeviceService,
+    val transcription: com.kewu.recserver.services.SisTranscriptionService
 )
 
 val RecServicesKey = AttributeKey<RecServices>("kewu.rec.services")
@@ -52,7 +53,8 @@ fun Application.installRecServices() {
             fusion = AudioFusion(),
             analyzer = AudioAnalyzer(),
             ai = MaasAiService(),
-            deviceMonitor = RecordingDeviceService(redis)
+            deviceMonitor = RecordingDeviceService(redis),
+            transcription = com.kewu.recserver.services.SisTranscriptionService(config.sis)
         )
     )
 }
