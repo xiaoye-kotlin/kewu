@@ -1,5 +1,10 @@
 package com.kewu.app.ui
 
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
 import com.kewu.app.TabSwipeLock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -161,12 +166,16 @@ fun TeacherMainScreen(
         }
     }
 
+    val navExtra = rememberNavExtraInset()
     Box(
         Modifier
             .fillMaxSize()
             .background(COUITheme.colorScheme.surface),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(
+            Modifier.fillMaxSize().statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
+        ) {
             // 内容区：只渲染当前选中页（coui 采样安全），横滑切页（横向主导手势）
             // 注：顶部「课悟 · Kewu」品牌横幅已按用户要求移除，内容从状态栏下直接开始，不挡视野。
             val n = TEACHER_NAV_ITEMS.size
@@ -176,6 +185,8 @@ fun TeacherMainScreen(
                     .weight(1f)
                     // ★ 2026-10-26 全局输入法避让（同学生端 MainScreen）：内容区随键盘收缩，聚焦输入框自动进入可视区
                     .imePadding()
+                    // ★ 2026-10-26 edge-to-edge：三键导航等较高的系统导航栏，整体把内容区与底栏一起抬高（手势条机型为 0）
+                    .padding(bottom = navExtra)
                     .layerBackdrop(backdrop)
                     // 下钻子页（发布 / 批阅 / 详情…）时暂停横滑切 tab，避免一次斜滑丢掉草稿与批阅进度
                     .then(if (swipeLock == 0) Modifier.pointerInput(selected) {
@@ -205,7 +216,7 @@ fun TeacherMainScreen(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(24.dp)
+                .height(24.dp + navExtra)
                 .align(Alignment.BottomCenter)
                 .background(COUITheme.colorScheme.surface),
         )
@@ -250,6 +261,7 @@ fun TeacherMainScreen(
             onGestureStart = cancelBubble,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .padding(bottom = navExtra)
                 .scale((0.35f + 0.65f * navVisible).coerceAtLeast(0f))
                 .alpha(navVisible.coerceIn(0f, 1f))
                 .offset {
@@ -263,7 +275,7 @@ fun TeacherMainScreen(
         DoubleBackExitHint(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = (24 + 66 + 16).dp),
+                .padding(bottom = (24 + 66 + 16).dp + navExtra),
         )
     }
 }

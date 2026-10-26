@@ -115,6 +115,8 @@ private sealed class ConsoleDrill {
     data object NONE : ConsoleDrill()
     data class SESSIONS(val course: CourseInfo) : ConsoleDrill()
     data class DETAIL(val attendanceId: String) : ConsoleDrill()
+    /** 课前准备：开课前询问是否上传本节资料（2026-10-26），之后才发起签到。 */
+    data class PRECLASS(val course: CourseInfo, val durationMinutes: Int) : ConsoleDrill()
 }
 
 @Composable
@@ -204,6 +206,23 @@ fun TeacherConsolePage(
         }
     }
 
+    /** 签到发起成功后的统一后续（一键开课 / 课前准备两条路径共用）。 */
+    fun startedHandler(s: AttendanceSession) {
+        activeSession = s
+        kvSet("teacher_active_session", s.id)
+        // ★ 开课后的两件附带事放在页面级 scope 里做：QuickStartCard 会随 activeSession
+        //   非空立刻离开组合，它自己的 rememberCoroutineScope 跟着取消，请求可能被掐断。
+        scope.launch {
+            // 同步开课状态到后端（POST /api/teacher/class-state START）；
+            // 失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
+            KewuApi.setClassState(s.courseId, "START")
+            // ★ 建 8081 课堂协同录音会话（10.5）：同课同日的教师端 / 学生端录音归到同一会话，
+            //   下课后才能多端择优融合。失败（如 Redis 降级）只提示，不影响上课。
+            KewuApi.createSession(KewuApi.classSessionId(s.courseId, todayCn()), s.courseId)
+                ?.let { err -> snackbar.toast("课堂录音会话创建失败：$err（不影响签到）") }
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -237,21 +256,8 @@ fun TeacherConsolePage(
                         showNotif = true
                     },
                     onGoToTab = onGoToTab,
-                    onStarted = { s ->
-                        activeSession = s
-                        kvSet("teacher_active_session", s.id)
-                        // ★ 开课后的两件附带事放在页面级 scope 里做：QuickStartCard 会随 activeSession
-                        //   非空立刻离开组合，它自己的 rememberCoroutineScope 跟着取消，请求可能被掐断。
-                        scope.launch {
-                            // 同步开课状态到后端（POST /api/teacher/class-state START）；
-                            // 失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
-                            KewuApi.setClassState(s.courseId, "START")
-                            // ★ 建 8081 课堂协同录音会话（10.5）：同课同日的教师端 / 学生端录音归到同一会话，
-                            //   下课后才能多端择优融合。失败（如 Redis 降级）只提示，不影响上课。
-                            KewuApi.createSession(KewuApi.classSessionId(s.courseId, todayCn()), s.courseId)
-                                ?.let { err -> snackbar.toast("课堂录音会话创建失败：$err（不影响签到）") }
-                        }
-                    },
+                    onPrepare = { c, minutes -> drill = ConsoleDrill.PRECLASS(c, minutes) },
+                    onStarted = { startedHandler(it) },
                     onClosed = {
                         activeSession = null
                         kvSet("teacher_active_session", "")
@@ -263,6 +269,16 @@ fun TeacherConsolePage(
                     course = d.course,
                     onBack = { drill = ConsoleDrill.NONE },
                     onOpenSession = { drill = ConsoleDrill.DETAIL(it) },
+                )
+                is ConsoleDrill.PRECLASS -> PreClassScreen(
+                    course = d.course,
+                    durationMinutes = d.durationMinutes,
+                    onBack = { drill = ConsoleDrill.NONE },
+                    onStarted = { s ->
+                        drill = ConsoleDrill.NONE
+                        startedHandler(s)
+                    },
+                    onToast = { scope.launch { snackbar.toast(it) } },
                 )
                 is ConsoleDrill.DETAIL -> AttendanceDetailScreen(
                     attendanceId = d.attendanceId,
@@ -293,6 +309,7 @@ private fun ConsoleHome(
     unread: Int,
     onOpenNotifications: () -> Unit,
     onGoToTab: (Int) -> Unit,
+    onPrepare: (CourseInfo, Int) -> Unit,
     onStarted: (AttendanceSession) -> Unit,
     onClosed: () -> Unit,
     onOpenCourse: (CourseInfo) -> Unit,
@@ -342,7 +359,7 @@ private fun ConsoleHome(
             if (!activeLoaded) {
                 KewuLoading()
             } else if (activeSession == null) {
-                QuickStartCard(courses = courses, onStarted = onStarted)
+                QuickStartCard(courses = courses, onPrepare = onPrepare)
             } else {
                 LiveSessionCard(session = activeSession, onClosed = onClosed)
             }
@@ -615,7 +632,7 @@ private fun rememberGreeting(): String {
 @Composable
 private fun QuickStartCard(
     courses: List<CourseInfo>?,
-    onStarted: (AttendanceSession) -> Unit,
+    onPrepare: (CourseInfo, Int) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -674,31 +691,13 @@ private fun QuickStartCard(
                     }
                 }
                 Spacer(Modifier.height(14.dp))
+                // 2026-10-26：先进「课前准备」询问是否上传本节资料，签到在那一页发起
                 TextButton(
-                    text = if (starting) "正在发起…" else "发起签到并开课",
+                    text = "下一步：课前准备",
                     onClick = {
-                        val cid = selectedId ?: return@TextButton
-                        val cname = courses?.firstOrNull { it.id == cid }?.name ?: "课堂"
+                        val c = courses?.firstOrNull { it.id == selectedId } ?: return@TextButton
                         haptic(HapticKind.Light)
-                        scope.launch {
-                            starting = true
-                            error = null
-                            val publisher = KewuApi.nameForServer()
-                            val s = KewuApi.createAttendance(
-                                courseId = cid,
-                                title = "$cname 课堂签到",
-                                durationMinutes = duration.toIntOrNull() ?: 10,
-                                publisher = publisher,
-                            )
-                            starting = false
-                            if (s != null) {
-                                haptic(HapticKind.Light)
-                                // class-state START 与 8081 协同会话由页面级 onStarted 负责（见 TeacherConsolePage）
-                                onStarted(s)
-                            } else {
-                                error = "发起失败，请检查网络后重试"
-                            }
-                        }
+                        onPrepare(c, duration.toIntOrNull() ?: 10)
                     },
                     enabled = selectedId != null && !starting,
                     colors = ButtonDefaults.textButtonColorsPrimary(

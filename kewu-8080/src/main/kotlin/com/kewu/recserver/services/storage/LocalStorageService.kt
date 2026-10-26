@@ -23,6 +23,15 @@ class LocalStorageService(private val dir: String) : AudioStorage {
         return "local://${file.absolutePath}"
     }
 
+    override suspend fun saveObject(key: String, bytes: ByteArray, contentType: String): String {
+        val file = File(root, key)
+        withContext(Dispatchers.IO) {
+            file.parentFile?.mkdirs()
+            file.writeBytes(bytes)
+        }
+        return "local://${file.absolutePath}"
+    }
+
     override suspend fun get(url: String): ByteArray? {
         val file = File(url.removePrefix("local://"))
         if (!file.exists()) return null

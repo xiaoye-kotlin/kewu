@@ -4,4 +4,6 @@ package com.kewu.recserver.services.storage
 interface AudioStorage {
     suspend fun save(recordingId: String, bytes: ByteArray, ext: String, metadata: Map<String, String> = emptyMap()): String
     suspend fun get(url: String): ByteArray?
+    // 通用对象存储（作业附件 / 课前资料用，2026-10-26）：按给定 key 存，返回可直接打开的 URL
+    suspend fun saveObject(key: String, bytes: ByteArray, contentType: String): String
 }

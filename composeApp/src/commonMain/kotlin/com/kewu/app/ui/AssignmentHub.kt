@@ -118,6 +118,8 @@ fun AssignmentDetailScreen(
     var showConfirm by remember { mutableStateOf(false) }
     var submitAfterConfirm by remember { mutableStateOf(false) }
 
+    // 作答计时：进入作答态时开始计，提交时把用时（秒）随提交发给后端，老师端看「用时」
+    var answerStartMs by remember { mutableStateOf(0L) }
     val studentId = KewuApi.username ?: ""
     val studentName = KewuApi.displayName("学生")
 
@@ -140,6 +142,7 @@ fun AssignmentDetailScreen(
             mySub = sub
             // 未提交 / 被打回 → 直接进入作答态；已提交待批阅 / 已批阅 → 只读展示结果
             editing = sub == null || sub.status == "RETURNED"
+            if (editing) answerStartMs = kotlin.time.Clock.System.now().toEpochMilliseconds()
             prefillFrom(sub)
             loading = false
         }
@@ -175,13 +178,18 @@ fun AssignmentDetailScreen(
                 }
                 uploaded += info
             }
-            val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, ans, uploaded)
+            val durationSec = answerStartMs.takeIf { it > 0 }
+                ?.let { ((kotlin.time.Clock.System.now().toEpochMilliseconds() - it) / 1000).toInt() }
+                ?.takeIf { it > 0 }
+            val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, ans, uploaded, durationSec)
             submitting = false
             if (err == null) {
+                // 2026-10-26：提交成功立即退回任务列表并提示（旧版停在原页 reload，用户不知道交没交上）；
+                // 想看批改结果再自己点进来
                 haptic(HapticKind.Light)
                 snackbar.toast("提交成功")
                 onSubmitted(assignmentId)
-                reload()
+                onBack()
             } else {
                 submitError = err
             }

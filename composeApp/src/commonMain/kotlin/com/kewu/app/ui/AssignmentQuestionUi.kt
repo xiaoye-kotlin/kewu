@@ -758,16 +758,62 @@ private fun AiGenerateBlock(
     }
 }
 
-/** 题型数量行：题型名 + coui「−」/「＋」+ 数量。 */
+/**
+ * 题型数量行：题型名 + 胶囊步进器（2026-10-26 重做：旧版是两个文字「−」「＋」TextButton，
+ * 字形粗细不一、彼此挨得太近，看着违和）。现在是浅色胶囊底 + 两个 32dp 圆形按钮，
+ * 加减号用 Canvas 画等粗线条，按钮与数字之间留足间距；不可点时整体变淡。
+ */
 @Composable
 private fun TypeCounterRow(label: String, count: Int, enabled: Boolean, onMinus: () -> Unit, onPlus: () -> Unit) {
     val cs = COUITheme.colorScheme
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(label, color = cs.onSurface, fontSize = 14.sp, modifier = Modifier.weight(1f))
-        TextButton(text = "−", enabled = enabled && count > 0, onClick = { haptic(HapticKind.Tick); onMinus() })
-        Text("$count", color = if (count > 0) KewuBlue else cs.onSurfaceVariantSummary, fontSize = 15.sp,
-            fontWeight = FontWeight.SemiBold, modifier = Modifier.width(28.dp), textAlign = TextAlign.Center)
-        TextButton(text = "＋", enabled = enabled, onClick = { haptic(HapticKind.Tick); onPlus() })
+        Row(
+            Modifier
+                .clip(RoundedCornerShape(20.dp))
+                .background(cs.onSurface.copy(alpha = 0.05f))
+                .padding(4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StepperButton(plus = false, enabled = enabled && count > 0) { haptic(HapticKind.Tick); onMinus() }
+            Text(
+                "$count",
+                color = if (count > 0) KewuBlue else cs.onSurfaceVariantSummary,
+                fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.width(40.dp), textAlign = TextAlign.Center,
+            )
+            StepperButton(plus = true, enabled = enabled) { haptic(HapticKind.Tick); onPlus() }
+        }
+    }
+}
+
+/** 步进器圆形按钮：白底圆 + 等粗线条加 / 减号（不用文字字形，避免不同字体下粗细、基线不一）。 */
+@Composable
+private fun StepperButton(plus: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    val cs = COUITheme.colorScheme
+    val tint = if (enabled) KewuBlue else cs.onSurfaceVariantSummary.copy(alpha = 0.45f)
+    Box(
+        Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(cs.surface)
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.Canvas(Modifier.size(12.dp)) {
+            val w = 2.dp.toPx()
+            val c = size.height / 2f
+            drawLine(tint, androidx.compose.ui.geometry.Offset(0f, c), androidx.compose.ui.geometry.Offset(size.width, c), w,
+                cap = androidx.compose.ui.graphics.StrokeCap.Round)
+            if (plus) {
+                val cx = size.width / 2f
+                drawLine(tint, androidx.compose.ui.geometry.Offset(cx, 0f), androidx.compose.ui.geometry.Offset(cx, size.height), w,
+                    cap = androidx.compose.ui.graphics.StrokeCap.Round)
+            }
+        }
     }
 }
 

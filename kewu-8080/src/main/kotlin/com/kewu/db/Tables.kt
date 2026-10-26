@@ -108,6 +108,8 @@ object Submissions : Table("submissions") {
     val ai = text("ai").nullable() // JSON 对象或 null
     val answers = text("answers").nullable()             // JSON 数组，学生的结构化作答
     val questionResults = text("question_results").nullable() // JSON 数组，逐题判定结果
+    val attachments = text("attachments").nullable()          // JSON 数组，本版附件（2026-10-26）
+    val durationSec = integer("duration_sec").nullable()      // 本次作答用时（秒，前端计时，2026-10-26）
     override val primaryKey = PrimaryKey(id)
 }
 
@@ -165,10 +167,38 @@ object Questions : Table("questions") {
     override val primaryKey = PrimaryKey(id)
 }
 
+// 通用上传记录：/api/uploads 存进 OBS 的每个文件一条，提交作业 / 课件引用附件时按 id 回查防伪造外链
+object Uploads : Table("uploads") {
+    val id = varchar("id", 40)
+    val kind = varchar("kind", 16)
+    val name = varchar("name", 256)
+    val url = varchar("url", 1024)
+    val mime = varchar("mime", 128)
+    val size = long("size")
+    val durationSec = integer("duration_sec").nullable()
+    val uploader = varchar("uploader", 64)
+    val createdAt = varchar("created_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 课前资料（PPT / 讲义 / 文档）：老师开课前上传，供 AI 结合课堂录音分析、课后指导学生
+object CourseMaterials : Table("course_materials") {
+    val id = varchar("id", 40)
+    val courseId = varchar("course_id", 64).index()
+    val sessionId = varchar("session_id", 64).nullable() // 关联的签到 / 课堂会话（可空：开课前还没有）
+    val title = varchar("title", 256)
+    val note = text("note")
+    val attachments = text("attachments") // JSON 数组
+    val uploader = varchar("uploader", 64)
+    val createdAt = varchar("created_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
 val allTables = arrayOf(
     Users, UserCourses, Courses, ClassNotes,
     Classes, ClassStudents, ClassStates,
     Assignments, Submissions,
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
-    Questions
+    Questions,
+    Uploads, CourseMaterials
 )

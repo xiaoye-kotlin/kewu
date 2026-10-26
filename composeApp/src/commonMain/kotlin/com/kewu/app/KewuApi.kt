@@ -83,6 +83,8 @@ data class SubmissionInfo(
     val questionResults: List<QuestionResult> = emptyList(),
     /** 提交附件（图片 / 文件 / 录音，2026-10-26；后端未上线时为空）。 */
     val attachments: List<AttachmentInfo> = emptyList(),
+    /** 作答用时（秒，2026-10-26 起前端计时随提交上报；老提交为 null）。 */
+    val durationSec: Int? = null,
 )
 data class AiReason(val item: String, val detail: String, val score: Double)
 data class AiSuggestion(
@@ -695,6 +697,7 @@ object KewuApi {
         id: String, studentId: String, studentName: String, content: String,
         answers: Map<String, String> = emptyMap(),
         attachments: List<AttachmentInfo> = emptyList(),
+        durationSec: Int? = null,
     ): String? = try {
         val body = mutableMapOf<String, Any?>(
             "studentId" to studentId, "studentName" to studentName, "content" to content,
@@ -703,6 +706,8 @@ object KewuApi {
         if (answers.isNotEmpty()) {
             body["answers"] = answers.map { (k, v) -> mapOf("questionId" to k, "value" to v) }
         }
+        // 作答用时（秒，2026-10-26 后端 durationSec），老师端「学生作业详情」展示
+        if (durationSec != null) body["durationSec"] = durationSec
         // 附件（作业附件需求文档 §3）：只传已上传成功的服务端附件
         if (attachments.isNotEmpty()) {
             body["attachments"] = attachments.map { a ->
@@ -749,6 +754,28 @@ object KewuApi {
     } catch (e: CancellationException) { throw e }
     catch (e: ApiException) { null to e.message }
     catch (_: Exception) { null to "网络异常，请稍后重试" }
+
+    /**
+     * 课前资料（2026-10-26 后端 `POST /api/courses/{id}/materials`）：老师开课前上传本节 PPT / 讲义，
+     * AI 后续结合课堂录音分析。[attachments] 必须是 [uploadAttachment] 返回过的。成功返回 null，失败返回原因。
+     */
+    suspend fun createCourseMaterial(
+        courseId: String, title: String, note: String, attachments: List<AttachmentInfo>,
+    ): String? = try {
+        val body = mapOf(
+            "title" to title, "note" to note, "uploader" to nameForServer(),
+            "attachments" to attachments.map { a ->
+                mapOf(
+                    "id" to a.id, "kind" to a.kind.value, "name" to a.name, "url" to a.url,
+                    "mime" to a.mime, "size" to a.size, "durationSec" to a.durationSec,
+                )
+            },
+        )
+        postJson("$BASE_URL/api/courses/${pathSegment(courseId)}/materials", body, auth = true).asDataOrThrow()
+        null
+    } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
+    catch (_: Exception) { "网络异常，请稍后重试" }
 
     private fun parseAttachment(o: JsonObject): AttachmentInfo? {
         val url = o["url"].str().takeIf { it.isNotBlank() } ?: return null
@@ -1401,6 +1428,7 @@ object KewuApi {
             questionResults = parseQuestionResults(o["questionResults"]),
             attachments = (o["attachments"] as? JsonArray).orEmpty()
                 .mapNotNull { (it as? JsonObject)?.let(::parseAttachment) },
+            durationSec = (o["durationSec"] as? JsonPrimitive)?.content?.toIntOrNull(),
         )
     }
 

@@ -23,6 +23,13 @@ class ObsStorageService(private val cfg: ObsConfig) : AudioStorage {
         return "https://${cfg.bucket}.$base/$key"
     }
 
+    override suspend fun saveObject(key: String, bytes: ByteArray, contentType: String): String {
+        val obsMeta = ObjectMetadata().apply { this.contentType = contentType; contentLength = bytes.size.toLong() }
+        withContext(Dispatchers.IO) { client.putObject(cfg.bucket, key, ByteArrayInputStream(bytes), obsMeta) }
+        val base = cfg.endpoint.removePrefix("https://").removePrefix("http://").removeSuffix("/")
+        return "https://${cfg.bucket}.$base/$key"
+    }
+
     override suspend fun get(url: String): ByteArray? {
         val key = url.removePrefix("obs://")
         return withContext(Dispatchers.IO) {

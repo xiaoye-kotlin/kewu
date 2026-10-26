@@ -112,7 +112,19 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
         if (items != null) {
             val courseNames = CourseRepo.courses.value.orEmpty().associate { it.id to it.name }
             val today = todayCn()
-            tasks = items.map { it ->
+            // 2026-10-26 排序：未到期的按截止时间由近到远（今晚截止的在最前）→ 没设截止的 → 已过期的；
+            // 截止时间相同再按发布先后（先发布的在前）
+            val nowKey = deadlineSortKey(nowCnString()) ?: ""
+            tasks = items.sortedWith(
+                compareBy<AssignmentRepo.Item>(
+                    {
+                        val k = deadlineSortKey(it.assignment.deadline)
+                        when { k == null -> 1; k < nowKey -> 2; else -> 0 }
+                    },
+                    { deadlineSortKey(it.assignment.deadline) ?: "" },
+                    { it.assignment.createdAt },
+                ),
+            ).map { it ->
                 val a = it.assignment
                 val sub = it.mine
                 val (tag, warn) = when {
@@ -429,4 +441,19 @@ private fun TaskCard(task: Task, done: Boolean, enterIndex: Int = 0, onToggle: (
             }
         }
     }
+}
+
+/** 截止时间 → 可按字典序比较的 "yyyyMMddHHmm"（格式不认识返回 null，排到「未设截止」组）。 */
+private fun deadlineSortKey(s: String): String? {
+    val (d, t) = parseDeadline(s) ?: return null
+    fun p2(v: Int) = if (v < 10) "0$v" else "$v"
+    return "${d.year}${p2(d.month)}${p2(d.day)}${p2(t.hour)}${p2(t.minute)}"
+}
+
+/** 东八区当前时间 "yyyy-MM-dd HH:mm"。 */
+private fun nowCnString(): String {
+    val ms = kotlin.time.Clock.System.now().toEpochMilliseconds() + 8 * 3_600_000L
+    val minOfDay = (ms / 60_000L) % (24 * 60)
+    fun p2(v: Long) = if (v < 10) "0$v" else "$v"
+    return todayCn() + " " + p2(minOfDay / 60) + ":" + p2(minOfDay % 60)
 }

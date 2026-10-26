@@ -1,5 +1,12 @@
 package com.kewu.app.ui
 
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
 import com.kewu.app.TabSwipeLock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationSpec
@@ -252,6 +259,7 @@ fun MainScreen(
             }
         }
     }
+    val navExtra = rememberNavExtraInset()
     Box(
         Modifier
             .fillMaxSize()
@@ -260,7 +268,8 @@ fun MainScreen(
         Column(
             Modifier
                 .fillMaxSize()
-                .statusBarsPadding(), // 顶部避开状态栏，内容不被状态栏遮挡
+                .statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)), // 顶部避开状态栏，内容不被状态栏遮挡
         ) {
             // 内容区：记录进玻璃层，供底部导航栏采样折射。
             // 注：顶部「课悟 · Kewu」品牌横幅已按用户要求移除，内容从状态栏下直接开始，不挡视野。
@@ -280,6 +289,8 @@ fun MainScreen(
                     //   页面里的滚动容器视口变小后会自动把正在输入的输入框带进可视区——用户看得到自己在输入什么。
                     //   子页面自己的 imePadding 会因 insets 已被这里消费而变 0，不会重复让位。
                     .imePadding()
+                    // ★ 2026-10-26 edge-to-edge：三键导航等较高的系统导航栏，整体把内容区与底栏一起抬高（手势条机型为 0）
+                    .padding(bottom = navExtra)
                     .layerBackdrop(backdrop)
                     // 内容区左右滑动切页：仅识别「横向主导」的手势，松手按方向切上一/下一栏。
                     // 竖向滑动原样透传给页面内的 verticalScroll（不抢手势）。
@@ -319,7 +330,7 @@ fun MainScreen(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(24.dp)
+                .height(24.dp + navExtra)
                 .align(Alignment.BottomCenter)
                 .background(COUITheme.colorScheme.surface),
         )
@@ -371,6 +382,7 @@ fun MainScreen(
             onGestureStart = cancelBubble,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .padding(bottom = navExtra)
                 .scale((0.35f + 0.65f * navVisible).coerceAtLeast(0f))
                 .alpha(navVisible.coerceIn(0f, 1f))
                 // 入场：从屏幕底部弹上来（与收起动画的 offset 合并；都是 placement 位移）
@@ -390,7 +402,7 @@ fun MainScreen(
         DoubleBackExitHint(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = (24 + 66 + 16).dp),
+                .padding(bottom = (24 + 66 + 16).dp + navExtra),
         )
     }
 }
@@ -1459,4 +1471,18 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawGlyphStroke(
             }
         }
     }
+}
+
+/**
+ * 系统导航栏比手势条高出的部分（2026-10-26 edge-to-edge 适配）。底部导航托盘按「手势条机型」调好：
+ * 栏底距屏幕底 24dp、手势条约 16dp。三键导航 / 部分厂商的大导航栏（~48dp）会把托盘压在系统按钮上，
+ * 这里算出超出 16dp 的部分，内容区与托盘一起上抬；手势条机型为 0（观感不变）。键盘弹起时为 0（imePadding 已含导航栏）。
+ */
+@Composable
+internal fun rememberNavExtraInset(): androidx.compose.ui.unit.Dp {
+    val density = androidx.compose.ui.platform.LocalDensity.current
+    val nav = WindowInsets.navigationBars.getBottom(density)
+    val ime = WindowInsets.ime.getBottom(density)
+    if (ime > 0) return 0.dp
+    return with(density) { nav.toDp() - 16.dp }.coerceAtLeast(0.dp)
 }

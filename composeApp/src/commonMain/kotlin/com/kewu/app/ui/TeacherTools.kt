@@ -75,7 +75,8 @@ internal fun TeacherToolField(
     val cs = COUITheme.colorScheme
     Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 12.dp)) {
         Text(label, color = cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(start = 4.dp, bottom = 6.dp))
+            // 与 coui 分组标题（SmallTitle 内边距 32dp）左对齐：外层 12 + 20（旧版 16dp，比上方「选择课程」往左缩了一截）
+            modifier = Modifier.padding(start = 20.dp, bottom = 6.dp))
         TextField(
             value = value,
             onValueChange = onValueChange,

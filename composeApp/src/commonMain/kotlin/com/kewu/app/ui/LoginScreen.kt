@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.runtime.State
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
@@ -252,7 +253,8 @@ fun LoginScreen(onLogin: () -> Unit) {
         // 居中玻璃卡（官方 drawBackdrop 同款组合 + 凝结出场）
         // ★ 2026-10-26 输入法避让：外层随键盘收缩 + 可滚动；内层最小高度 = 可视高度，键盘未弹时仍居中，
         //   键盘弹起后聚焦的输入框（注册页学号 / 密码等）会被滚动容器自动带到键盘上方。
-        BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+        // 2026-10-26 edge-to-edge：safeDrawing = 状态栏 + 导航栏 + 刘海 + 输入法，玻璃卡不再顶进状态栏 / 被键盘盖住
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
         val viewportH = maxHeight
         Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Box(Modifier.fillMaxWidth().heightIn(min = viewportH), contentAlignment = Alignment.Center) {

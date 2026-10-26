@@ -422,11 +422,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         )
         Column(Modifier.fillMaxSize()) {
             // ── AI 人格区 + 上下文 chip：键盘弹出时自动收起，把空间让给对话列 ──
+            // ★ 2026-10-26 修「点输入框弹键盘即闪退」：上一版把这里的 fade 换成 shrinkVertically，
+            //   玻璃 chip 跟着被裁剪/压到 0 高度 → 采样层尺寸为 0，RenderThread 直接崩。
+            //   现在只让**非玻璃**的人格区做收起动画；玻璃 chip 在键盘弹起时直接移除、收起后直接出现，绝不参与尺寸动画。
             AnimatedVisibility(
                 visible = !imeVisible,
-                // 2026-10-26：去掉 fade——这里包着玻璃上下文 chip，采样者祖先禁 alpha（coui 首帧 SIGSEGV 约束）
-                enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + slideInVertically { -it / 3 },
-                exit = shrinkVertically(tween(150)) + slideOutVertically { -it / 3 },
+                enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + fadeIn(tween(200)),
+                exit = shrinkVertically(tween(150)) + fadeOut(tween(120)),
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(14.dp))
@@ -474,8 +476,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         )
                     }
                     Spacer(Modifier.height(12.dp))
-
-                    // ── 上下文 chip（原概览卡元素的新呈现；placement 上浮入场） ──
+                }
+            }
+            if (!imeVisible) {
+                Column(Modifier.fillMaxWidth()) {
+                    // ── 上下文 chip（玻璃采样者：不放进任何 alpha / 尺寸动画容器） ──
                     Row(
                         Modifier.fillMaxWidth().offset(y = chipsY),
                         horizontalArrangement = Arrangement.Center,

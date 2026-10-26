@@ -14,7 +14,8 @@ class AssignmentService(
     private val repository: AssignmentRepository,
     private val courseRepository: CourseRepository,
     private val teacherRepository: TeacherRepository,
-    private val userRepository: UserRepository
+    private val userRepository: UserRepository,
+    private val uploadRepository: com.kewu.modules.upload.repository.UploadRepository
 ) {
     private val fmt = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     private fun now(): String = LocalDateTime.now().format(fmt)
@@ -110,6 +111,13 @@ class AssignmentService(
             ?: return Result.failure(IllegalArgumentException("作业不存在"))
         if (req.studentId.isBlank()) return Result.failure(IllegalArgumentException("缺少 studentId"))
         if (req.content.isBlank()) return Result.failure(IllegalArgumentException("提交内容不能为空"))
+        if (req.attachments.size > 9) return Result.failure(IllegalArgumentException("附件最多 9 个"))
+        // 附件必须是 /api/uploads 真存过的（按 id 回查并以服务端记录为准），防止塞任意外链
+        val attachments = req.attachments.map { att ->
+            uploadRepository.find(att.id)
+                ?: return Result.failure(IllegalArgumentException("附件「${att.name.ifBlank { att.id }}」无效，请重新上传"))
+        }
+        val durationSec = req.durationSec?.takeIf { it in 1..(7 * 24 * 3600) }
 
         val old = repository.findSubmissionOf(assignmentId, req.studentId)
         val version = (old?.version ?: 0) + 1
@@ -126,7 +134,7 @@ class AssignmentService(
             )
         }
 
-        val history = (old?.history ?: emptyList()) + SubmissionVersion(version, req.content, now(), ai)
+        val history = (old?.history ?: emptyList()) + SubmissionVersion(version, req.content, now(), ai, attachments, durationSec)
         val s = Submission(
             id = old?.id ?: repository.nextId("s"),
             assignmentId = assignmentId,
@@ -143,7 +151,9 @@ class AssignmentService(
             history = history,
             ai = ai,
             answers = req.answers,
-            questionResults = results
+            questionResults = results,
+            attachments = attachments,
+            durationSec = durationSec
         )
         repository.saveSubmission(s)
         return Result.success(s)

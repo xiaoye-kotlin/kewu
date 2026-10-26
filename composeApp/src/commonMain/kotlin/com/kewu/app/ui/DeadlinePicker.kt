@@ -95,6 +95,11 @@ private fun DeadlineSheet(initial: String, onDismiss: () -> Unit, onConfirm: (St
             onValueChange = { date = it },
             modifier = Modifier.fillMaxWidth(),
             yearRange = thisYear..(thisYear + 2),
+            // 默认月份是英文缩写（Jan/Feb…），改成「1月」…「12月」
+            yearLabel = { "${it}年" },
+            yearColumnWidth = 92.dp,
+            monthLabel = { "${it}月" },
+            dayLabel = { "${it}日" },
         )
         Spacer(Modifier.height(4.dp))
         TimePicker(

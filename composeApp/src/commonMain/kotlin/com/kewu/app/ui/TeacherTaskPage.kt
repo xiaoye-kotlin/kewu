@@ -111,12 +111,15 @@ private sealed class TaskDrill {
     data object PENDING : TaskDrill()
     data class DETAIL(val assignmentId: String, val back: TaskDrill = NONE) : TaskDrill()
     data class REVIEW(val submissionId: String, val back: TaskDrill = NONE) : TaskDrill()
+    /** 单个学生的作业详情（2026-10-26：老师按学生看作业）。 */
+    data class STUDENT(val assignmentId: String, val submissionId: String, val back: TaskDrill = NONE) : TaskDrill()
     data class PUBLISH(val courseId: String) : TaskDrill()
 }
 
 private fun TaskDrill.parent(): TaskDrill = when (this) {
     is TaskDrill.DETAIL -> back
     is TaskDrill.REVIEW -> back
+    is TaskDrill.STUDENT -> back
     else -> TaskDrill.NONE
 }
 
@@ -222,6 +225,13 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                 )
                 is TaskDrill.DETAIL -> TeacherAssignmentDetail(
                     assignmentId = d.assignmentId,
+                    onBack = { drill = d.back },
+                    onReview = { sid -> drill = TaskDrill.REVIEW(sid, back = d) },
+                    onOpenStudent = { sid -> drill = TaskDrill.STUDENT(d.assignmentId, sid, back = d) },
+                )
+                is TaskDrill.STUDENT -> StudentWorkScreen(
+                    assignmentId = d.assignmentId,
+                    submissionId = d.submissionId,
                     onBack = { drill = d.back },
                     onReview = { sid -> drill = TaskDrill.REVIEW(sid, back = d) },
                 )
@@ -656,11 +666,13 @@ private fun TeacherAssignmentDetail(
     assignmentId: String,
     onBack: () -> Unit,
     onReview: (String) -> Unit,
+    onOpenStudent: (String) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
     val pageBackdrop = rememberGlassBackdrop()
 
+    var submissions by remember { mutableStateOf<List<SubmissionInfo>?>(null) }
     var assignment by remember { mutableStateOf<AssignmentInfo?>(null) }
     var stats by remember { mutableStateOf<AssignmentStats?>(null) }
     var queue by remember { mutableStateOf<List<ReviewQueueItem>?>(null) }
@@ -674,7 +686,9 @@ private fun TeacherAssignmentDetail(
             val sD = async { KewuApi.getAssignmentStats(assignmentId) }
             val qD = async { KewuApi.getReviewQueue(assignmentId) }
             val simD = async { KewuApi.getSimilarity(assignmentId) }
+            val subD = async { KewuApi.getSubmissions(assignmentId) }
             assignment = aD.await()
+            submissions = subD.await() ?: emptyList()
             stats = sD.await()
             queue = qD.await()
             similarity = simD.await()
@@ -719,6 +733,11 @@ private fun TeacherAssignmentDetail(
                             }
                         }
                     }
+                    Spacer(Modifier.height(6.dp))
+
+                    // 2026-10-26：按学生看作业（每人一行，点进看用时 / 正确率 / 逐题 / AI 总结）
+                    KewuSectionTitle("学生作业（${submissions?.size ?: 0} 人已交）")
+                    StudentWorkList(submissions, a.totalScore) { onOpenStudent(it.id) }
                     Spacer(Modifier.height(6.dp))
 
                     // 2026-10-26：老师也能看到自己布置的题（只读，选择 / 判断题高亮正确答案；填空 / 简答显示参考答案）

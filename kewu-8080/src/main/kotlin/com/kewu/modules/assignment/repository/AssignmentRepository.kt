@@ -67,6 +67,8 @@ class AssignmentRepository {
                     it[ai] = s.ai?.let { a -> kewuJson.encodeToString<AiSuggestion>(a) }
                     it[answers] = kewuJson.encodeToString(s.answers)
                     it[questionResults] = kewuJson.encodeToString(s.questionResults)
+                    it[attachments] = kewuJson.encodeToString(s.attachments)
+                    it[durationSec] = s.durationSec
                 }
             } else {
                 Submissions.insert {
@@ -86,6 +88,8 @@ class AssignmentRepository {
                     it[ai] = s.ai?.let { a -> kewuJson.encodeToString<AiSuggestion>(a) }
                     it[answers] = kewuJson.encodeToString(s.answers)
                     it[questionResults] = kewuJson.encodeToString(s.questionResults)
+                    it[attachments] = kewuJson.encodeToString(s.attachments)
+                    it[durationSec] = s.durationSec
                 }
             }
         }
@@ -144,7 +148,9 @@ class AssignmentRepository {
             history = decodeList(this[Submissions.history]),
             ai = decodeOrNull<AiSuggestion>(this[Submissions.ai]),
             answers = decodeList(this[Submissions.answers].orEmpty()),
-            questionResults = decodeList(this[Submissions.questionResults].orEmpty())
+            questionResults = decodeList(this[Submissions.questionResults].orEmpty()),
+            attachments = decodeList(this[Submissions.attachments].orEmpty()),
+            durationSec = this[Submissions.durationSec]
         )
 
     // 老数据 JSON 脏了也不能让整个接口挂掉, 退化成空值

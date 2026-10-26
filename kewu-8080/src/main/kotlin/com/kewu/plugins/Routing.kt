@@ -26,6 +26,7 @@ import com.kewu.modules.aistatus.service.AiStatusService
 import com.kewu.modules.questions.routes.questionRoutes
 import com.kewu.modules.questions.service.QuestionService
 import com.kewu.recserver.recordingModule
+import com.kewu.modules.upload.routes.uploadRoutes
 import io.ktor.server.application.*
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
@@ -42,8 +43,10 @@ fun Application.configureRouting() {
     val attendanceRepository = AttendanceRepository()
     // 班级仓储也只建一个: 作业模块要按老师查他教的课, 教师端也要用它, 两边必须同一份数据
     val teacherRepository = TeacherRepository()
+    // 附件上传记录：作业提交按 id 回查附件，和上传接口共用一份
+    val uploadRepository = com.kewu.modules.upload.repository.UploadRepository()
     val assignmentService = AssignmentService(
-        assignmentRepository, courseRepository, teacherRepository, userRepository
+        assignmentRepository, courseRepository, teacherRepository, userRepository, uploadRepository
     )
     val attendanceService = AttendanceService(attendanceRepository, courseRepository)
     val teacherService = TeacherService(
@@ -78,5 +81,7 @@ fun Application.configureRouting() {
         // 原 8081：/health、/api/recordings/*、/api/notes、/api/checkin、/api/sessions、/api/ai/*、
         // /api/teacher/recording/devices*（2026-10-26 合并，路径与 8080 原有接口无重叠）
         recordingModule()
+        // 作业附件 /api/uploads + 课前资料 /api/courses/{id}/materials（2026-10-26）
+        uploadRoutes(uploadRepository)
     }
 }
