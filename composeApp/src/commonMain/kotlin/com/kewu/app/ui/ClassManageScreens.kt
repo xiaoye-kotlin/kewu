@@ -457,16 +457,22 @@ internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                     } else {
                         false to (r.error ?: "加入失败，请确认邀请码后重试")
                     }
-                    if (r.data != null) {
+                    // 已在班里也按成功处理：同样退出 + 刷新（重复点加入不该卡在原页）
+                    val already = r.error?.contains("已经在") == true
+                    if (r.data != null || already) {
                         code = ""
                         haptic(HapticKind.Light)
-                        snackbar.toast(r.data)
+                        snackbar.toast(r.data ?: "你已在这个班级，课程已同步")
                         // 2026-10-27：加入成功立刻退回「我的」（旧版停在原页，看起来像没反应），
-                        // 并刷新本人资料 / 课程 / 作业：班级、课表里的课马上可见
+                        // 并刷新本人资料 / 课程 / 作业：班级、课表里的课马上可见。
+                        // ★ 刷新必须放进与页面无关的 scope：onBack() 后本页离开组合，rememberCoroutineScope 随之取消，
+                        //   旧版把刷新写在 onBack() 后面，实际从没执行，课堂页课程一直是 0
+                        JoinRefreshScope.launch {
+                            KewuApi.me(force = true)
+                            com.kewu.app.CourseRepo.refresh(force = true)
+                            com.kewu.app.AssignmentRepo.refresh()
+                        }
                         onBack()
-                        KewuApi.me(force = true)
-                        com.kewu.app.CourseRepo.refresh(force = true)
-                        com.kewu.app.AssignmentRepo.refresh()
                         return@launch
                     }
                     result?.let { snackbar.toast(it.second) }
@@ -479,3 +485,6 @@ internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
         Spacer(Modifier.height(24.dp))
     }
 }
+
+/** 加入班级后的资料 / 课程刷新用：不随页面销毁取消（见 [JoinClassScreen]）。 */
+private val JoinRefreshScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)

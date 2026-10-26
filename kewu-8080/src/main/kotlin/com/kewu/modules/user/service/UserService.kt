@@ -1,5 +1,8 @@
 package com.kewu.modules.user.service
 
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.selectAll
 import at.favre.lib.crypto.bcrypt.BCrypt
 import com.kewu.modules.course.models.CourseInfo
 import com.kewu.modules.course.models.toInfo
@@ -57,8 +60,21 @@ class UserService(private val repository: UserRepository, private val courseRepo
 
     fun getProfile(userId: String): UserInfo? = repository.findUserById(userId)?.toInfo()
 
-    fun getBoundCourses(userId: String): List<CourseInfo> =
-        courseRepository.findCoursesByIds(repository.getBoundCourseIds(userId)).map { it.toInfo() }
+    // 2026-10-27：「我的课程」= 已绑课程 ∪ 我所在班级的全部课程（班级主课 + 老师导入课表里的课）。
+    // 旧版只读 user_courses，而绑定只在加班那一刻写：老师后导课表 / 后补课程，已加班的学生永远看不到（课程 0）。
+    fun getBoundCourses(userId: String): List<CourseInfo> {
+        val fromClasses = org.jetbrains.exposed.sql.transactions.transaction {
+            val classIds = com.kewu.db.ClassStudents.selectAll()
+                .where { com.kewu.db.ClassStudents.studentId eq userId }.map { it[com.kewu.db.ClassStudents.classId] }
+            if (classIds.isEmpty()) emptyList()
+            else com.kewu.db.Classes.selectAll().where { com.kewu.db.Classes.id inList classIds }
+                .map { it[com.kewu.db.Classes.courseId] } +
+                com.kewu.db.CourseSchedules.selectAll().where { com.kewu.db.CourseSchedules.classId inList classIds }
+                    .map { it[com.kewu.db.CourseSchedules.courseId] }
+        }
+        val ids = (repository.getBoundCourseIds(userId) + fromClasses).filter { it.isNotBlank() }.distinct()
+        return courseRepository.findCoursesByIds(ids).map { it.toInfo() }
+    }
 
     fun updateProfile(userId: String, req: UpdateProfileRequest): Result<UserInfo> {
         val u = repository.findUserById(userId) ?: return Result.failure(IllegalArgumentException("用户不存在"))
