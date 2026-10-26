@@ -555,7 +555,10 @@ object KewuApi {
     /** 作业详情（无需 token）。 */
     suspend fun getAssignment(id: String): AssignmentInfo? = try {
         val el = getJson("$BASE_URL/api/assignments/${pathSegment(id)}")
-        val data = el.dataObjectOrNull("data") ?: return null
+        val wrap = el.dataObjectOrNull("data") ?: return null
+        // ★ 2026-10-26：详情接口实际返回 data = { assignment: {...}, stats: {...} }，旧代码直接从 data 取字段，
+        //   导致学生端进作业详情看不到题目（questions 为空）、教师端详情字段为空；兼容旧的平铺结构
+        val data = (wrap["assignment"] as? JsonObject) ?: wrap
         AssignmentInfo(
             id = data["id"].str(), courseId = data["courseId"].str(), title = data["title"].str(),
             description = data["description"].str(), deadline = data["deadline"].str(),

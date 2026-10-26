@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.imePadding
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -170,6 +171,8 @@ fun TeacherMainScreen(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    // ★ 2026-10-26 全局输入法避让（同学生端 MainScreen）：内容区随键盘收缩，聚焦输入框自动进入可视区
+                    .imePadding()
                     .layerBackdrop(backdrop)
                     .pointerInput(selected) {
                         var acc = 0f

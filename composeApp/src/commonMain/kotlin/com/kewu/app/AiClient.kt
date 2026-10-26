@@ -102,10 +102,13 @@ object AiClient {
 
     /**
      * 多轮对话。返回助手文本；任何失败（网络/鉴权/解析）返回 null。
+     * ★ 2026-10-26 实测：openpangu 的思维链 reasoning_content **计入 max_tokens**（出 3 道题 2169 个输出 token
+     *   里 1792 个是思维链）。上限给小了答案会被截断成空 / 半截 JSON —— 这就是「AI 生成题目用不了」的根因，
+     *   所以默认 4096，出题 8192。
      * [maxTokens] 只限制最终回答（该模型的思维链不计入 max_tokens 限额风险较小，
      * 但回答偏长时适当调大）。
      */
-    suspend fun chat(messages: List<Msg>, maxTokens: Int = 1200): String? {
+    suspend fun chat(messages: List<Msg>, maxTokens: Int = 4096): String? {
         val endpoints = endpointOverride?.let { listOf(it) } ?: ENDPOINTS
         for (ep in endpoints) {
             val r = chatOnce(ep, messages, maxTokens)
@@ -205,7 +208,7 @@ object AiClient {
     }
 
     /** 单轮问答便捷入口。 */
-    suspend fun chat(system: String, user: String, maxTokens: Int = 1200): String? =
+    suspend fun chat(system: String, user: String, maxTokens: Int = 4096): String? =
         chat(listOf(Msg("system", system), Msg("user", user)), maxTokens)
 
     // ───────────────────────── 作业题目生成 ─────────────────────────
@@ -230,7 +233,7 @@ object AiClient {
 · score 为每题分值（整数），各题分值之和贴近总合理范围；analysis 给一句话解析（可选）。
 题干与答案必须用中文，表述准确、无歧义，避免政治/宗教/敏感内容。
 """.trimIndent()
-        val text = chat(system, spec, maxTokens = 2200) ?: return null
+        val text = chat(system, spec, maxTokens = 8192) ?: return null
         val s = text.indexOf('[')
         val e = text.lastIndexOf(']')
         if (s < 0 || e <= s) return null
@@ -268,7 +271,7 @@ object AiClient {
             appendLine("【学生提交内容（第 ${submission.version} 版）】")
             append(submission.content.ifBlank { "（无文字内容）" }.take(3000))
         }
-        val text = chat(system, user, maxTokens = 1500) ?: return null
+        val text = chat(system, user, maxTokens = 4096) ?: return null
         return parseGradeJson(text, assignment.totalScore)
     }
 

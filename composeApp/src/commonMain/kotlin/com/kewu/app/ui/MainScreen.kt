@@ -35,6 +35,7 @@ import io.github.suqi8.coui.kmp.basic.Text
 import com.kewu.app.ChatHistory
 import com.kewu.app.AssistantHub
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
@@ -272,6 +273,10 @@ fun MainScreen(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
+                    // ★ 2026-10-26 全局输入法避让：内容区随键盘收缩（底部导航栏是根 Box 的覆盖层，留在键盘下），
+                    //   页面里的滚动容器视口变小后会自动把正在输入的输入框带进可视区——用户看得到自己在输入什么。
+                    //   子页面自己的 imePadding 会因 insets 已被这里消费而变 0，不会重复让位。
+                    .imePadding()
                     .layerBackdrop(backdrop)
                     // 内容区左右滑动切页：仅识别「横向主导」的手势，松手按方向切上一/下一栏。
                     // 竖向滑动原样透传给页面内的 verticalScroll（不抢手势）。

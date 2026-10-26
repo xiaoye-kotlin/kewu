@@ -12,15 +12,24 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.key
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onSizeChanged
 import io.github.suqi8.coui.kmp.icon.extended.Edit
 import androidx.compose.foundation.layout.Arrangement
+import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import com.kewu.app.QuestionResult
+import com.kewu.app.KewuGreen
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -84,7 +93,7 @@ import kotlin.random.Random
  * 同时服务两条链路，UI 全部 coui 原生件，外壳沿用课悟液态玻璃 [KewuGlassCard] / 白卡 [Card]
  * （与作业详情、批阅页同一套视觉语言）：
  *   - 教师端发布页：[QuestionEditorCard] 手动增删改题目 + [AiGenerateBlock] 调大模型出题；
- *   - 学生端提交弹窗：[QuestionRenderList] 按题型渲染作答控件，答案收集进 Map 后随提交拼进 content。
+ *   - 学生端作业详情：[QuestionAnswerCard] 逐题内嵌作答（选项为液态玻璃条），提交走原生 answers + 可读 content。
  *
  * 题目数据模型见 [Question] / [QuestionType]（AssignmentQuestion.kt）；后端未上线题目字段前，
  * 序列化进 description / content 的透传 JSON 块（QuestionStore）。
@@ -245,6 +254,10 @@ fun QuestionEditorCard(
     // 刚由用户新增的题 id：只有它们播入场动画（已有题目重组时不重复播）
     val freshIds = remember { mutableStateMapOf<String, Boolean>() }
     val follow = remember { FollowWindow() }
+    // ★ 2026-10-26：所有回调都基于「最新」题目列表，而不是闭包创建时的快照——AI 出题要等 ~30s，
+    //   旧代码出题回来用点击时的旧列表 + 新题回写，期间手动加的题被整批覆盖（用户反馈「AI 生成把我出的题清空了」）
+    val latest by rememberUpdatedState(questions)
+    val latestOnChange by rememberUpdatedState(onChange)
     Column(Modifier.fillMaxWidth()) {
         KewuSectionTitle("题目（可选 · 留空则发布纯文本作业）")
 
@@ -252,7 +265,7 @@ fun QuestionEditorCard(
             val q = defaultQuestion(t)
             freshIds[q.id] = true
             follow.arm()
-            onChange(questions + q)
+            latestOnChange(latest + q)
         }
         Spacer(Modifier.height(10.dp))
 
@@ -269,12 +282,12 @@ fun QuestionEditorCard(
                         follow = { follow.active() },
                         onRemoved = {
                             freshIds.remove(q.id)
-                            onChange(questions.filter { it.id != q.id })
+                            latestOnChange(latest.filter { it.id != q.id })
                         },
                     ) { requestRemove ->
                         QuestionEditItem(
-                            q = q, index = i + 1, backdrop = backdrop,
-                            onReplace = { nq -> onChange(questions.map { if (it.id == q.id) nq else it }) },
+                            q = q, index = i + 1,
+                            onReplace = { nq -> latestOnChange(latest.map { if (it.id == q.id) nq else it }) },
                             onRemove = requestRemove,
                         )
                     }
@@ -283,10 +296,11 @@ fun QuestionEditorCard(
         }
 
         Spacer(Modifier.height(4.dp))
-        AiGenerateBlock(questions = questions, onChange = { list ->
-            list.drop(questions.size).forEach { freshIds[it.id] = true }
+        AiGenerateBlock(onGenerated = { generated ->
+            // 追加到当前最新列表末尾，已有（手动 / 之前生成）的题一道不动
+            generated.forEach { freshIds[it.id] = true }
             follow.arm()
-            onChange(list)
+            latestOnChange(latest + generated)
         }, onToast = onToast)
         Spacer(Modifier.height(4.dp))
     }
@@ -294,8 +308,8 @@ fun QuestionEditorCard(
 
 /**
  * 单题的进出场：高度从 0「长」出来 + 轻微上浮 + 内容淡入；删除时反向收起再真正移除。
- * ★ 题目卡是液态玻璃采样者，外层禁止 alpha / scale / graphicsLayer（coui 首帧 SIGSEGV 硬约束），
- *   所以这里只用 layout 高度 + placement 位移；淡入只作用在玻璃**内部**内容上（[LocalItemAlpha]）。
+ * ★ 题目卡里的选项是液态玻璃采样者，祖先禁止 alpha / scale / graphicsLayer（coui 首帧 SIGSEGV 硬约束），
+ *   所以这里只用 layout 高度 + placement 位移（「长」出来 / 收起），不做淡入淡出。
  */
 @Composable
 private fun AnimatedQuestionItem(
@@ -327,17 +341,13 @@ private fun AnimatedQuestionItem(
                 }
             },
     ) {
-        CompositionLocalProvider(LocalItemAlpha provides v) {
-            Column {
-                content { if (!removing) { haptic(HapticKind.Tick); removing = true } }
-                Spacer(Modifier.height(10.dp))
-            }
+        Column {
+            content { if (!removing) { haptic(HapticKind.Tick); removing = true } }
+            Spacer(Modifier.height(10.dp))
         }
     }
 }
 
-/** 题目卡内部内容的淡入系数（由 [AnimatedQuestionItem] 提供，玻璃外壳本身不参与 alpha）。 */
-private val LocalItemAlpha = compositionLocalOf { 1f }
 
 /** 「手动出题」卡：coui 白卡，点头部展开 / 收起（默认展开）；内含 5 个题型按钮，点一下生成该题型模板。 */
 @Composable
@@ -391,135 +401,212 @@ private fun ManualQuestionBlock(onAdd: (QuestionType) -> Unit) {
     }
 }
 
+/**
+ * 单题编辑卡（2026-10-26 重做，用户要求「多融合液态玻璃和 coui：选项用液态玻璃，其他用 coui」）。
+ *
+ * 外壳 [GlassQuestionCard] = coui 白卡，卡内自带一层淡品牌色渐变的采样层；选项 / 判断项是液态玻璃条
+ * [OptionGlassRow]；题型 chip、题干、分值、参考答案、解析都是 coui 原生件。
+ * 正确答案直接点选项左侧的字母标记（单选 / 判断互斥，多选可多个），不再另起一行答案 chip。
+ */
 @Composable
 private fun QuestionEditItem(
-    q: Question, index: Int, backdrop: LayerBackdrop,
+    q: Question, index: Int,
     onReplace: (Question) -> Unit, onRemove: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    KewuGlassCard(
-        backdrop = backdrop, shape = RoundedCornerShape(16.dp), blurRadius = 18.dp, tintAlpha = 0.30f,
-        modifier = Modifier
-            .fillMaxWidth().padding(horizontal = 12.dp)
-            .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp)),
-    ) {
-        Column(Modifier.padding(14.dp).alpha(LocalItemAlpha.current)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    modifier = Modifier.width(26.dp).height(26.dp),
-                    shape = RoundedCornerShape(8.dp), color = cs.tertiaryContainer,
-                    contentColor = cs.onTertiaryContainer,
-                ) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("$index", color = cs.onTertiaryContainer, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                Text("题目 $index · ${q.type.label}", color = cs.onSurface, fontSize = 14.5.sp,
-                    fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                TextButton(text = "删除", onClick = onRemove,
-                    colors = ButtonDefaults.textButtonColorsPrimary(
-                        color = cs.error, textColor = cs.onErrorContainer))
-            }
-            Spacer(Modifier.height(8.dp))
+    GlassQuestionCard { bd ->
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IndexBadge(index)
+            Spacer(Modifier.width(8.dp))
+            Text("第 $index 题", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(6.dp))
+            KewuTag(q.type.label, cs.tertiaryContainer, cs.onTertiaryContainer)
+            Spacer(Modifier.weight(1f))
+            TextField(
+                q.score.takeIf { it > 0 }?.toString() ?: "", { nv ->
+                    onReplace(q.copy(score = nv.filter { it.isDigit() }.take(3).toIntOrNull() ?: 0))
+                },
+                Modifier.width(72.dp), backgroundMode = TextFieldMode.Rectangle, label = "分值", singleLine = true,
+            )
+            TextButton(
+                text = "删除", onClick = onRemove,
+                colors = ButtonDefaults.textButtonColorsPrimary(color = cs.error, textColor = cs.onErrorContainer),
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        QuestionTypeChips(selected = q.type, enabled = true) { onReplace(switchType(q, it)) }
+        Spacer(Modifier.height(12.dp))
 
-            // 题型切换
-            QuestionTypeChips(selected = q.type, enabled = true) { onReplace(switchType(q, it)) }
+        FieldLabel("题干")
+        TextField(q.stem, { onReplace(q.copy(stem = it)) }, Modifier.fillMaxWidth(),
+            backgroundMode = TextFieldMode.Rectangle, label = stemHint(q.type), minLines = 2)
+        Spacer(Modifier.height(12.dp))
 
-            Spacer(Modifier.height(8.dp))
-            // 题干
-            FieldLabel("题干")
-            TextField(q.stem, { onReplace(q.copy(stem = it)) }, Modifier.fillMaxWidth(),
-                backgroundMode = TextFieldMode.Rectangle, label = stemHint(q.type), minLines = 2)
-
-            Spacer(Modifier.height(8.dp))
-
-            // 选项（选择/判断类）
-            if (q.type != QuestionType.FILL_BLANK && q.type != QuestionType.SHORT_ANSWER) {
-                FieldLabel("选项与答案")
-                val opts = displayOptions(q)
-                opts.forEachIndexed { oi, text ->
-                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 3.dp)) {
-                        Text(optionLetter(oi), color = cs.primary, fontSize = 14.sp, fontWeight = FontWeight.Bold,
-                            modifier = Modifier.width(22.dp))
+        when (q.type) {
+            QuestionType.SINGLE_CHOICE, QuestionType.MULTIPLE_CHOICE -> {
+                val multi = q.type == QuestionType.MULTIPLE_CHOICE
+                FieldLabel(if (multi) "选项 · 点字母标记正确答案（可多选）" else "选项 · 点字母标记正确答案")
+                val chosen = answerSet(q.answer)
+                displayOptions(q).forEachIndexed { oi, text ->
+                    val letter = optionLetter(oi)
+                    OptionGlassRow(
+                        backdrop = bd, badge = letter, selected = letter in chosen, square = multi,
+                        onBadge = {
+                            haptic(HapticKind.Tick)
+                            val next = if (multi) {
+                                chosen.toMutableSet().also { if (!it.add(letter)) it.remove(letter) }.sorted().joinToString(",")
+                            } else letter
+                            onReplace(q.copy(answer = normalizeAnswer(q.type, q.options.size, next)))
+                        },
+                    ) {
                         TextField(text, { nv ->
                             val newOpts = q.options.toMutableList().also { it[oi] = nv }
-                            onReplace(q.copy(options = newOpts,
-                                answer = normalizeAnswer(q.type, newOpts.size, q.answer)))
-                        }, Modifier.weight(1f), backgroundMode = TextFieldMode.Rectangle,
-                            label = "选项 ${optionLetter(oi)} 内容",
-                            enabled = q.type != QuestionType.TRUE_FALSE)
-                        // 选择/多选可删选项（保留至少 2 个）
-                        if (q.type != QuestionType.TRUE_FALSE && q.options.size > 2) {
-                            TextButton(text = "删", onClick = {
+                            onReplace(q.copy(options = newOpts))
+                        }, Modifier.weight(1f), backgroundMode = TextFieldMode.None, label = "选项 $letter 内容")
+                        if (q.options.size > 2) {
+                            TextButton(text = "移除", onClick = {
+                                haptic(HapticKind.Tick)
                                 val newOpts = q.options.toMutableList().also { it.removeAt(oi) }
                                 onReplace(q.copy(options = newOpts,
                                     answer = normalizeAnswer(q.type, newOpts.size, q.answer)))
                             })
                         }
                     }
+                    Spacer(Modifier.height(8.dp))
                 }
-                // 选择/多选可加选项（上限 8）
-                if (q.type != QuestionType.TRUE_FALSE && q.options.size < 8) {
-                    TextButton(text = "＋ 添加选项", onClick = {
-                        val newOpts = q.options + ""
-                        onReplace(q.copy(options = newOpts,
-                            answer = normalizeAnswer(q.type, newOpts.size, q.answer)))
+                if (q.options.size < 8) {
+                    TextButton(text = "＋ 添加选项 ${optionLetter(q.options.size)}", onClick = {
+                        haptic(HapticKind.Tick)
+                        onReplace(q.copy(options = q.options + ""))
                     })
                 }
-                Spacer(Modifier.height(6.dp))
-                // 答案选择
-                FieldLabel(if (q.type == QuestionType.MULTIPLE_CHOICE) "正确答案（可多选）" else "正确答案")
-                when (q.type) {
-                    QuestionType.SINGLE_CHOICE -> AnswerChips(
-                        letters = opts.indices.map { optionLetter(it) }, selected = setOfNotNull(q.answer.takeIf { it.isNotBlank() }),
-                        multi = false, onToggle = { letter ->
-                            onReplace(q.copy(answer = normalizeAnswer(q.type, q.options.size, letter)))
-                        })
-                    QuestionType.MULTIPLE_CHOICE -> AnswerChips(
-                        letters = opts.indices.map { optionLetter(it) },
-                        selected = q.answer.split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet(),
-                        multi = true, onToggle = { letter ->
-                            val cur = q.answer.split(",").map { it.trim() }.filter { it.isNotBlank() }.toMutableSet()
-                            if (!cur.add(letter)) cur.remove(letter)
-                            onReplace(q.copy(answer = normalizeAnswer(q.type, q.options.size, cur.sorted().joinToString(","))))
-                        })
-                    QuestionType.TRUE_FALSE -> AnswerChips(
-                        letters = listOf("正确", "错误"),
-                        selected = setOfNotNull(q.answer.takeIf { it.isNotBlank() }), multi = false,
-                        onToggle = { v -> onReplace(q.copy(answer = v)) })
-                    else -> {}
+            }
+            QuestionType.TRUE_FALSE -> {
+                FieldLabel("正确答案 · 点选")
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf("正确" to "✓", "错误" to "✗").forEach { (v, mark) ->
+                        val pick = { haptic(HapticKind.Tick); onReplace(q.copy(answer = v)) }
+                        OptionGlassRow(
+                            backdrop = bd, badge = mark, selected = q.answer == v, square = false,
+                            onBadge = pick, onClick = pick, modifier = Modifier.weight(1f),
+                        ) {
+                            Text(v, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
-            } else {
-                // 填空 / 简答：答案即参考答案文本
+            }
+            QuestionType.FILL_BLANK, QuestionType.SHORT_ANSWER -> {
                 FieldLabel("参考答案")
                 TextField(q.answer, { onReplace(q.copy(answer = it)) }, Modifier.fillMaxWidth(),
-                    backgroundMode = TextFieldMode.Rectangle, label = "参考答案（学生端不展示）", minLines = 2)
+                    backgroundMode = TextFieldMode.Rectangle,
+                    label = if (q.type == QuestionType.FILL_BLANK) "填空的标准答案" else "参考答案要点（学生端不展示）",
+                    minLines = if (q.type == QuestionType.FILL_BLANK) 1 else 3)
             }
+        }
+        Spacer(Modifier.height(12.dp))
+        FieldLabel("答案解析（选填）")
+        TextField(q.analysis, { onReplace(q.copy(analysis = it)) }, Modifier.fillMaxWidth(),
+            backgroundMode = TextFieldMode.Rectangle, label = "学生提交后可见的解析", minLines = 1)
+    }
+}
 
-            Spacer(Modifier.height(8.dp))
-            // 分值
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                FieldLabel("分值")
-                TextField(q.score.toString(), { nv ->
-                    onReplace(q.copy(score = nv.filter { it.isDigit() }.toIntOrNull() ?: 0))
-                }, Modifier.width(90.dp), backgroundMode = TextFieldMode.Rectangle, label = "分值", singleLine = true)
-            }
+/** 答案串 → 字母集合（"A,C" / "A，C" / "AC" 均可）。 */
+private fun answerSet(answer: String): Set<String> =
+    answer.uppercase().filter { it in 'A'..'H' }.map { it.toString() }.toSet()
+
+/**
+ * 题目卡外壳：coui 白卡 + 卡内采样层（淡蓝→白→淡绿渐变，给液态玻璃选项条一点可折射的底色）。
+ * ★ 采样层是内容的**前置兄弟**（matchParentSize），采样者（选项玻璃条）在它之外——coui 硬约束。
+ */
+@Composable
+internal fun GlassQuestionCard(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.(LayerBackdrop) -> Unit,
+) {
+    val cs = COUITheme.colorScheme
+    val bd = rememberGlassBackdrop()
+    Card(
+        modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        cornerRadius = 18.dp, insideMargin = PaddingValues(0.dp), colors = kewuCardColors(),
+    ) {
+        Box {
+            Box(
+                Modifier.matchParentSize().layerBackdrop(bd).background(
+                    Brush.linearGradient(
+                        listOf(KewuBlue.copy(alpha = 0.10f), cs.surfaceContainer, KewuGreen.copy(alpha = 0.08f)),
+                    ),
+                ),
+            )
+            Column(Modifier.fillMaxWidth().padding(16.dp)) { content(bd) }
         }
     }
 }
 
-/** 答案选择 chip 行：单选题 multi=false；多选题 multi=true；判断题传入 正确/错误 文案。 */
+/**
+ * 液态玻璃选项条：左侧字母 / 符号标记（单选圆、多选圆角方，选中填品牌蓝），右侧内容。
+ * [onBadge] 点标记；[onClick] 非空时整条可点（学生作答 / 判断题）。选中态加品牌蓝描边与淡蓝底。
+ */
 @Composable
-private fun AnswerChips(letters: List<String>, selected: Set<String>, multi: Boolean, onToggle: (String) -> Unit) {
+internal fun OptionGlassRow(
+    backdrop: LayerBackdrop,
+    badge: String,
+    selected: Boolean,
+    square: Boolean,
+    onBadge: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+    onClick: (() -> Unit)? = null,
+    content: @Composable RowScope.() -> Unit,
+) {
     val cs = COUITheme.colorScheme
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        letters.forEach { l ->
-            val isSel = l in selected
-            Chip(selected = isSel, onClick = { haptic(HapticKind.Tick); onToggle(l) }, label = l,
-                colors = if (isSel) ChipDefaults.chipColors(
-                    containerColor = KewuBlue.copy(alpha = 0.16f))
-                else ChipDefaults.chipColors())
+    val shape = RoundedCornerShape(14.dp)
+    KewuGlassCard(
+        backdrop = backdrop, shape = shape, blurRadius = 12.dp,
+        tintAlpha = if (selected) 0.55f else 0.40f,
+        onClick = onClick,
+        modifier = modifier.fillMaxWidth().border(
+            if (selected) 1.5.dp else 1.dp,
+            if (selected) KewuBlue.copy(alpha = 0.75f) else cs.dividerLine, shape,
+        ),
+    ) {
+        if (selected) Box(Modifier.matchParentSize().background(KewuBlue.copy(alpha = 0.08f)))
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 46.dp).padding(horizontal = 10.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OptionBadge(badge, selected, square, onBadge)
+            Spacer(Modifier.width(10.dp))
+            content()
+        }
+    }
+}
+
+@Composable
+private fun OptionBadge(text: String, selected: Boolean, square: Boolean, onClick: (() -> Unit)?) {
+    val cs = COUITheme.colorScheme
+    val shape = if (square) RoundedCornerShape(8.dp) else CircleShape
+    Box(
+        Modifier
+            .size(28.dp)
+            .clip(shape)
+            .background(if (selected) KewuBlue else Color.Transparent)
+            .border(1.5.dp, if (selected) KewuBlue else cs.onSurfaceVariantSummary.copy(alpha = 0.55f), shape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = if (selected) Color.White else cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** 题号徽标（coui Surface）。 */
+@Composable
+private fun IndexBadge(index: Int) {
+    val cs = COUITheme.colorScheme
+    Surface(
+        modifier = Modifier.size(26.dp), shape = RoundedCornerShape(8.dp),
+        color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer,
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("$index", color = cs.onTertiaryContainer, fontSize = 13.sp, fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -528,17 +615,17 @@ private fun AnswerChips(letters: List<String>, selected: Set<String>, multi: Boo
 private fun FieldLabel(text: String) {
     val cs = COUITheme.colorScheme
     Text(text, color = cs.onSurfaceSecondary, fontSize = 12.5.sp, fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(bottom = 4.dp))
+        modifier = Modifier.padding(bottom = 6.dp))
 }
 
 /**
- * AI 生成题目：老师用自然语言描述「知识点范围 + 题型 + 数量」，调大模型出题后追加进列表。
- * 失败（网络/解析）给出提示，不影响已编辑内容。
+ * AI 生成题目：老师用自然语言描述「知识点范围 + 题型 + 数量」，调大模型出题后经 [onGenerated]
+ * **追加**到当前题目末尾（不碰已有题）。生成的题统一换新 id（模型给的 id 可能与已有题重复，后端会拒发）。
+ * 大模型带思维链，出题约 20–40 秒，期间按钮显示「AI 出题中…」，可继续手动编辑其它题。
  */
 @Composable
 private fun AiGenerateBlock(
-    questions: List<Question>,
-    onChange: (List<Question>) -> Unit,
+    onGenerated: (List<Question>) -> Unit,
     onToast: (String) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
@@ -546,6 +633,7 @@ private fun AiGenerateBlock(
     var expanded by remember { mutableStateOf(false) }
     var spec by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    val latestOnGenerated by rememberUpdatedState(onGenerated)
 
     val follow = remember { FollowWindow() }
     Card(
@@ -565,6 +653,10 @@ private fun AiGenerateBlock(
             Spacer(Modifier.width(8.dp))
             Text("AI 生成题目", color = cs.onSurface, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f))
+            if (loading) {
+                InfiniteProgressIndicator(size = 16.dp)
+                Spacer(Modifier.width(6.dp))
+            }
             Text(if (expanded) "收起" else "展开", color = cs.onSurfaceSecondary, fontSize = 13.sp)
         }
         AnimatedVisibility(
@@ -573,36 +665,35 @@ private fun AiGenerateBlock(
             exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
         ) { Column {
             Spacer(Modifier.height(10.dp))
-            Text("告诉 AI 出哪方面的题、什么题型、几道，例如：「出 3 道关于二次函数的小题，2 道单选 1 道简答」",
+            Text("告诉 AI 出哪方面的题、什么题型、几道，例如：「出 3 道关于二次函数的小题，2 道单选 1 道简答」。生成的题会追加在已有题目后面。",
                 color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp, lineHeight = 17.sp)
             Spacer(Modifier.height(8.dp))
             TextField(spec, { spec = it }, Modifier.fillMaxWidth(), backgroundMode = TextFieldMode.Rectangle,
-                label = "知识点与题型要求…", minLines = 2)
+                label = "知识点与题型要求…", minLines = 2, enabled = !loading)
             Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (loading) InfiniteProgressIndicator(size = 18.dp)
-                Spacer(Modifier.width(8.dp))
-                TextButton(
-                    text = if (loading) "AI 出题中…" else "让 AI 出题",
-                    onClick = {
-                        if (loading || spec.isBlank()) return@TextButton
-                        loading = true
-                        scope.launch {
-                            val result = AiClient.generateQuestions(spec.trim())
-                            loading = false
-                            if (result.isNullOrEmpty()) {
-                                onToast("AI 出题失败，请检查网络或换种说法")
-                            } else {
-                                val cleaned = result.map { it.copy(options = stripOptionPrefixes(it.options)) }
-                                onChange(questions + cleaned)
-                                onToast("已生成 ${cleaned.size} 道题")
-                                spec = ""
+            KewuPrimaryButton(
+                text = if (loading) "AI 出题中…（约 30 秒）" else "让 AI 出题",
+                onClick = {
+                    if (loading || spec.isBlank()) return@KewuPrimaryButton
+                    loading = true
+                    scope.launch {
+                        val result = AiClient.generateQuestions(spec.trim())
+                        loading = false
+                        if (result.isNullOrEmpty()) {
+                            onToast("AI 出题失败，请检查网络或换种说法")
+                        } else {
+                            val cleaned = result.map {
+                                it.copy(id = newQuestionId(), options = stripOptionPrefixes(it.options))
                             }
+                            latestOnGenerated(cleaned)
+                            onToast("已生成 ${cleaned.size} 道题，已追加到题目末尾")
+                            spec = ""
                         }
-                    },
-                    enabled = !loading && spec.isNotBlank(),
-                )
-            }
+                    }
+                },
+                enabled = !loading && spec.isNotBlank(),
+                modifier = Modifier.fillMaxWidth(),
+            )
         } }
     }
 }
@@ -610,88 +701,142 @@ private fun AiGenerateBlock(
 // ───────────────────────── 学生端：题目作答渲染 ─────────────────────────
 
 /**
- * 学生作答渲染：按题型渲染控件，答案实时收集进 [answers]（questionId -> 值）。
- * 选择题存选项字母（判断题存 正确/错误），填空/简答存文本。
+ * 学生端单题作答卡（2026-10-26 重做）：[GlassQuestionCard]（coui 白卡）+ 液态玻璃选项条。
+ *
+ * 题头「第 N 题 · 题型 · 分值」+ 题干；单选 / 判断整条选项可点（互斥），多选可多选；填空 / 简答为 coui 输入框。
+ * 值约定：单选 / 多选存字母（多选 "A,C"），判断存「正确 / 错误」，填空 / 简答存文本（与后端判分口径一致）。
+ * [readOnly] = 只读（已提交、未在重新作答）；[result] 非空时在题下展示判定、得分、参考答案与解析。
  */
 @Composable
-fun QuestionRenderList(questions: List<Question>, answers: SnapshotStateMap<String, String>) {
-    questions.forEachIndexed { i, q -> QuestionRenderItem(q, i + 1, answers) }
-}
-
-@Composable
-private fun QuestionRenderItem(q: Question, index: Int, answers: SnapshotStateMap<String, String>) {
+fun QuestionAnswerCard(
+    q: Question,
+    index: Int,
+    value: String,
+    onValue: (String) -> Unit,
+    readOnly: Boolean,
+    result: QuestionResult?,
+    modifier: Modifier = Modifier,
+) {
     val cs = COUITheme.colorScheme
-    Card(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp),
-        cornerRadius = 16.dp, insideMargin = PaddingValues(16.dp), colors = kewuCardColors(),
-    ) {
+    GlassQuestionCard(modifier) { bd ->
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                modifier = Modifier.width(26.dp).height(26.dp), shape = RoundedCornerShape(8.dp),
-                color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer,
-            ) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("$index", color = cs.onTertiaryContainer, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                }
-            }
+            IndexBadge(index)
             Spacer(Modifier.width(8.dp))
-            Text(q.type.label, color = cs.onSurfaceVariantSummary, fontSize = 12.sp,
-                modifier = Modifier.weight(1f))
-            if (q.score > 0) Text("${q.score} 分", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+            KewuTag(q.type.label, cs.tertiaryContainer, cs.onTertiaryContainer)
+            Spacer(Modifier.weight(1f))
+            if (q.score > 0) Text("${q.score} 分", color = cs.onSurfaceSecondary, fontSize = 13.sp)
         }
-        Spacer(Modifier.height(6.dp))
-        Text(q.stem.ifBlank { "（题干为空）" }, color = cs.onSurface, fontSize = 14.5.sp, lineHeight = 21.sp)
-
         Spacer(Modifier.height(10.dp))
+        Text(q.stem.ifBlank { "（题干为空）" }, color = cs.onSurface, fontSize = 15.5.sp, lineHeight = 23.sp,
+            fontWeight = FontWeight.Medium)
+        Spacer(Modifier.height(12.dp))
+
         when (q.type) {
-            QuestionType.SINGLE_CHOICE, QuestionType.TRUE_FALSE -> {
-                val opts = displayOptions(q)
-                val cur = answers[q.id].orEmpty()
-                opts.forEachIndexed { oi, text ->
-                    val letter = if (q.type == QuestionType.TRUE_FALSE) text else optionLetter(oi)
-                    val sel = cur == letter
-                    Chip(selected = sel, onClick = { haptic(HapticKind.Tick); answers[q.id] = letter },
-                        label = if (q.type == QuestionType.TRUE_FALSE) text else "${optionLetter(oi)}. $text",
-                        colors = if (sel) ChipDefaults.chipColors(
-                            containerColor = KewuBlue.copy(alpha = 0.16f))
-                        else ChipDefaults.chipColors())
-                    Spacer(Modifier.height(6.dp))
+            QuestionType.SINGLE_CHOICE, QuestionType.MULTIPLE_CHOICE -> {
+                val multi = q.type == QuestionType.MULTIPLE_CHOICE
+                val chosen = answerSet(value)
+                if (multi) {
+                    Text("多选题，可选择多个选项", color = cs.onSurfaceVariantSummary, fontSize = 12.sp,
+                        modifier = Modifier.padding(bottom = 6.dp))
+                }
+                displayOptions(q).forEachIndexed { oi, text ->
+                    val letter = optionLetter(oi)
+                    val pick: (() -> Unit)? = if (readOnly) null else {
+                        {
+                            haptic(HapticKind.Tick)
+                            onValue(
+                                if (multi) chosen.toMutableSet().also { if (!it.add(letter)) it.remove(letter) }
+                                    .sorted().joinToString(",")
+                                else letter,
+                            )
+                        }
+                    }
+                    OptionGlassRow(
+                        backdrop = bd, badge = letter, selected = letter in chosen, square = multi,
+                        onBadge = pick, onClick = pick,
+                    ) {
+                        Text(text.ifBlank { "（空选项）" }, color = cs.onSurface, fontSize = 14.5.sp, lineHeight = 20.sp,
+                            modifier = Modifier.weight(1f).padding(vertical = 8.dp))
+                    }
+                    Spacer(Modifier.height(8.dp))
                 }
             }
-            QuestionType.MULTIPLE_CHOICE -> {
-                val opts = displayOptions(q)
-                val cur = answers[q.id].orEmpty().split(",").map { it.trim() }.filter { it.isNotBlank() }.toSet()
-                opts.forEachIndexed { oi, text ->
-                    val letter = optionLetter(oi)
-                    val sel = letter in cur
-                    Chip(selected = sel, onClick = {
-                        haptic(HapticKind.Tick)
-                        val next = cur.toMutableSet().also { if (!it.add(letter)) it.remove(letter) }
-                        answers[q.id] = next.sorted().joinToString(",")
-                    }, label = "$letter. $text",
-                        colors = if (sel) ChipDefaults.chipColors(
-                            containerColor = KewuBlue.copy(alpha = 0.16f))
-                        else ChipDefaults.chipColors())
-                    Spacer(Modifier.height(6.dp))
+            QuestionType.TRUE_FALSE -> {
+                val cur = normalizeTfValue(value)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf("正确" to "✓", "错误" to "✗").forEach { (v, mark) ->
+                        val pick: (() -> Unit)? = if (readOnly) null else { { haptic(HapticKind.Tick); onValue(v) } }
+                        OptionGlassRow(
+                            backdrop = bd, badge = mark, selected = cur == v, square = false,
+                            onBadge = pick, onClick = pick, modifier = Modifier.weight(1f),
+                        ) {
+                            Text(v, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
                 }
             }
             QuestionType.FILL_BLANK -> {
-                TextField(answers[q.id].orEmpty(), { answers[q.id] = it }, Modifier.fillMaxWidth(),
-                    backgroundMode = TextFieldMode.Rectangle, label = "在此填写答案", singleLine = true)
+                TextField(value, onValue, Modifier.fillMaxWidth(), backgroundMode = TextFieldMode.Rectangle,
+                    label = "在此填写答案", singleLine = true, enabled = !readOnly)
             }
             QuestionType.SHORT_ANSWER -> {
-                TextField(answers[q.id].orEmpty(), { answers[q.id] = it }, Modifier.fillMaxWidth(),
-                    backgroundMode = TextFieldMode.Rectangle, label = "在此作答…", minLines = 4)
+                TextField(value, onValue, Modifier.fillMaxWidth(), backgroundMode = TextFieldMode.Rectangle,
+                    label = "在此作答…", minLines = 4, enabled = !readOnly)
+            }
+        }
+
+        if (result != null) {
+            Spacer(Modifier.height(12.dp))
+            QuestionResultBlock(q, result)
+        }
+    }
+}
+
+/** 判断题值归一：true/对/T → 正确，false/错/F → 错误（后端回显的 studentValue 可能是 true/false）。 */
+private fun normalizeTfValue(v: String): String = when (v.trim().lowercase()) {
+    "true", "正确", "对", "t", "yes", "√", "✓" -> "正确"
+    "false", "错误", "错", "f", "no", "×", "✗" -> "错误"
+    else -> v
+}
+
+/** 逐题判定（后端 questionResults）：✓ / ✗ / ⏳ + 判定方 + 得分 + 参考答案 + 解析。 */
+@Composable
+private fun QuestionResultBlock(q: Question, r: QuestionResult) {
+    val cs = COUITheme.colorScheme
+    val (label, color) = when (r.correct) {
+        true -> "✓ 回答正确" to KewuGreen
+        false -> "✗ 回答错误" to cs.error
+        null -> "⏳ 待老师批阅" to cs.onSurfaceSecondary
+    }
+    Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = cs.secondaryContainer) {
+        Column(Modifier.padding(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(label, color = color, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    when (r.judgedBy) { "AUTO" -> "系统判分"; "TEACHER" -> "老师判分"; else -> "" },
+                    color = cs.onSurfaceVariantSummary, fontSize = 12.sp,
+                )
+                Spacer(Modifier.weight(1f))
+                val got = r.finalScore ?: r.autoScore
+                Text("得分 ${fmtNum(got)} / ${fmtNum(r.fullScore)}", color = cs.onSurface, fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium)
+            }
+            if (r.correct != null) {
+                if (r.standardAnswer.isNotBlank()) {
+                    Spacer(Modifier.height(6.dp))
+                    Text("参考答案：${r.standardAnswer}", color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 19.sp)
+                }
+                if (q.analysis.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text("解析：${q.analysis}", color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 19.sp)
+                }
             }
         }
     }
 }
 
-/** 拼提交内容：补充说明（纯文本）+ 答案透传块；无答案只发补充说明。 */
-fun buildSubmitContent(note: String, answers: Map<String, String>): String {
-    val base = note.trim()
-    return if (answers.isNotEmpty()) base + "\n\n" + QuestionStore.answersToContent(answers) else base
-}
+private fun fmtNum(v: Double): String = if (v % 1.0 == 0.0) v.toInt().toString() else ((v * 10).toInt() / 10.0).toString()
 
 /**
  * 提交用的可读 content（接口文档 (19) 3.12 ②：**content 仍然必填**，要把各题答案拼成可读文本，

@@ -321,14 +321,11 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }), persist = true)
     }
 
-    // 新消息自动滚到底
-    // 新消息（自己发的 / AI 回的）进入后平滑滑到最底部：先让一帧给气泡完成布局，
-    // 再 animateScrollToItem —— 否则会「瞬间跳到底部」而不是滑动（2026-10-24 用户反馈）
-    LaunchedEffect(msgVersion) {
-        if (messages.isEmpty()) return@LaunchedEffect
-        kotlinx.coroutines.yield()
-        listState.animateScrollToItem(messages.size - 1)
-    }
+    // 新消息平滑滑到底；键盘弹起 / 收起等视口变化时保持贴底（2026-10-26 改用 ChatAutoScroll，
+    // 原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳到上面的对话）。
+    // messages 是普通 list，靠读 msgVersion 触发重组；key 只取最后一条 id —— 顶部加载更早历史不触发滚底
+    val lastMsgId = msgVersion.let { messages.lastOrNull()?.id ?: 0L }
+    ChatAutoScroll(listState, lastMsgId)
 
     // ── 真实 AI 问答（2026-10-24 接入）：AiClient 大模型 + 本页已聚合的学情上下文 ──
 

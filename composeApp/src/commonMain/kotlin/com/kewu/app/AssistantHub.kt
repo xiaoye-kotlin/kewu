@@ -175,7 +175,7 @@ object AssistantHub {
             if (missed.isNotEmpty()) appendLine("AI 预批阅认为薄弱的知识点：${missed.joinToString("、")}")
             append("学生原提交（节选）：${sub.content.take(600)}")
         }
-        val ai = AiClient.chat(system, user, maxTokens = 600)
+        val ai = AiClient.chat(system, user, maxTokens = 3072)
         val body = ai?.let { AiAgent.parse(it).text.trim() }?.takeIf { it.isNotEmpty() } ?: buildString {
             comment?.let { append("老师的意见：$it\n") }
             if (missed.isNotEmpty()) append("· 重点补一补：${missed.joinToString("、")}\n")

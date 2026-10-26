@@ -259,14 +259,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
-    // 新消息自动滑到底（自己发的 / AI 回的都走这里）；键盘弹起也滑到底。
-    // ★ 先让一帧给气泡完成布局再 animateScrollToItem，否则是「瞬间跳到底」而不是滑动
-    //   （2026-10-24 用户反馈：要动画，不要直接显示最底部）
-    LaunchedEffect(messages.size, imeVisible) {
-        if (messages.isEmpty()) return@LaunchedEffect
-        kotlinx.coroutines.yield()
-        listState.animateScrollToItem(messages.lastIndex)
-    }
+    // 新消息平滑滑到底；键盘弹起 / 收起、人格区展开等视口变化时保持贴底（不再跳到上面的对话）。
+    // 2026-10-26 改用 ChatAutoScroll（原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳）
+    ChatAutoScroll(listState, messages.lastOrNull()?.id ?: 0L)
 
     // 录音计时（后端接入前 UI 演示用）
     LaunchedEffect(isRecording) {

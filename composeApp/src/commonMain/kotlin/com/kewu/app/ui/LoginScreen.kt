@@ -50,6 +50,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -244,7 +247,12 @@ fun LoginScreen(onLogin: () -> Unit) {
         )
 
         // 居中玻璃卡（官方 drawBackdrop 同款组合 + 凝结出场）
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // ★ 2026-10-26 输入法避让：外层随键盘收缩 + 可滚动；内层最小高度 = 可视高度，键盘未弹时仍居中，
+        //   键盘弹起后聚焦的输入框（注册页学号 / 密码等）会被滚动容器自动带到键盘上方。
+        BoxWithConstraints(Modifier.fillMaxSize().imePadding()) {
+        val viewportH = maxHeight
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Box(Modifier.fillMaxWidth().heightIn(min = viewportH), contentAlignment = Alignment.Center) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -421,6 +429,8 @@ fun LoginScreen(onLogin: () -> Unit) {
                     Spacer(Modifier.height(12.dp))
                 }
             }
+        }
+        }
         }
 
         // ★ 一级界面返回键（2026-10-19 用户需求）：登录/注册首屏也按「双击退出」处理 ——

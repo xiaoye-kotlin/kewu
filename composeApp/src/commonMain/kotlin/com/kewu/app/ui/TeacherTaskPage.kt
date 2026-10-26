@@ -691,6 +691,17 @@ private fun TeacherAssignmentDetail(
                     }
                     Spacer(Modifier.height(6.dp))
 
+                    // 2026-10-26：老师也能看到自己布置的题（只读，选择 / 判断题高亮正确答案；填空 / 简答显示参考答案）
+                    if (a.questions.isNotEmpty()) {
+                        KewuSectionTitle("题目（共 ${a.questions.size} 题 · 已标出正确答案）")
+                        a.questions.forEachIndexed { qi, q ->
+                            QuestionAnswerCard(
+                                q = q, index = qi + 1, value = q.answer, onValue = {},
+                                readOnly = true, result = null,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                        }
+                    }
                     // 批阅统计
                     KewuSectionTitle("批阅统计")
                     TeacherStatsCard(pageBackdrop, stats)
@@ -1281,7 +1292,8 @@ private fun PublishAssignmentScreen(
             }
             ReviewField("作业标题", title, { title = it }, placeholder = "如 第 5 章习题")
             ReviewField("作业描述", desc, { desc = it }, singleLine = false, placeholder = "题目要求、提交方式…")
-            ReviewField("截止时间", deadline, { deadline = it }, placeholder = "如 2026-10-25 23:59")
+            // 2026-10-26：截止时间改 coui 年月日 + 时分滚轮选择（不再手输）
+            DeadlinePickerField(deadline, { deadline = it }, Modifier.padding(top = 8.dp))
             ReviewField("总分", totalScore, { totalScore = it.filter { ch -> ch.isDigit() } }, placeholder = "100")
             ReviewField("知识点（逗号分隔）", kps, { kps = it }, placeholder = "如 泰勒公式, 洛必达法则")
             QuestionEditorCard(
