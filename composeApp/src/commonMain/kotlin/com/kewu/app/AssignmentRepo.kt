@@ -46,7 +46,9 @@ object AssignmentRepo {
     suspend fun refresh(maxAgeMs: Long = 0L): List<Item>? = lock.withLock {
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         _items.value?.let { if (now - fetchedAt < maxAgeMs) return@withLock it }
-        val list = KewuApi.getAssignments()
+        // 2026-10-26：只看「我的课程」里的作业（旧版拿全站作业，所有学生看到同一批）
+        val myIds = (CourseRepo.courses.value ?: CourseRepo.refresh()).orEmpty().map { it.id }.toSet()
+        val list = KewuApi.getAssignments()?.filter { it.courseId in myIds }
         if (list == null) {
             _failed.value = true
             return@withLock _items.value

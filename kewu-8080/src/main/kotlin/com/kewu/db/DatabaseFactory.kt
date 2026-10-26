@@ -49,7 +49,7 @@ object DatabaseFactory {
             // 列已存在时这个方法返回空列表，重复启动无副作用。
             SchemaUtils.addMissingColumnsStatements(*allTables).forEach { exec(it) }
         }
-        seedIfEmpty()
+        // 2026-10-26 用户要求全部用真实数据：不再灌演示课程 / 作业 / 提交 / 签到（SeedData 保留源码仅供本地开发参考）
         connected = true
     }
 

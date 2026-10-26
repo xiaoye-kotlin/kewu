@@ -161,7 +161,7 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
         reloadJob = scope.launch {
             listFailed = false
             if (KewuApi.currentUser == null) KewuApi.me()
-            val cl = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+            val cl = KewuApi.myCourses()
             courses = cl
             val list = KewuApi.getAssignments(courseFilter)
             assignments = list

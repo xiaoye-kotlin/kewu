@@ -25,17 +25,20 @@ object AiContext {
     }
 
     /** 学生端全景。 */
-    suspend fun student(): String = withTimeoutOrNull(6_000) { studentInner() } ?: "（上下文加载超时，仅知道当前时间：${nowCn()}）"
+    suspend fun student(): String = withTimeoutOrNull(9_000) { studentInner() } ?: "（上下文加载超时，仅知道当前时间：${nowCn()}）"
 
     private suspend fun studentInner(): String = coroutineScope {
         val uname = KewuApi.username.orEmpty()
-        val coursesD = async { CourseRepo.courses.value ?: run { CourseRepo.refresh(); CourseRepo.courses.value } }
-        val itemsD = async { AssignmentRepo.refresh(maxAgeMs = 60_000) ?: AssignmentRepo.items.value }
-        val courses = coursesD.await().orEmpty()
-        val items = itemsD.await().orEmpty()
+        // ★ 2026-10-26 修「问我的作业，小悟说没有作业」：旧版整体 6 秒超时，逐课查签到慢就整段丢弃。
+        //   现在各块各自限时：作业 / 课程优先用已加载的缓存（任务页、首页早已拉过），拿不到再限时刷新；签到最多等 3 秒。
+        val courses = CourseRepo.courses.value
+            ?: withTimeoutOrNull(4_000) { CourseRepo.refresh() }.orEmpty()
+        val items = AssignmentRepo.items.value?.takeIf { it.isNotEmpty() }
+            ?: withTimeoutOrNull(5_000) { AssignmentRepo.refresh(maxAgeMs = 60_000) }
+            ?: AssignmentRepo.items.value.orEmpty()
         val names = courses.associate { it.id to it.name }
         // 今天各门课的签到（有进行中的就告诉 AI 学生签没签）
-        val attendance = courses.map { c ->
+        val attendance = withTimeoutOrNull(3_000) { courses.map { c ->
             async {
                 KewuApi.getAttendances(c.id).orEmpty().filter { it.createdAt.startsWith(todayCn()) }.map { s ->
                     val mine = if (uname.isNotBlank()) KewuApi.getMyAttendance(s.id, uname) else null
@@ -43,7 +46,7 @@ object AiContext {
                         (if (mine != null) "我已签到 ${mine.checkedInAt.takeLast(8)}，状态 ${statusCn(mine.status)}" else "我未签到") + "）"
                 }
             }
-        }.awaitAll().flatten()
+        }.awaitAll().flatten() } ?: listOf("（签到信息加载超时）")
         val profile = ProfileStore.load(uname)
         buildString {
             appendLine("【当前时间】${nowCn()}")

@@ -239,7 +239,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     ?.takeIf { it.isNotEmpty() }
                 ?: KewuApi.getTeacherClasses()?.classes?.map { CourseInfo(it.courseId, it.courseName, "", "") }
                     ?.distinctBy { it.id }?.takeIf { it.isNotEmpty() }
-                ?: KewuApi.getCourses()
+                ?: KewuApi.myCourses()
         courseCount = courses?.size ?: 0
         // 全部课程的作业（旧版只取第一门课）
         val myIds = courses.orEmpty().map { it.id }.toSet()

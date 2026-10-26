@@ -193,7 +193,7 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
             val ov = KewuApi.getTeacherClasses()
             classes = ov?.classes
             overview = ov
-            courses = courses ?: KewuApi.getCourses()
+            courses = courses ?: KewuApi.myCourses()
             loaded = true
         }
     }

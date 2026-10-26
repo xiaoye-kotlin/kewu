@@ -657,7 +657,22 @@ object KewuApi {
 
     // ── 课程模块 ──
 
-    /** 课程列表（无需 token）。失败返回 null（调用方降级 mock）。 */
+    /**
+     * 「我的课程」（2026-10-26 起全 App 只用它，不再用全站课程列表）：
+     * /user/me 里绑定的课程（学生加班级 / 课表导入时自动绑定，老师建课 / 课表认领时绑定）
+     * + 老师名下教学班的课程。拿不到返回 null。
+     */
+    suspend fun myCourses(force: Boolean = false): List<CourseInfo>? {
+        val err = me(force)
+        val bound = currentUser?.courses
+        if (err != null && bound == null) return null
+        val fromClasses = if (currentRole() == ROLE_TEACHER) {
+            getTeacherClasses()?.classes.orEmpty().map { CourseInfo(it.courseId, it.courseName, "", it.teacherName) }
+        } else emptyList()
+        return (bound.orEmpty() + fromClasses).filter { it.id.isNotBlank() }.distinctBy { it.id }
+    }
+
+    /** 全站课程列表（无需 token）。⚠ 只用于「按 id 查课程名」这类辅助场景，不要拿来当「我的课程」。 */
     suspend fun getCourses(): List<CourseInfo>? = try {
         val el = getJson("$BASE_URL/api/courses")
         el.dataArrayOrEmpty("data").mapNotNull { (it as? JsonObject)?.let { o ->

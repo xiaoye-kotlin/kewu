@@ -45,6 +45,8 @@ class TeacherService(
             teacher = req.teacher.ifBlank { teacher?.nickname ?: teacher?.username ?: "" }
         )
         courseRepository.createCourse(course)
+        // 2026-10-26：建课即绑到老师账号（旧版不绑，老师只能靠「全站课程列表」看到自己建的课，所有人都能看到所有课）
+        teacher?.let { userRepository.bindCourse(it.id, course.id) }
         return Result.success(course.toInfo())
     }
 

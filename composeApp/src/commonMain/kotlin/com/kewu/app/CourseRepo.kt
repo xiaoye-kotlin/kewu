@@ -45,7 +45,8 @@ object CourseRepo {
         var best: List<CourseInfo>? = null
         for (wait in BACKOFF_MS) {
             if (wait > 0) delay(wait)
-            val r = withTimeoutOrNull(8_000L) { KewuApi.getCourses() }
+            // 2026-10-26：只取「我的课程」（旧版取全站课程列表，所有账号看到同一批课）
+            val r = withTimeoutOrNull(8_000L) { KewuApi.myCourses(force = true) }
             if (!r.isNullOrEmpty()) {
                 best = r
                 break

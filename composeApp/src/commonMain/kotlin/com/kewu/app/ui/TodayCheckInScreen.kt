@@ -81,7 +81,7 @@ internal fun TodayCheckInScreen(
         failed = false
         val list = courses ?: run {
             KewuApi.me()
-            KewuApi.currentUser?.courses ?: KewuApi.getCourses()
+            KewuApi.myCourses()
         }
         if (list == null) { failed = true; rows = emptyList(); return@LaunchedEffect }
         val today = todayCn()

@@ -170,7 +170,7 @@ fun TeacherConsolePage(
                 ?.map { CourseInfo(it.courseId, it.courseName, "", teacherName) }
                 ?.takeIf { it.isNotEmpty() }
                 ?: KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() }
-                ?: KewuApi.getCourses()
+                ?: KewuApi.myCourses()
             // 恢复进行中的签到（kv 持久化）；若后端已关闭则清掉
             val sid = kvGet("teacher_active_session")
             if (!sid.isNullOrBlank()) {

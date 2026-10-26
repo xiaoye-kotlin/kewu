@@ -235,7 +235,7 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
     // 2026-10-26：只列老师自己的课（旧版 getCourses() 是全站课程，可能给别人的课发起签到）
     LaunchedEffect(Unit) {
         KewuApi.me()
-        courses = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+        courses = KewuApi.myCourses()
     }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
@@ -308,7 +308,7 @@ internal fun PostNoteScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
 
     LaunchedEffect(Unit) {
         KewuApi.me()
-        courses = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+        courses = KewuApi.myCourses()
     }
     // 选课后拉取该课已有笔记作草稿。★ 2026-10-26：记住草稿来自哪门课——切到另一门课时，
     // 若内容还是上一门课自动带出的笔记（老师没改过）就整体替换，避免 A 课的笔记被发到 B 课。

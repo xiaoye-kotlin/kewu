@@ -1484,10 +1484,10 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
     // 获取当前进行中的签到会话（取第一门课的 OPEN 会话）
     LaunchedEffect(Unit) {
         try {
-            val courses = KewuApi.getCourses()
-            if (!courses.isNullOrEmpty()) {
-                val sessions = KewuApi.getAttendances(courses[0].id)
-                currentSession = sessions?.firstOrNull { it.state == "OPEN" }
+            // 2026-10-26：查「我的课程」里任一门正在进行的签到（旧版取全站课程列表的第一门）
+            val courses = CourseRepo.courses.value ?: CourseRepo.refresh()
+            currentSession = courses.orEmpty().firstNotNullOfOrNull { c ->
+                KewuApi.getAttendances(c.id)?.firstOrNull { it.state.equals("OPEN", true) }
             }
         } catch (e: Exception) {
             // 网络异常时卡片静默不显示，不阻塞首页
