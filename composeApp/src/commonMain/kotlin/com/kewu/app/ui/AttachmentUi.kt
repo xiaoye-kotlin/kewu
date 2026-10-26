@@ -6,6 +6,15 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import com.kewu.app.ImageLoader
+import io.github.suqi8.coui.kmp.basic.Surface
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -61,7 +70,7 @@ import kotlin.random.Random
  * 作业附件 UI（2026-10-26，提交作业可带 图片 / 文件 / 录音）。全部 coui 原生件：
  *   - [AttachmentPicker]：提交弹窗里的「＋ 图片 / ＋ 文件 / ● 录音」按钮行 + 已选附件列表（可移除），
  *     录音中显示计时与「停止」；
- *   - [AttachmentList]：已提交附件的只读列表（学生「我的提交」、教师批阅页），点一行用系统应用打开。
+ *   - [AttachmentList]：已提交附件的只读列表（学生「我的提交」、教师批阅页）：图片走内置查看器、录音直接播放。
  */
 @Composable
 fun AttachmentPicker(
@@ -184,8 +193,31 @@ fun AttachmentPicker(
         ) {
             Column {
                 Spacer(Modifier.height(6.dp))
+                val localImages = attachments.filter { it.kind == AttachmentKind.IMAGE }
                 attachments.toList().forEach { a ->
                     BasicComponent(
+                        // 2026-10-26：图片带缩略图、点一下用内置查看器预览；录音可直接试听
+                        startAction = when (a.kind) {
+                            AttachmentKind.IMAGE -> {
+                                {
+                                    RemoteImage(
+                                        source = a.path,
+                                        maxDim = 240,
+                                        modifier = Modifier.padding(end = 10.dp).size(44.dp).clip(RoundedCornerShape(10.dp)),
+                                    )
+                                }
+                            }
+                            AttachmentKind.AUDIO -> {
+                                { Box(Modifier.padding(end = 10.dp)) { AudioPlayButton("local:${a.id}", a.path) } }
+                            }
+                            else -> null
+                        },
+                        onClick = if (a.kind == AttachmentKind.IMAGE) {
+                            {
+                                haptic(HapticKind.Tick)
+                                ImageViewer.open(localImages.map { ViewerImage(it.path, it.name) }, localImages.indexOf(a))
+                            }
+                        } else null,
                         title = a.name,
                         summary = buildString {
                             append(a.kind.label)
@@ -216,26 +248,84 @@ fun AttachmentPicker(
     }
 }
 
-/** 已提交附件的只读列表：一行一个 coui [BasicComponent]，点击用系统应用 / 浏览器打开。 */
+/**
+ * 已提交附件的只读列表（学生「我的提交」、教师批阅页 / 按学生看作业）。2026-10-26 起不再跳浏览器：
+ * - 图片：三列圆角缩略图，点开进 App 内置查看器（[ImageViewer]，可左右滑看同一份提交的所有图片）；
+ * - 录音：coui 播放条直接试听（[AudioPlayerBar]）；
+ * - 其它文件：一行一个 coui [BasicComponent]，点击用系统应用打开（文档类 App 内无法渲染）。
+ */
 @Composable
 fun AttachmentList(attachments: List<AttachmentInfo>, modifier: Modifier = Modifier) {
     if (attachments.isEmpty()) return
     val cs = COUITheme.colorScheme
+    val images = attachments.filter { it.kind == AttachmentKind.IMAGE }
+    val audios = attachments.filter { it.kind == AttachmentKind.AUDIO }
+    val files = attachments.filter { it.kind == AttachmentKind.FILE }
     Column(modifier.fillMaxWidth()) {
         Text("附件（${attachments.size}）", color = cs.onSurfaceSecondary, fontSize = 13.sp,
             fontWeight = FontWeight.Medium)
-        Spacer(Modifier.width(4.dp))
-        attachments.forEach { a ->
+        if (images.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            ImageThumbGrid(images.map { ViewerImage(it.url, it.name) })
+        }
+        audios.forEach { a ->
+            Spacer(Modifier.height(8.dp))
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = cs.secondaryContainer,
+            ) {
+                Column(Modifier.padding(start = 12.dp, end = 12.dp, top = 10.dp, bottom = 6.dp)) {
+                    Text(a.name, color = cs.onSurface, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+                    Spacer(Modifier.height(4.dp))
+                    AudioPlayerBar(
+                        key = "att:${a.id}",
+                        source = a.url.ifBlank { null },
+                        durationHintSec = a.durationSec ?: 0,
+                        unavailableText = "录音链接缺失，无法播放",
+                    )
+                }
+            }
+        }
+        if (files.isNotEmpty()) Spacer(Modifier.height(4.dp))
+        files.forEach { a ->
             BasicComponent(
                 title = a.name,
                 summary = buildString {
                     append(a.kind.label)
-                    a.durationSec?.let { append(" · ${it}秒") }
                     if (a.size > 0) append(" · ${formatFileSize(a.size)}")
-                    append(" · 点击查看")
+                    append(" · 点击用其他应用打开")
                 },
-                onClick = { haptic(HapticKind.Tick); openUrl(a.url) },
+                insideMargin = PaddingValues(horizontal = 0.dp, vertical = 10.dp),
+                onClick = { haptic(HapticKind.Tick); openUrl(ImageLoader.resolve(a.url)) },
             )
+        }
+    }
+}
+
+/** 图片缩略图宫格：每行 3 张、正方形圆角；点任意一张从这张开始进查看器。 */
+@Composable
+fun ImageThumbGrid(images: List<ViewerImage>, modifier: Modifier = Modifier, columns: Int = 3) {
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        images.chunked(columns).forEachIndexed { row, chunk ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                chunk.forEachIndexed { col, img ->
+                    val index = row * columns + col
+                    RemoteImage(
+                        source = img.source,
+                        modifier = Modifier
+                            .weight(1f)
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable {
+                                haptic(HapticKind.Tick)
+                                ImageViewer.open(images, index)
+                            },
+                    )
+                }
+                // 最后一行不满时补位，保持格子大小一致
+                repeat(columns - chunk.size) { Spacer(Modifier.weight(1f)) }
+            }
         }
     }
 }

@@ -51,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kewu.app.AiNav
+import com.kewu.app.AudioPlayback
 import com.kewu.app.BackHandler
 import com.kewu.app.CourseInfo
 import com.kewu.app.CourseRepo
@@ -71,6 +72,7 @@ import com.kewu.app.kvSet
 import com.kewu.app.openAppSettings
 import com.kewu.app.platformActivity
 import com.kewu.app.platformDeviceId
+import com.kewu.app.platformFileSize
 import com.kewu.app.requestAudioPermission
 import com.kewu.app.requestCameraPermission
 import com.kewu.app.requestNotificationPermission
@@ -85,6 +87,7 @@ import io.github.suqi8.coui.kmp.basic.HorizontalDivider
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.IconButton
 import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
+import io.github.suqi8.coui.kmp.basic.Surface
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.basic.TextButton
 import io.github.suqi8.coui.kmp.basic.TextField
@@ -112,6 +115,19 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToLong
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.vector.ImageVector
+import com.kewu.app.KewuBlue
+import com.kewu.app.KewuSky
+import io.github.suqi8.coui.kmp.basic.LinearProgressIndicator
+import io.github.suqi8.coui.kmp.icon.extended.ContactsCircle
+import io.github.suqi8.coui.kmp.icon.extended.Email
+import io.github.suqi8.coui.kmp.icon.extended.Home
+import io.github.suqi8.coui.kmp.icon.extended.Lock
+import io.github.suqi8.coui.kmp.icon.extended.Phone
 
 // ───────────────────────── 我的页（tab 3） ─────────────────────────
 
@@ -191,19 +207,14 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(COUITheme.colorScheme.surface),
         )
-        AnimatedContent(
+        // ★ 2026-10-26 Telegram 式推入 / 返回 + 右滑跟手返回（编辑资料页不开，免得一滑丢掉没保存的修改）
+        KewuSlideHost(
             targetState = screen,
-            transitionSpec = {
-                if (targetState > initialState) {
-                    slideInHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                        slideOutHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-                } else {
-                    slideInHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
-                        slideOutHorizontally(tween<IntOffset>(durationMillis = 320, easing = FastOutSlowInEasing)) { w -> w }
-                }
-            },
             modifier = Modifier.fillMaxSize(),
-            label = "myPageNav",
+            isForward = { a, b -> b > a },
+            swipeEnabled = screen != 0 && screen != 1,
+            swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
+            onSwipeCommit = { screen = it },
         ) { s ->
             when (s) {
                 0 -> MyHome(profile, pageBackdrop, scrollState, onNavHide,
@@ -388,7 +399,7 @@ private fun MyHome(
         KewuCardGroup(Modifier.myEnter(4)) {
             FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onBindCourse)
             FuncRow(5, "加入班级", "输入老师发的 6 位邀请码加入班级", backdrop, onClick = onJoinClass)
-            FuncRow(1, "录音管理", "本地录音、手动重传与多端择优融合", backdrop, onClick = onRecording)
+            FuncRow(1, "录音管理", "录音回放、手动重传与多端择优融合", backdrop, onClick = onRecording)
         }
         KewuCardGroup(Modifier.myEnter(5)) {
             FuncRow(2, "通知设置", "签到提醒、纪要推送与权限管理", backdrop, onClick = onNotification)
@@ -510,11 +521,20 @@ private fun funcIcon(glyph: Int) = when (glyph) {
     else -> COUIIcons.Info
 }
 
-// ───────────────────────── 编辑资料页 ─────────────────────────
+// ───────────────────────── 编辑资料页（2026-10-26 重做：coui × 液态玻璃） ─────────────────────────
 
 /**
- * 修改个人信息：头像 + 名字 + 学号 + 学校/班级 + 手机 + 邮箱，逐行可编辑（coui TextField）。
- * 顶栏 coui `SmallTopAppBar`（返回）+ 右侧 coui 小号「保存」按钮。保存后写回 [MyPage] 的状态。
+ * 修改个人信息。
+ *
+ * 版式：本页自带一层「品牌极光」采样底（coui 灰底 + 蓝 / 绿 / 紫柔光），顶部**液态玻璃名片**实时预览
+ * 头像（渐变描边环）、姓名、身份 / 学号胶囊、学校班级与资料完整度（coui 进度条）；下面三张 **coui 分组卡**：
+ * 基本信息（姓名可改、学号只读）/ 学校与班级（学校复用注册页的 coui 底部搜索选择器）/ 联系方式（仅存本机）。
+ * 每行 = 彩色图标底 + 标签 + coui 无边框输入框（占位提示 / 清除键 / 错误态），行间 coui 分割线。
+ *
+ * 行为：有改动才能保存（顶栏「保存」与底部大按钮同一逻辑）；手机号 / 邮箱格式即时校验；
+ * 有未保存改动时按返回 → coui 确认弹窗，确认放弃后等弹窗退场完再离开（与「退出登录」同一解耦写法，避免采样销毁中的玻璃）。
+ *
+ * 玻璃约束：名片玻璃与极光采样层平级（不在其内部），入场只做位移，不叠 alpha / scale。
  */
 @Composable
 private fun EditProfilePage(
@@ -525,79 +545,297 @@ private fun EditProfilePage(
 ) {
     val cs = COUITheme.colorScheme
     var name by remember { mutableStateOf(profile.name) }
-    var studentId by remember { mutableStateOf(profile.studentId) }
     var school by remember { mutableStateOf(profile.school) }
     var className by remember { mutableStateOf(profile.className) }
     var phone by remember { mutableStateOf(profile.phone) }
     var email by remember { mutableStateOf(profile.email) }
+    var pickSchool by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf(false) }
+    var discardConfirmed by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+    val heroBackdrop = rememberGlassBackdrop()
 
-    Column(Modifier.fillMaxSize()) {
-        KewuTopBar("编辑资料", onBack = onBack, actions = {
-            SmallButton("保存", primary = true, modifier = Modifier.padding(end = 12.dp)) {
-                onSave(
-                    profile.copy(
-                        name = name.trim().ifEmpty { profile.name },
-                        studentId = studentId.trim(),
-                        school = school.trim(),
-                        className = className.trim(),
-                        phone = phone.trim(),
-                        email = email.trim(),
-                    ),
+    val nameErr = if (name.isBlank()) "姓名不能为空" else null
+    val phoneErr = phone.trim().let { if (it.isNotEmpty() && !PHONE_RE.matches(it)) "请输入 11 位手机号" else null }
+    val emailErr = email.trim().let { if (it.isNotEmpty() && !EMAIL_RE.matches(it)) "邮箱格式不正确" else null }
+    val firstErr = nameErr ?: phoneErr ?: emailErr
+    val edited = profile.copy(
+        name = name.trim(),
+        school = school.trim(),
+        className = className.trim(),
+        phone = phone.trim(),
+        email = email.trim(),
+    )
+    val dirty = edited != profile
+    val canSave = dirty && firstErr == null
+
+    // 资料完整度：姓名 / 学校 / 班级 / 手机 / 邮箱 五项
+    val filled = listOf(edited.name, edited.school, edited.className, edited.phone, edited.email).count { it.isNotBlank() }
+    val completeness = filled / 5f
+
+    fun save() {
+        if (canSave) onSave(edited)
+    }
+
+    fun tryBack() {
+        if (dirty) confirmDiscard = true else onBack()
+    }
+    BackHandler(enabled = dirty) { confirmDiscard = true }
+
+    Box(Modifier.fillMaxSize()) {
+        // ── 本页采样层：coui 灰底 + 顶部品牌极光（静态绘制，不跑动画，玻璃不必每帧重模糊）──
+        Box(
+            Modifier
+                .matchParentSize()
+                .layerBackdrop(heroBackdrop)
+                .drawBehind {
+                    drawRect(cs.surface)
+                    val w = size.width
+                    fun glow(color: Color, cx: Float, cy: Float, r: Float) {
+                        val c = Offset(cx, cy)
+                        drawCircle(Brush.radialGradient(listOf(color, Color.Transparent), center = c, radius = r), radius = r, center = c)
+                    }
+                    glow(KewuSky.copy(alpha = 0.55f), w * 0.12f, 70.dp.toPx(), w * 0.62f)
+                    glow(KewuGreen.copy(alpha = 0.42f), w * 0.92f, 150.dp.toPx(), w * 0.55f)
+                    glow(AccentPurple.copy(alpha = 0.30f), w * 0.55f, 250.dp.toPx(), w * 0.45f)
+                },
+        )
+
+        Column(Modifier.fillMaxSize()) {
+            KewuTopBar("编辑资料", onBack = { tryBack() }, actions = {
+                SmallButton("保存", primary = true, enabled = canSave, modifier = Modifier.padding(end = 12.dp)) { save() }
+            })
+
+            Column(Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp)) {
+                Spacer(Modifier.height(6.dp))
+
+                // ── 液态玻璃名片（实时预览）──
+                KewuGlassCard(
+                    backdrop = heroBackdrop,
+                    shape = RoundedCornerShape(26.dp),
+                    blurRadius = 24.dp,
+                    tintAlpha = 0.34f,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 14.dp)
+                        .myEnter(0, glass = true),
+                ) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 22.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        GradientAvatar(name.trim().firstOrNull()?.toString() ?: "我", 92.dp)
+                        Spacer(Modifier.height(12.dp))
+                        Text(name.trim().ifEmpty { "未填写姓名" }, color = cs.onSurface, fontSize = 21.sp,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            KewuTag("学生", cs.tertiaryContainer, cs.onTertiaryContainer)
+                            KewuTag("学号 ${profile.studentId.ifBlank { "—" }}", Color.White.copy(alpha = 0.7f), cs.onSurface)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            listOf(edited.school, edited.className).filter { it.isNotBlank() }.joinToString(" · ")
+                                .ifEmpty { "还没有填写学校与班级" },
+                            color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1,
+                        )
+                        Spacer(Modifier.height(18.dp))
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text("资料完整度", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+                            Spacer(Modifier.weight(1f))
+                            Text("${(completeness * 100).toInt()}%", color = cs.primary, fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        val shownProgress by animateFloatAsState(completeness, spring(stiffness = 300f), label = "completeness")
+                        LinearProgressIndicator(progress = shownProgress, modifier = Modifier.fillMaxWidth())
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            if (filled == 5) "资料已完善" else "补全学校和班级，小悟能更准确地帮你安排学习",
+                            color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+
+                // ── 基本信息 ──
+                GroupLabel("基本信息", Modifier.myEnter(1))
+                KewuCardGroup(Modifier.myEnter(2)) {
+                    ProfileInputRow(COUIIcons.ContactsCircle, KewuBlue, "姓名", name, "填写真实姓名",
+                        isError = nameErr != null, maxCount = 20) { name = it }
+                    RowDivider()
+                    ProfileStaticRow(COUIIcons.Lock, AccentGray, "学号", profile.studentId.ifBlank { "—" }, "登录账号，不可修改")
+                }
+
+                // ── 学校与班级 ──
+                GroupLabel("学校与班级", Modifier.myEnter(3))
+                KewuCardGroup(Modifier.myEnter(4)) {
+                    ArrowPreference(
+                        title = "学校",
+                        summary = school.ifBlank { "点击选择学校" },
+                        startAction = { IconBadge(COUIIcons.Home, AccentGreen) },
+                        onClick = { haptic(HapticKind.Tick); pickSchool = true },
+                    )
+                    RowDivider()
+                    ProfileInputRow(COUIIcons.Community, AccentPurple, "班级", className, "如 计科 2301 班",
+                        maxCount = 30) { className = it }
+                }
+
+                // ── 联系方式 ──
+                GroupLabel("联系方式", Modifier.myEnter(5))
+                KewuCardGroup(Modifier.myEnter(6)) {
+                    ProfileInputRow(COUIIcons.Phone, AccentOrange, "手机号", phone, "11 位手机号",
+                        keyboardType = KeyboardType.Phone, isError = phoneErr != null, maxCount = 11) { phone = it.filter(Char::isDigit) }
+                    RowDivider()
+                    ProfileInputRow(COUIIcons.Email, KewuSky, "邮箱", email, "name@example.com",
+                        keyboardType = KeyboardType.Email, isError = emailErr != null) { email = it.trim() }
+                }
+                Text(
+                    firstErr ?: "手机号和邮箱只保存在本机，不会同步到服务器或展示给同学",
+                    color = if (firstErr != null) cs.error else cs.onSurfaceVariantSummary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 28.dp).myEnter(7),
+                )
+
+                Spacer(Modifier.height(22.dp))
+                KewuPrimaryButton(
+                    text = if (dirty) "保存修改" else "暂无修改",
+                    onClick = { save() },
+                    enabled = canSave,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).myEnter(8),
                 )
             }
-        })
+        }
 
-        Column(
-            Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp),
-        ) {
-            Spacer(Modifier.height(8.dp))
-            // 头像（编辑页只读预览，真实可换图留接口）
-            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Box(
-                    Modifier.size(72.dp).clip(CircleShape).background(cs.tertiaryContainer),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(name.firstOrNull()?.toString() ?: "我", color = cs.onTertiaryContainer,
-                        fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        if (pickSchool) {
+            SchoolPickerSheet(
+                selected = school,
+                onDismiss = { pickSchool = false },
+                onSelect = { school = it; pickSchool = false },
+            )
+        }
+
+        KewuConfirmDialog(
+            show = confirmDiscard,
+            title = "放弃本次修改？",
+            summary = "你修改的资料还没有保存",
+            confirmText = "放弃",
+            cancelText = "继续编辑",
+            onConfirm = { discardConfirmed = true; confirmDiscard = false },
+            onDismiss = { confirmDiscard = false },
+            onDismissFinished = {
+                if (discardConfirmed) {
+                    discardConfirmed = false
+                    onBack()
                 }
-            }
-            Spacer(Modifier.height(16.dp))
-            EditField("姓名", name) { name = it }
-            // ★ 学号单独成行并强提示，且输入为数字
-            EditField("学号", studentId, keyboardNum = true) { studentId = it }
-            EditField("学校", school) { school = it }
-            EditField("班级", className) { className = it }
-            EditField("手机号", phone, keyboardType = KeyboardType.Phone) { phone = it }
-            EditField("邮箱", email, keyboardType = KeyboardType.Email) { email = it }
-            Spacer(Modifier.height(12.dp))
+            },
+        )
+    }
+}
+
+private val PHONE_RE = Regex("^1\\d{10}$")
+private val EMAIL_RE = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+
+// 资料页行首图标底的点缀色（品牌蓝 / 青之外再补几色，区分分组又不喧宾夺主）
+private val AccentGreen = Color(0xFF12B076)
+private val AccentPurple = Color(0xFF8A63F2)
+private val AccentOrange = Color(0xFFFF8A3D)
+private val AccentGray = Color(0xFF7A8699)
+
+/** 头像：品牌渐变描边环（蓝 → 青 → 绿 → 紫）+ 白底圆 + 姓名首字。 */
+@Composable
+private fun GradientAvatar(initial: String, size: Dp) {
+    val cs = COUITheme.colorScheme
+    Box(
+        Modifier
+            .size(size)
+            .drawBehind {
+                drawCircle(
+                    Brush.sweepGradient(listOf(KewuBlue, KewuSky, KewuGreen, AccentPurple, KewuBlue)),
+                    radius = this.size.minDimension / 2f - 2.dp.toPx(),
+                    style = Stroke(width = 3.5.dp.toPx()),
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.size(size - 14.dp).clip(CircleShape).background(cs.surfaceContainer),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initial, color = cs.primary, fontSize = (size.value * 0.36f).sp, fontWeight = FontWeight.Bold)
         }
     }
 }
 
-/** 单行编辑字段：分组小标题 + coui 圆角矩形输入框（自带清除按钮）。 */
+/** 行首彩色图标底（圆角方块 + 13% 同色底 + 图标），ColorOS 设置页同款。 */
 @Composable
-private fun EditField(
+private fun IconBadge(icon: ImageVector, tint: Color) {
+    Box(
+        Modifier.padding(end = 12.dp).size(32.dp).clip(RoundedCornerShape(10.dp)).background(tint.copy(alpha = 0.13f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** 分组卡内行间分割线（从图标右侧开始，coui 列表惯例）。 */
+@Composable
+private fun RowDivider() {
+    HorizontalDivider(Modifier.padding(start = 60.dp, end = 16.dp))
+}
+
+/** 输入行：图标底 + 标签 + coui 无边框输入框（占位提示 / 清除键 / 错误态）。 */
+@Composable
+private fun ProfileInputRow(
+    icon: ImageVector,
+    tint: Color,
     label: String,
     value: String,
-    keyboardNum: Boolean = false,
+    placeholder: String,
     keyboardType: KeyboardType = KeyboardType.Text,
+    isError: Boolean = false,
+    maxCount: Int? = null,
     onValueChange: (String) -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 4.dp)) {
-        KewuSectionTitle(label)
+    val cs = COUITheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBadge(icon, tint)
+        Text(label, color = if (isError) cs.error else cs.onSurface, fontSize = 15.sp,
+            modifier = Modifier.width(56.dp), maxLines = 1)
         TextField(
             value = value,
-            onValueChange = onValueChange,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            backgroundMode = TextFieldMode.Rectangle,
-            label = label,
+            onValueChange = { v -> onValueChange(if (maxCount != null) v.take(maxCount) else v) },
+            modifier = Modifier.weight(1f),
+            backgroundMode = TextFieldMode.None,
+            label = placeholder,
+            useLabelAsPlaceholder = true,
+            isError = isError,
             singleLine = true,
             showClearButton = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (keyboardNum) KeyboardType.Number else keyboardType,
-            ),
+            keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
         )
+    }
+}
+
+/** 只读行：图标底 + 标签 + 值 + 说明（学号）。 */
+@Composable
+private fun ProfileStaticRow(icon: ImageVector, tint: Color, label: String, value: String, note: String) {
+    val cs = COUITheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        IconBadge(icon, tint)
+        Text(label, color = cs.onSurface, fontSize = 15.sp, modifier = Modifier.width(56.dp), maxLines = 1)
+        Column(Modifier.weight(1f).padding(start = 4.dp)) {
+            Text(value, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium,
+                letterSpacing = 0.4.sp, maxLines = 1)
+            Text(note, color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1)
+        }
     }
 }
 
@@ -637,6 +875,7 @@ private fun SmallButton(
  * - 顶部玻璃概览：总数 / 待重传 / 已上传；
  * - 按协同会话 sessionId 分组（同课同日教师端 + 学生端落同一会话），组内逐条展示
  *   课程 / 时间 / 时长 / 大小 / 端角色 / 质量分 / 信噪比 / 电平 / 上传状态；
+ * - 每条都能在 App 内回放（[AudioPlayerBar]：已上传播云端链接，未上传播本机文件，同一时刻只播一条，离开页面自动停）；
  * - 失败项「重传」→ [RecordingManager.retryRecord]；已上传项「分享链接」；任意项可删除本地记录；
  * - 组内已上传 ≥1 条可「择优融合」→ 8081 `/api/recordings/fuse`，结果卡标出主音源。
  */
@@ -762,7 +1001,10 @@ private fun RecordingManagePage(backdrop: LayerBackdrop, onBack: () -> Unit) {
         summary = "只移除本机记录与重传入口，已上传到云端的录音不会被删除",
         confirmText = "删除",
         onConfirm = {
-            deleteTarget?.let { RecordingManager.removeRecord(it.localId) }
+            deleteTarget?.let {
+                AudioPlayback.stopIf("rec:${it.localId}")
+                RecordingManager.removeRecord(it.localId)
+            }
             deleteTarget = null
         },
         onDismiss = { deleteTarget = null },
@@ -779,7 +1021,7 @@ private fun OverviewCell(label: String, value: String, valueColor: Color, modifi
     }
 }
 
-/** 单条录音（coui Card）：课程 + 端角色 + 状态胶囊 / 时间·时长·大小 / 质量指标 / 操作按钮。 */
+/** 单条录音（coui Card）：课程 + 端角色 + 状态胶囊 / 时间·时长·大小 / 质量指标 / 播放条 / 操作按钮。 */
 @Composable
 private fun RecordingRow(
     item: RecordingRecord,
@@ -834,6 +1076,28 @@ private fun RecordingRow(
             }
             Spacer(Modifier.height(2.dp))
             Text(metrics.joinToString(" · "), color = cs.onSurfaceVariantSummary, fontSize = 12.sp, maxLines = 1)
+        }
+        // 2026-10-26：App 内直接回放 —— 已上传的播云端链接（上传成功后本机 WAV 已删），未上传的播本机文件
+        val playSource = remember(item.localId, item.uploaded, item.url, item.filePath) {
+            when {
+                item.uploaded && item.url.isNotBlank() -> item.url
+                item.filePath != null && platformFileSize(item.filePath) > 0 -> item.filePath
+                else -> null
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = cs.secondaryContainer,
+        ) {
+            AudioPlayerBar(
+                key = "rec:${item.localId}",
+                source = playSource,
+                durationHintSec = item.durationSec,
+                modifier = Modifier.padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
+                unavailableText = if (item.uploaded) "云端链接缺失，无法播放" else "本机录音文件已清理，无法播放",
+            )
         }
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {

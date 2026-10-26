@@ -739,7 +739,7 @@ private fun SchoolSelectorField(value: String, onClick: () -> Unit) {
  * 再回调，退场动画能完整播放。
  */
 @Composable
-private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+internal fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 

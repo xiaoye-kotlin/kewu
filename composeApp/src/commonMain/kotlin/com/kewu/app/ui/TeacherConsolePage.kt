@@ -125,6 +125,12 @@ private sealed class ConsoleDrill {
     data class PRECLASS(val course: CourseInfo, val durationMinutes: Int) : ConsoleDrill()
 }
 
+/** 返回上一级（与 BackHandler 同口径）。 */
+private fun ConsoleDrill.parent(): ConsoleDrill = (this as? ConsoleDrill.DETAIL)?.back ?: ConsoleDrill.NONE
+
+/** 下钻层级：决定转场方向。 */
+private fun ConsoleDrill.depth(): Int = if (this == ConsoleDrill.NONE) 0 else 1 + parent().depth()
+
 @Composable
 fun TeacherConsolePage(
     onGoToTab: (Int) -> Unit = {},
@@ -238,15 +244,15 @@ fun TeacherConsolePage(
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        AnimatedContent(
+        // ★ 2026-10-26 Telegram 式推入 / 返回（全 app 下钻统一用 KewuSlideHost）：旧版返回也是从右推入，
+        //   方向反了，现在按层级判断。右滑返回开在只读页（签到历史 / 今日签到 / 签到详情），课前准备不开。
+        KewuSlideHost(
             targetState = drill,
-            transitionSpec = {
-                // 与全 app 下钻同款：仅 slide 无 fade 共享轴（placement 位移对采样者安全）
-                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-            },
             modifier = Modifier.fillMaxSize(),
-            label = "consoleNav",
+            isForward = { a, b -> b.depth() >= a.depth() },
+            swipeEnabled = drill != ConsoleDrill.NONE && drill !is ConsoleDrill.PRECLASS,
+            swipeNeighbor = { from, d -> if (d < 0 && from != ConsoleDrill.NONE) from.parent() else null },
+            onSwipeCommit = { drill = it },
         ) { d ->
             when (d) {
                 ConsoleDrill.NONE -> ConsoleHome(

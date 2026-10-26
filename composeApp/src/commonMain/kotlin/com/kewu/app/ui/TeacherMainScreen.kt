@@ -115,15 +115,31 @@ fun TeacherMainScreen(
         if (tabW.value > 0f) {
             bubbleJob?.cancel()
             bubbleJob = navScope.launch {
-                centerAnim.animateTo(
+                // 与学生端 slideBubbleTo 完全一致：逐栏轻震 + 被打断停在半路时补滑到位
+                centerAnim.slidePassHaptic(
                     targetValue = targetPx,
+                    tabW = tabW.value,
                     animationSpec = spring(dampingRatio = 0.8f, stiffness = 260f),
                     initialVelocity = centerAnim.velocity.coerceIn(-1800f, 1800f),
-                )
+                ) { haptic(HapticKind.Tick) }
+                if (kotlin.math.abs(centerAnim.value - targetPx) > 1f) {
+                    centerAnim.animateTo(
+                        targetValue = targetPx,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 260f),
+                    )
+                }
             }
         }
     }
     val cancelBubble: () -> Unit = { bubbleJob?.cancel() }
+    // 内容区拖动切页时泡泡跟手（同学生端 MainScreen.swipeBubble）
+    val swipeBubble: (Int, Int?, Float) -> Unit = { from, to, p ->
+        if (tabW.value > 0f) {
+            val pos = if (to == null) from.toFloat() else from + (to - from) * p
+            bubbleJob?.cancel()
+            bubbleJob = navScope.launch { centerAnim.snapTo(pos * tabW.value + tabW.value / 2f) }
+        }
+    }
     val navVisible by animateFloatAsState(
         targetValue = if (navHidden) 0f else 1f,
         animationSpec = spring(dampingRatio = 0.42f, stiffness = 300f),
@@ -187,23 +203,34 @@ fun TeacherMainScreen(
                     .imePadding()
                     // ★ 2026-10-26 edge-to-edge：三键导航等较高的系统导航栏，整体把内容区与底栏一起抬高（手势条机型为 0）
                     .padding(bottom = navExtra)
-                    .layerBackdrop(backdrop)
-                    // 下钻子页（发布 / 批阅 / 详情…）时暂停横滑切 tab，避免一次斜滑丢掉草稿与批阅进度
-                    .then(if (swipeLock == 0) Modifier.pointerInput(selected) {
-                        var acc = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { acc = 0f },
-                            onHorizontalDrag = { _, dragAmount -> acc += dragAmount },
-                            onDragEnd = {
-                                val threshold = 96f
-                                if (acc <= -threshold) goToTab((selected + 1).coerceAtMost(n - 1))
-                                else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
-                            },
-                        )
-                    } else Modifier),
+                    .layerBackdrop(backdrop),
             ) {
-                Box(Modifier.fillMaxSize()) {
-                    when (selected) {
+                // ★ 2026-10-26 Telegram 式切页（同学生端 MainScreen）：tab 间整页跟手联动 + 两端橡皮筋回弹，
+                //   泡泡跟着手指走。下钻子页（发布 / 批阅 / 详情…）上锁时暂停，避免一次斜滑丢掉草稿与批阅进度。
+                KewuSlideHost(
+                    targetState = selected,
+                    modifier = Modifier.fillMaxSize(),
+                    style = SlideStyle.Pager,
+                    isForward = { a, b -> b > a },
+                    swipeEnabled = swipeLock == 0,
+                    swipeNeighbor = { from, d -> (from + d).takeIf { it in 0 until n } },
+                    onSwipeCommit = { goToTab(it) },
+                    onSwipeProgress = { from, to, p ->
+                        swipeBubble(from, to, p)
+                        val pv = (if (to == null) from.toFloat() else from + (to - from) * p).roundToInt()
+                        if (pv != preview) {
+                            haptic(HapticKind.Tick)
+                            preview = pv
+                        }
+                    },
+                    onSwipeEnd = { to ->
+                        if (to == null) {
+                            preview = selected
+                            slideBubbleTo(selected * tabW.value + tabW.value / 2f)
+                        }
+                    },
+                ) { idx ->
+                    when (idx) {
                         0 -> TeacherConsolePage(onGoToTab = { goToTab(it) }, onNavHide = { navHidden = it })
                         1 -> TeacherAssistantPage(onNavHide = { navHidden = it })
                         2 -> TeacherTaskPage(onNavHide = { navHidden = it })

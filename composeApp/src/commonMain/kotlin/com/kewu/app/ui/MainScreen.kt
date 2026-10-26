@@ -200,6 +200,15 @@ fun MainScreen(
         }
     }
     val cancelBubble: () -> Unit = { bubbleJob?.cancel() }
+    // 内容区拖动切页时泡泡跟手：按「from→to 的进度」直接摆到两栏之间（同样走 bubbleJob 单驾驶，
+    // 松手后 goToTab / slideBubbleTo 取消它并带速度接着滑，不会两路并发写 centerAnim）
+    val swipeBubble: (Int, Int?, Float) -> Unit = { from, to, p ->
+        if (tabW.value > 0f) {
+            val pos = if (to == null) from.toFloat() else from + (to - from) * p
+            bubbleJob?.cancel()
+            bubbleJob = navScope.launch { centerAnim.snapTo(pos * tabW.value + tabW.value / 2f) }
+        }
+    }
     // 收起动画：从大到小 + 淡出 + 轻微下沉。低阻尼弹簧（damping 0.42）让它「弹性」消失
     // —— 缩过头再回弹一下，不是线性淡出。
     val navVisible by animateFloatAsState(
@@ -278,8 +287,8 @@ fun MainScreen(
             //   ① Row 是 fillMaxSize（宽=屏宽），第 1 个子项吃掉整宽后，后续子项被以 maxWidth=0 测量
             //      → 宽度塌成 0，tab1/2/3 整片空白（用户报「我的/任务内容不见了」）；
             //   ② 整条 Row 被 offset 位移后，coui 采样坐标错乱 → 导航栏采到坏层变黑。
-            //   现在只画当前页、offset 恒为 0 → 采样坐标稳定：内容必显示、导航栏不再变黑。
-            //   切页只换 index，不做内容位移（导航泡泡的滑行已提供足够的切换反馈）。
+            //   现在静止时只画当前页；切页过渡由 KewuSlideHost 在 Box 内叠两页做 placement 位移
+            //   （每页满宽测量、layerBackdrop 节点本身不位移），过渡结束即回到单页。
             val n = NAV_ITEMS.size
             Box(
                 Modifier
@@ -291,32 +300,36 @@ fun MainScreen(
                     .imePadding()
                     // ★ 2026-10-26 edge-to-edge：三键导航等较高的系统导航栏，整体把内容区与底栏一起抬高（手势条机型为 0）
                     .padding(bottom = navExtra)
-                    .layerBackdrop(backdrop)
-                    // 内容区左右滑动切页：仅识别「横向主导」的手势，松手按方向切上一/下一栏。
-                    // 竖向滑动原样透传给页面内的 verticalScroll（不抢手势）。
-                    // ★ 2026-10-19：**助教页关闭横滑**（输入框/气泡长按/录音手势多，横滑易误触切页）；
-                    //   其它页保留。key 用 selected，切换后手势闭包里的 selected 始终最新。
-                    .then(
-                        if (selected != ASSISTANT_TAB && swipeLock == 0) {
-                            Modifier.pointerInput(selected) {
-                                var acc = 0f
-                                detectHorizontalDragGestures(
-                                    onDragStart = { acc = 0f },
-                                    onHorizontalDrag = { _, dragAmount -> acc += dragAmount },
-                                    onDragEnd = {
-                                        val threshold = 96f // ~35dp，足够区分「误触」与「真的想切页」
-                                        if (acc <= -threshold) goToTab((selected + 1).coerceAtMost(n - 1))
-                                        else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
-                                    },
-                                )
-                            }
-                        } else {
-                            Modifier
-                        },
-                    ),
+                    .layerBackdrop(backdrop),
             ) {
-                Box(Modifier.fillMaxSize()) {
-                    TabContent(NAV_ITEMS[selected], goToTab, onLogout) { navHidden = it }
+                // ★ 2026-10-26 Telegram 式切页：tab 间两页整屏联动（KewuSlideHost Pager），手指拖多少走多少，
+                //   松手按位移 / 甩动速度翻页或弹回，两端橡皮筋回弹；导航泡泡跟着手指一起滑。
+                //   仍是「Box 叠页 + placement 位移」，不是 Row 并排（见上方老坑），静止时只组合当前页。
+                //   ★ 助教页关闭横滑（输入框 / 气泡长按 / 录音手势多，易误触）；下钻子页上锁时也暂停。
+                KewuSlideHost(
+                    targetState = selected,
+                    modifier = Modifier.fillMaxSize(),
+                    style = SlideStyle.Pager,
+                    isForward = { a, b -> b > a },
+                    swipeEnabled = selected != ASSISTANT_TAB && swipeLock == 0,
+                    swipeNeighbor = { from, d -> (from + d).takeIf { it in 0 until n } },
+                    onSwipeCommit = { goToTab(it) },
+                    onSwipeProgress = { from, to, p ->
+                        swipeBubble(from, to, p)
+                        val pv = (if (to == null) from.toFloat() else from + (to - from) * p).roundToInt()
+                        if (pv != preview) {
+                            haptic(HapticKind.Tick)
+                            preview = pv
+                        }
+                    },
+                    onSwipeEnd = { to ->
+                        if (to == null) {
+                            preview = selected
+                            slideBubbleTo(selected * tabW.value + tabW.value / 2f)
+                        }
+                    },
+                ) { idx ->
+                    TabContent(NAV_ITEMS[idx], goToTab, onLogout) { navHidden = it }
                 }
             }
         }
@@ -865,16 +878,24 @@ private suspend fun PointerInputScope.navGestures(
             val downX = down.position.x
             var engaged = false
             var isTap = true
-            var lastCx = downX
+            // ★ 2026-10-26 修「长按两端 tab（课堂 / 我的、控制台 / 我的）泡泡中心偏离图标」：
+            //   旧版把中心夹在 [泡泡半宽, 总宽-泡泡半宽]，而泡泡宽 1.34×tabW，半宽 0.67×tabW 大于
+            //   两端 tab 的中心 0.5×tabW → 长按最左 / 最右 tab 时泡泡被往里推了 0.17×tabW。
+            //   现在：拾取时泡泡中心对准按下的那个 tab 的图标中心，之后跟手保持「按下点 → 图标中心」的
+            //   相对偏移（不会一拖就跳到手指下）；夹紧范围改为首尾 tab 的中心（泡泡本来就允许探出托盘）。
+            val minC = tabW.value * 0.5f
+            val maxC = tabW.value * (itemCount - 0.5f)
+            val downTab = tabIndexFromX(downX, tabW.value, itemCount)
+            val grabOffset = downTab * tabW.value + tabW.value / 2f - downX
+            var lastCx = (downX + grabOffset).coerceIn(minC, maxC)
             val job = scope.launch {
                 delay(longPressMs)
                 engaged = true
                 expanded.value = true
                 dragging.value = true
-                val half = tabW.value * bubbleWFactor / 2f
-                dragCenter.value = downX.coerceIn(half, tabW.value * itemCount - half)
-                onPreview(tabIndexFromX(downX, tabW.value, itemCount))
-                onPreviewFloat(tabIndexFloatFromX(downX, tabW.value, itemCount))
+                dragCenter.value = lastCx
+                onPreview(downTab)
+                onPreviewFloat(tabIndexFloatFromX(lastCx, tabW.value, itemCount))
             }
             while (true) {
                 val event = awaitPointerEvent()
@@ -900,8 +921,7 @@ private suspend fun PointerInputScope.navGestures(
                 }
                 // engaged：跟手处理
                 isTap = false
-                val half = tabW.value * bubbleWFactor / 2f
-                val cx = change.position.x.coerceIn(half, tabW.value * itemCount - half)
+                val cx = (change.position.x + grabOffset).coerceIn(minC, maxC)
                 val dv = cx - lastCx
                 lastCx = cx
                 // 速度低通滤波 → 拖得越快拉得越长（加速度形变由 stretch 弹簧过冲体现）
@@ -967,7 +987,7 @@ private suspend fun PointerInputScope.navGestures(
  * 用于"点选远 tab / 页内跳 tab"滑行时「每经过一个栏目都给一点反馈」（Tick 极轻、不震手）。
  * tabW<=0（首帧未测量）时退化为普通 animateTo。
  */
-private suspend fun Animatable<Float, AnimationVector1D>.slidePassHaptic(
+internal suspend fun Animatable<Float, AnimationVector1D>.slidePassHaptic(
     targetValue: Float,
     tabW: Float,
     animationSpec: AnimationSpec<Float>,
