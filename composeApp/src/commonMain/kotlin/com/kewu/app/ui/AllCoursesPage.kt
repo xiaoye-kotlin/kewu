@@ -54,27 +54,28 @@ fun AllCoursesPage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
         openCourse != null -> 1
         else -> 0
     }
-    AnimatedContent(
+    // 返回时 openXxx 先被置空、旧页还在滑出：记住最后一次的 id，滑出途中页面内容不消失
+    val last = remember { arrayOfNulls<String>(2) }
+    openCourse?.let { last[0] = it }
+    openAssignment?.let { last[1] = it }
+    // ★ 2026-10-26 Telegram 式推入 / 返回；课程详情可右滑返回列表（作业详情是作答页，不开）。
+    //   列表页（depth 0）不接管手势 → 交给外层课堂页的右滑返回首页。
+    KewuSlideHost(
         targetState = depth,
-        transitionSpec = {
-            if (targetState > initialState) {
-                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-            } else {
-                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
-                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w }
-            }
-        },
-        label = "allCoursesDrill",
+        modifier = Modifier.fillMaxSize(),
+        isForward = { a, b -> b > a },
+        swipeEnabled = depth == 1,
+        swipeNeighbor = { from, d -> if (d < 0 && from == 1) 0 else null },
+        onSwipeCommit = { openCourse = null },
     ) { d ->
         when (d) {
             2 -> {
-                val aid = openAssignment ?: return@AnimatedContent
+                val aid = openAssignment ?: last[1] ?: return@KewuSlideHost
                 BackHandler { openAssignment = null }
                 AssignmentDetailScreen(assignmentId = aid, onBack = { openAssignment = null })
             }
             1 -> {
-                val cid = openCourse ?: return@AnimatedContent
+                val cid = openCourse ?: last[0] ?: return@KewuSlideHost
                 BackHandler { openCourse = null }
                 CourseDetailScreen(
                     courseId = cid,

@@ -167,19 +167,11 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        // ★ 下钻滑页（与「我的」子路由同款，仅 slide 无 fade）：旧版 if/else 硬切，生硬。
-        AnimatedContent(
+        // ★ 下钻转场：Telegram 式推入 / 返回（KewuSlideHost Push）。作答页不开右滑返回（一滑丢答案）。
+        KewuSlideHost(
             targetState = assignmentId,
-            transitionSpec = {
-                if (targetState != null) {
-                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-                } else {
-                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
-                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w }
-                }
-            },
-            label = "taskDrill",
+            modifier = Modifier.fillMaxSize(),
+            isForward = { _, to -> to != null },
         ) { drillId ->
             if (drillId == null) {
                 TaskListContent(

@@ -200,14 +200,15 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     LaunchedEffect(Unit) { reload() }
 
     Box(Modifier.fillMaxSize()) {
-        AnimatedContent(
+        // ★ 2026-10-26 Telegram 式推入 / 返回（旧版返回也是从右推入，方向反了）；学生名单可右滑回列表。
+        //   列表页不接管手势 → 交给外层「我的」的右滑返回。
+        KewuSlideHost(
             targetState = drill,
-            transitionSpec = {
-                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-            },
             modifier = Modifier.fillMaxSize(),
-            label = "classNav",
+            isForward = { _, to -> to != ClassDrill.LIST },
+            swipeEnabled = drill is ClassDrill.STUDENTS,
+            swipeNeighbor = { from, dir -> if (dir < 0 && from != ClassDrill.LIST) ClassDrill.LIST else null },
+            onSwipeCommit = { drill = it },
         ) { d ->
             when (d) {
                 ClassDrill.LIST -> Column(

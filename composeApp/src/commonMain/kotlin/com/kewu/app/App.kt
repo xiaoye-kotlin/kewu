@@ -54,6 +54,7 @@ fun App() {
             if (!keepAccount) kvSet("kewu_account", "")
             kvSet("kewu_pwd", "")
             RecordingManager.cancelIfRecording()
+            AudioPlayback.stop()
             KewuApi.logout()
             CourseRepo.clear()        // 课程缓存属于上一个账号
             AssignmentRepo.clear()

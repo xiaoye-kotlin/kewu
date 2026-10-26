@@ -129,6 +129,7 @@ object RecordingManager {
         if (starting || st is RecordingStatus.Recording || st is RecordingStatus.Uploading) return
         starting = true
         sawClassOn = false
+        AudioPlayback.stop() // 外放的回放会被麦克风录进去
         this.classId = classId
         scope.launch {
             if (audio.isRecording()) { starting = false; return@launch }
