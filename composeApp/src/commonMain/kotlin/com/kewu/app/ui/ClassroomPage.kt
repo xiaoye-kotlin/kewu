@@ -583,26 +583,29 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             drill == ClassroomDrill.COURSES -> 5
             else -> 0
         }
-        // 返回时 attendanceId 先被置空、旧页还在滑出：记住最后一次的 id，滑出途中签到页内容不消失
-        val lastAttId = remember { arrayOfNulls<String>(1) }
-        attId?.let { lastAttId[0] = it }
-        // ★ 2026-10-26 Telegram 式推入 / 返回（KewuSlideHost Push：新页整屏推入、底页 1/4 视差压暗，弹簧驱动）。
-        //   仍然只有 placement 位移 + 纯绘制（下钻页含玻璃采样者与相机预览，alpha/离屏层会踩 coui 首帧
-        //   SIGSEGV，且 AndroidView 在离屏层下会黑屏）。右滑跟手返回首页；暗号签到页有输入，不开。
-        KewuSlideHost(
+        AnimatedContent(
             targetState = drillKey,
-            modifier = Modifier.fillMaxSize(),
-            isForward = { a, b -> b > a },
-            swipeEnabled = drillKey != 0 && drillKey != 4,
-            swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
-            onSwipeCommit = { drill = ClassroomDrill.NONE; attendanceId = null },
+            transitionSpec = {
+                // ★ 2026-10-19 加强切页力度：旧页整屏推出（-/3 屏），新页从屏外完整推进来，
+                //   380ms —— 原先 -w/5 / 320ms 幅度太小，点「签到」跳扫码时几乎看不出在切页。
+                //   仍然 **slide-only**（不加 fade/scale）：下钻页含玻璃采样者与相机预览，
+                //   alpha/离屏层会踩 coui 首帧 SIGSEGV，且 AndroidView 在离屏层下会黑屏。
+                if (targetState > initialState) {
+                    slideInHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> w } togetherWith
+                        slideOutHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> -w / 3 }
+                } else {
+                    slideInHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> -w / 3 } togetherWith
+                        slideOutHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> w }
+                }
+            },
+            label = "classroomDrill",
         ) { key ->
             when (key) {
                 2 -> {
                     // 拦截系统返回手势，回到课堂主页，而不是让 Activity 直接 finish 退出 app。
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
                     // 转场期间 attendanceId 可能已被置空（如按返回），先绑定非空本地值，避免 attId!! NPE 闪退
-                    val aid = attId ?: lastAttId[0] ?: return@KewuSlideHost
+                    val aid = attId ?: return@AnimatedContent
                     AttendanceDetailScreen(
                         attendanceId = aid,
                         studentId = KewuApi.username ?: "",
@@ -630,7 +633,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     // 暗号签到独立页（学生）：扫码失败的兜底 / 相机不可用
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
                     // 转场期间 attendanceId 可能已被置空，先绑定非空本地值，避免 attId!! NPE 闪退
-                    val aid = attId ?: lastAttId[0] ?: return@KewuSlideHost
+                    val aid = attId ?: return@AnimatedContent
                     CodeCheckInPage(
                         sessionId = aid,
                         initialCode = pendingCode,

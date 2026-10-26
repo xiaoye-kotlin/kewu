@@ -104,15 +104,19 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 .layerBackdrop(pageBackdrop)
                 .background(COUITheme.colorScheme.surface),
         )
-        // ★ 2026-10-26 Telegram 式推入 / 返回（同学生端「我的」）；右滑返回只开在非表单页
-        //   （发起签到 / 发布笔记 / 新建课程是表单，一滑会丢输入）
-        KewuSlideHost(
+        AnimatedContent(
             targetState = screen,
+            transitionSpec = {
+                if (targetState > initialState) {
+                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
+                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
+                } else {
+                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
+                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w }
+                }
+            },
             modifier = Modifier.fillMaxSize(),
-            isForward = { a, b -> b > a },
-            swipeEnabled = screen == 1 || screen >= 5,
-            swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
-            onSwipeCommit = { screen = it },
+            label = "teacherMyNav",
         ) { s ->
             when (s) {
                 0 -> TeacherMyHome(

@@ -129,9 +129,6 @@ private fun TaskDrill.parent(): TaskDrill = when (this) {
     else -> TaskDrill.NONE
 }
 
-/** 下钻层级：决定转场方向（更深 = 前进、从右推入；更浅 = 返回）。 */
-private fun TaskDrill.depth(): Int = if (this == TaskDrill.NONE) 0 else 1 + parent().depth()
-
 @Composable
 fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
     val cs = COUITheme.colorScheme
@@ -200,15 +197,14 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        // ★ 2026-10-26 Telegram 式推入 / 返回：旧版返回也是「从右推入」，方向反了；现在按层级判断方向。
-        //   右滑返回只开在只读页（待批阅总览 / 作业详情），批阅与发布页不开（一滑丢进度）。
-        KewuSlideHost(
+        AnimatedContent(
             targetState = drill,
+            transitionSpec = {
+                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
+                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
+            },
             modifier = Modifier.fillMaxSize(),
-            isForward = { a, b -> b.depth() >= a.depth() },
-            swipeEnabled = drill == TaskDrill.PENDING || drill is TaskDrill.DETAIL,
-            swipeNeighbor = { from, d -> if (d < 0 && from != TaskDrill.NONE) from.parent() else null },
-            onSwipeCommit = { drill = it },
+            label = "teacherTaskNav",
         ) { d ->
             when (d) {
                 TaskDrill.NONE -> TeacherAssignmentList(
@@ -1089,7 +1085,7 @@ private fun ReviewSubmissionScreen(
                             Text(s.content.ifBlank { "（无文字内容）" }, color = cs.onSurface,
                                 fontSize = 13.5.sp, lineHeight = 20.sp, modifier = Modifier.padding(12.dp))
                         }
-                        // 学生提交的附件（图片 / 文件 / 录音，2026-10-26）：图片内置查看器，录音直接播放
+                        // 学生提交的附件（图片 / 文件 / 录音，2026-10-26），点开用系统应用查看
                         if (s.attachments.isNotEmpty()) {
                             Spacer(Modifier.height(10.dp))
                             AttachmentList(s.attachments)
