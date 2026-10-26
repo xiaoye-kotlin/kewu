@@ -33,6 +33,11 @@ coui-ui = { module = "io.github.suqi8.coui.kmp:coui-ui", version.ref = "coui" }
 coui-preference = { module = "io.github.suqi8.coui.kmp:coui-preference", version.ref = "coui" }
 # coui 官方图标（返回 / 编辑 / 发送 / 麦克风等，替换自绘 Canvas 小图标）
 coui-icons = { module = "io.github.suqi8.coui.kmp:coui-icons", version.ref = "coui" }
+# coui OverlayDialog/DialogContentLayout 内部调用 androidx.navigationevent 的 NavigationBackHandler，
+# 要求组合根提供 LocalNavigationEventDispatcherOwner，否则任何 coui 弹窗一展示就崩
+# （IllegalStateException: No NavigationEventDispatcher was provided）。
+# coui 仅以 runtime scope 依赖它，App 需显式声明才能在编译期调用（版本与 coui 1.1.0 自带的一致）。
+androidx-navigationevent-compose = { module = "androidx.navigationevent:navigationevent-compose", version = "1.1.2" }
 androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "androidxCamera" }
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "androidxCamera" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "androidxCamera" }

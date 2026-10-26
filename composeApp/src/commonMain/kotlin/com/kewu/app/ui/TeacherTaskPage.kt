@@ -40,9 +40,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.AiClient
 import com.kewu.app.AiSuggestion
 import com.kewu.app.AssignmentInfo
 import com.kewu.app.AssignmentStats
+import com.kewu.app.Question
+import com.kewu.app.QuestionResult
 import com.kewu.app.BackHandler
 import com.kewu.app.CourseInfo
 import com.kewu.app.HapticKind
@@ -843,6 +846,41 @@ private fun TeacherSimilarityCard(backdrop: LayerBackdrop, pairs: List<Similarit
 
 // ───────────────────────── 批阅详情（AI 辅助 + 打分） ─────────────────────────
 
+/**
+ * AI 初评 → 直接可用的评语草稿（2026-10-25）。
+ *
+ * 之前点「AI 建议」只把建议分填进分数框，评语还空着，老师得自己写 —— 用户反馈太麻烦。
+ * 现在 AI 出完结果就把「分数 + 评语」两个框一次性填满，老师只需核对/微调后提交。
+ * 已掌握 / 待巩固 / 扣分点都写进去，学生端看到的评语才有信息量。
+ */
+private fun composeReviewComment(a: AiSuggestion, totalScore: Int): String = buildString {
+    append("本次作业 ${fmtScore(a.suggestedScore)} 分")
+    if (totalScore > 0) append("（满分 $totalScore）")
+    append("。")
+    appendLine()
+    if (a.summary.isNotBlank()) {
+        appendLine(a.summary.trim())
+    }
+    if (a.hitKnowledgePoints.isNotEmpty()) {
+        append("✅ 已掌握：").appendLine(a.hitKnowledgePoints.joinToString("、"))
+    }
+    if (a.missedKnowledgePoints.isNotEmpty()) {
+        append("⚠ 待巩固：").appendLine(a.missedKnowledgePoints.joinToString("、"))
+    }
+    if (a.reasons.isNotEmpty()) {
+        appendLine("扣分点：")
+        a.reasons.forEach { r ->
+            val delta = if (r.score != 0.0) "（${fmtScore(r.score)} 分）" else ""
+            appendLine("· ${r.item}：${r.detail}$delta")
+        }
+    }
+    if (a.missedKnowledgePoints.isNotEmpty()) {
+        append("建议重点复习「${a.missedKnowledgePoints.first()}」，做错的题先自己重做一遍再对照答案。")
+        appendLine()
+    }
+    append("（本评语由 AI 初评生成，老师可修改后提交）")
+}
+
 @Composable
 private fun ReviewSubmissionScreen(
     submissionId: String,
@@ -860,24 +898,71 @@ private fun ReviewSubmissionScreen(
     var scoreText by remember { mutableStateOf("") }
     var comment by remember { mutableStateOf("") }
     var submitting by remember { mutableStateOf(false) }
+    /** v17 逐题给分：questionId -> 本题得分文本（初始化自服务端逐题判定）。 */
+    var qScoreText by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+
+    /**
+     * 把 AI 初评结果落到表单上（2026-10-25）：分数空着就填建议分，评语空着就填 AI 生成的评语草稿。
+     * 老师已经手填过的内容不覆盖，保证「AI 打草稿、老师做决定」。
+     */
+    fun applyAi(a: AiSuggestion, totalScore: Int) {
+        ai = a
+        if (scoreText.isBlank()) scoreText = fmtScore(a.suggestedScore)
+        if (comment.isBlank()) comment = composeReviewComment(a, totalScore)
+    }
 
     LaunchedEffect(submissionId) {
         sub = KewuApi.getSubmission(submissionId)
-        sub?.ai?.let { ai = it }
+        val s = sub
+        // 逐题得分预填：优先 finalScore（老师改过的），否则 autoScore
+        if (s != null) {
+            qScoreText = s.questionResults.associate { it.questionId to fmtScore(it.finalScore ?: it.autoScore) }
+        }
+        // 服务端已带 AI 初评（或上次批过）→ 进页就填好，老师直接核对
+        val cached = s?.ai
+        if (cached != null) {
+            val ts = KewuApi.getAssignment(s.assignmentId ?: "")?.totalScore ?: 0
+            applyAi(cached, ts)
+        }
         loading = false
     }
 
     val reviewer = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师"
+    val results = sub?.questionResults ?: emptyList()
+    val hasQuestions = results.isNotEmpty()
+
+    /** 组装按题给分（文档 3.12 ④）：每题取当前得分文本，空则回退 autoScore。 */
+    fun questionScoresToSend(): List<Pair<String, Int>> {
+        if (!hasQuestions) return emptyList()
+        return results.map { r ->
+            val sc = qScoreText[r.questionId]?.toIntOrNull() ?: (r.finalScore ?: r.autoScore).toInt()
+            r.questionId to sc
+        }
+    }
 
     fun submit(action: String) {
-        val score = scoreText.toDoubleOrNull() ?: ai?.suggestedScore ?: 0.0
+        val qs = questionScoresToSend()
+        // 传了按题给分，服务端自动按题求和当总分（文档：可不传 score）；这里仍带上求和值，兼容性更稳
+        val score = if (qs.isNotEmpty()) qs.sumOf { it.second }.toDouble()
+        else (scoreText.toDoubleOrNull() ?: ai?.suggestedScore ?: 0.0)
         if (submitting) return
         submitting = true
         scope.launch {
-            val err = KewuApi.reviewSubmission(submissionId, score, comment.trim(), reviewer, action)
+            val err = KewuApi.reviewSubmission(
+                submissionId, score, comment.trim(), reviewer, action,
+                questionScores = qs.ifEmpty { null },
+            )
             submitting = false
-            // 结果走全局 coui Snackbar（原内联结果文字行）
-            snackbar.toast(err ?: if (action == "return") "已打回" else "批阅完成")
+            if (err == null) {
+                // 结果走全局 coui Snackbar（原内联结果文字行）
+                snackbar.toast(if (action == "return") "已打回" else "批阅完成")
+                // 2026-10-25：批完自动返回上一层（作业详情 / 待批阅 / 作业列表），
+                // onBack 内部会 reload() 刷新待批阅，刚批掉的那份从队列里消失。
+                // 失败则留在当前页，方便老师改完重试。
+                onBack()
+            } else {
+                snackbar.toast(err)
+            }
         }
     }
 
@@ -949,8 +1034,14 @@ private fun ReviewSubmissionScreen(
                                     haptic(HapticKind.Light)
                                     aiLoading = true
                                     scope.launch {
-                                        ai = KewuApi.aiPrereview(submissionId)
-                                        ai?.let { if (scoreText.isBlank()) scoreText = it.suggestedScore.toString() }
+                                        // 2026-10-24：优先真实大模型（AiClient，读取作业要求+提交内容）；
+                                        // 失败回退后端规则引擎 aiPrereview
+                                        val assignment = KewuApi.getAssignment(s.assignmentId)
+                                        val result = if (assignment != null)
+                                            AiClient.gradeSubmission(assignment, s) else null
+                                        val suggestion = result ?: KewuApi.aiPrereview(submissionId)
+                                        // 2026-10-25：AI 出完结果直接把分数 + 评语都填满
+                                        if (suggestion != null) applyAi(suggestion, assignment?.totalScore ?: 0)
                                         aiLoading = false
                                     }
                                 },
@@ -980,14 +1071,57 @@ private fun ReviewSubmissionScreen(
                                     Text("· ${r.item}：${r.detail}", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
                                 }
                             }
+                            // v17：AI 初评里带客观题自动判分合计，老师一眼看客观题拿了多少
+                            if (a.objectiveScore > 0 || a.objectiveFullScore > 0) {
+                                Spacer(Modifier.height(4.dp))
+                                Text("客观题自动判分 ${fmtScore(a.objectiveScore)} / ${fmtScore(a.objectiveFullScore)}",
+                                    color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+                            }
                         }
                     }
                 }
                 Spacer(Modifier.height(6.dp))
 
+                // 逐题判定（v17：客观题自动判分结果回显 + 老师可按题改分）
+                if (hasQuestions) {
+                    KewuSectionTitle("逐题判定")
+                    KewuGlassCard(
+                        backdrop = pageBackdrop, shape = RoundedCornerShape(16.dp), blurRadius = 18.dp, tintAlpha = 0.30f,
+                        modifier = Modifier
+                            .fillMaxWidth().padding(horizontal = 12.dp)
+                            .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp)),
+                    ) {
+                        Column(Modifier.padding(14.dp)) {
+                            results.forEachIndexed { i, r ->
+                                if (i > 0) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Box(Modifier.fillMaxWidth().height(1.dp).background(cs.dividerLine))
+                                    Spacer(Modifier.height(8.dp))
+                                }
+                                QuestionResultRow(
+                                    index = i + 1, result = r,
+                                    scoreText = qScoreText[r.questionId] ?: "",
+                                    onScoreChange = { qScoreText = qScoreText + (r.questionId to it) },
+                                )
+                            }
+                            Spacer(Modifier.height(10.dp))
+                            val sum = results.sumOf { qScoreText[it.questionId]?.toIntOrNull() ?: (it.finalScore ?: it.autoScore).toInt() }
+                            val full = results.sumOf { it.fullScore.toInt() }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text("按题合计", color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                Text("$sum / $full", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                }
+
                 // 打分与评语
                 KewuSectionTitle("老师批阅")
-                ReviewField("分数", scoreText, { scoreText = it }, placeholder = "如 85")
+                // 有逐题判定时，总分由「按题合计」给出，这里不再单独编辑（提交时按题求和当总分）
+                if (!hasQuestions) {
+                    ReviewField("分数", scoreText, { scoreText = it }, placeholder = "如 85")
+                }
                 ReviewField("评语", comment, { comment = it }, singleLine = false, placeholder = "给学生的评语…")
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     TextButton(
@@ -1021,9 +1155,16 @@ private fun ReviewField(
 ) {
     val cs = COUITheme.colorScheme
     val state = rememberTextFieldState(initialText = value)
-    // state.text 是输入的唯一事实源，单向同步给外层（外层回写的 value 不回灌 state，避免光标跳动）
+    // state.text 是输入的唯一事实源，单向同步给外层
     LaunchedEffect(state) {
         snapshotFlow { state.text.toString() }.collect { onValueChange(it) }
+    }
+    // ★ 外层回写 → 输入框（2026-10-25 AI 批阅自动填表需要）。
+    //   只在两者真的不同时才写入：用户输入产生的回环天然相等，不会打断输入 / 光标跳动。
+    LaunchedEffect(value) {
+        if (state.text.toString() != value) {
+            state.edit { replace(0, length, value) }
+        }
     }
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp)) {
         Text(label, color = cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
@@ -1035,6 +1176,58 @@ private fun ReviewField(
             label = placeholder.ifEmpty { label },
             lineLimits = if (singleLine) TextFieldLineLimits.SingleLine else TextFieldLineLimits.Default,
         )
+    }
+}
+
+/** 逐题判定单行（v17 questionResults 回显 + 老师按题给分）。 */
+@Composable
+private fun QuestionResultRow(
+    index: Int, result: QuestionResult, scoreText: String,
+    onScoreChange: (String) -> Unit,
+) {
+    val cs = COUITheme.colorScheme
+    val (mark, markColor) = when (result.correct) {
+        true -> "✓" to KewuGreen
+        false -> "✗" to cs.error
+        null -> "⏳" to cs.onSurfaceSecondary
+    }
+    val judgeLabel = when (result.judgedBy) {
+        "AUTO" -> "机器判"
+        "TEACHER" -> "老师判"
+        "PENDING" -> "待批"
+        else -> result.judgedBy
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("第 $index 题", color = cs.onSurface, fontSize = 13.5.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f))
+            Text(mark, color = markColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.width(8.dp))
+            KewuTag(judgeLabel, cs.secondaryContainer, cs.onSurfaceSecondary)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(result.stem.ifBlank { "（无题干）" }, color = cs.onSurface, fontSize = 13.sp, lineHeight = 18.sp)
+        if (result.studentValue.isNotBlank()) {
+            Spacer(Modifier.height(3.dp))
+            Text("学生作答：${result.studentValue}", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+        }
+        if (result.standardAnswer.isNotBlank()) {
+            Spacer(Modifier.height(2.dp))
+            Text("标准答案：${result.standardAnswer}", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("本题得分", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+            Spacer(Modifier.width(8.dp))
+            TextField(
+                value = scoreText,
+                onValueChange = { onScoreChange(it.filter { ch -> ch.isDigit() }) },
+                modifier = Modifier.width(72.dp),
+                backgroundMode = TextFieldMode.Rectangle, label = "0", singleLine = true,
+            )
+            Spacer(Modifier.width(6.dp))
+            Text("/ ${fmtScore(result.fullScore)}", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+        }
     }
 }
 
@@ -1058,6 +1251,7 @@ private fun PublishAssignmentScreen(
     var deadline by remember { mutableStateOf("") }
     var totalScore by remember { mutableStateOf("100") }
     var kps by remember { mutableStateOf("") }
+    var questions by remember { mutableStateOf<List<Question>>(emptyList()) }
     var publishing by remember { mutableStateOf(false) }
 
     Box(Modifier.fillMaxSize()) {
@@ -1085,6 +1279,10 @@ private fun PublishAssignmentScreen(
             ReviewField("截止时间", deadline, { deadline = it }, placeholder = "如 2026-10-25 23:59")
             ReviewField("总分", totalScore, { totalScore = it.filter { ch -> ch.isDigit() } }, placeholder = "100")
             ReviewField("知识点（逗号分隔）", kps, { kps = it }, placeholder = "如 泰勒公式, 洛必达法则")
+            QuestionEditorCard(
+                questions = questions, onChange = { questions = it },
+                backdrop = pageBackdrop, onToast = { scope.launch { snackbar.toast(it) } },
+            )
             KewuPrimaryButton(
                 text = if (publishing) "发布中…" else "发布作业",
                 onClick = {
@@ -1092,11 +1290,12 @@ private fun PublishAssignmentScreen(
                     publishing = true
                     scope.launch {
                         val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
+                        // v17：题目走原生 questions 字段（服务端自动判分），description 不再塞透传块
                         val info = KewuApi.publishAssignment(
                             courseId = courseId, title = title.trim(), description = desc.trim(),
                             deadline = deadline.trim(), totalScore = totalScore.toIntOrNull() ?: 100,
                             knowledgePoints = kps.split(",", "，").map { it.trim() }.filter { it.isNotEmpty() },
-                            publisher = publisher,
+                            publisher = publisher, questions = questions,
                         )
                         publishing = false
                         if (info != null) {

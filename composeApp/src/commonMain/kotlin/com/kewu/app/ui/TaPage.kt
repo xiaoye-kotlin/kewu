@@ -1,6 +1,9 @@
 package com.kewu.app.ui
 
 import com.kewu.app.BackHandler
+import com.kewu.app.AiAgent
+import com.kewu.app.AiClient
+import com.kewu.app.ChatHistory
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -50,6 +53,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -63,6 +67,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
@@ -145,16 +152,61 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
 
-    // ── 对话状态（后端接入前：本地 mock 往返，保证 UI 可完整体验） ──
+    // ── 对话状态（2026-10-24 起接入真实大模型 AiClient；失败回退占位文案保证不空屏；
+    //    聊天记录落盘：默认只展示今天的，列表顶部下拉按天加载更早对话） ──
+    val chatStore = remember { ChatHistory.loadAll(ChatHistory.KEY_STUDENT) }
+    // 可见窗口起点：今天 00:00（UTC+8）；下拉加载更早时逐天前移
+    var visibleCutoff by remember {
+        mutableStateOf(ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds()))
+    }
+    var hasMoreHistory by remember {
+        mutableStateOf(chatStore.any { it.ts < visibleCutoff })
+    }
+    fun entriesToMsgs(list: List<ChatHistory.Entry>): List<ChatMsg> = list.map { e ->
+        ChatMsg(
+            text = e.text, isUser = e.role == "user",
+            id = if (e.id != 0L) e.id else ChatHistory.nextId(), ts = e.ts,
+            quote = e.quote,
+        )
+    }
+    fun persistHistory(current: List<ChatMsg>) {
+        val entries = current.map { m ->
+            ChatHistory.Entry(
+                id = if (m.id != 0L) m.id else ChatHistory.nextId(),
+                role = if (m.isUser) "user" else "assistant",
+                text = m.text, ts = if (m.ts != 0L) m.ts else nowMs(), quote = m.quote,
+            )
+        }
+        ChatHistory.saveAll(ChatHistory.KEY_STUDENT, entries)
+        // 是否还有更早历史：以全量存档为准（内存里可能只有今天的消息）
+        hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
+    }
+    // 今天的聊天记录：有历史就不重复显示欢迎语（2026-10-24 用户反馈：每天第一条消息才需要问候）
+    val todayEntries = chatStore.filter { it.ts >= visibleCutoff }
     var messages by remember {
         mutableStateOf(
-            listOf(
-                ChatMsg(
-                    "你好，我是小悟～上课没听懂的地方直接问我：拍张板书、传个课件、发段语音都可以。",
-                    isUser = false,
-                ),
-            ),
+            buildList {
+                if (todayEntries.isEmpty()) {
+                    add(
+                        ChatMsg(
+                            "你好，我是小悟～上课没听懂的地方直接问我：拍张板书、传个课件、发段语音都可以。",
+                            isUser = false,
+                            id = ChatHistory.nextId(),
+                        )
+                    )
+                }
+                addAll(entriesToMsgs(todayEntries))
+            },
         )
+    }
+    // 顶部下拉加载更早一天
+    fun loadOlderDay() {
+        val older = chatStore.filter { it.ts < visibleCutoff }
+        if (older.isEmpty()) return
+        val nextCutoff = ChatHistory.dayStart(visibleCutoff - 1)
+        val newly = entriesToMsgs(older.filter { it.ts >= nextCutoff })
+        visibleCutoff = nextCutoff
+        messages = newly + messages
     }
     var input by remember { mutableStateOf("") }
     // ★ 引用预览（第三轮 12.8）：引用不再塞进输入框，而是在输入框**上方**单独显示一条灰色小条，
@@ -162,6 +214,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     var quotePreview by remember { mutableStateOf<String?>(null) }
     var courseCount by remember { mutableIntStateOf(2) }
     var pendingCount by remember { mutableIntStateOf(2) }
+    var assignmentTitles by remember { mutableStateOf<List<String>>(emptyList()) }
     var suggestions by remember {
         mutableStateOf(listOf("这节课的笔记", "作业什么时候交？", "帮我规划一下复习"))
     }
@@ -192,6 +245,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         KewuApi.getAssignments()?.let { list ->
             // AssignmentInfo 无 done 字段，待交数先用作业总数近似（提交状态接口细化后再改）
             pendingCount = list.size
+            assignmentTitles = list.map { it.title }
             list.firstOrNull()?.let { first ->
                 suggestions = listOf("「${first.title}」怎么做？") + suggestions
             }
@@ -202,9 +256,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
-    // 新消息自动滚到底；键盘弹起也滚到底（保证最新消息贴着输入框可见）
+    // 新消息自动滑到底（自己发的 / AI 回的都走这里）；键盘弹起也滑到底。
+    // ★ 先让一帧给气泡完成布局再 animateScrollToItem，否则是「瞬间跳到底」而不是滑动
+    //   （2026-10-24 用户反馈：要动画，不要直接显示最底部）
     LaunchedEffect(messages.size, imeVisible) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.lastIndex)
+        if (messages.isEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.yield()
+        listState.animateScrollToItem(messages.lastIndex)
     }
 
     // 录音计时（后端接入前 UI 演示用）
@@ -228,21 +286,65 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         enterDock = true
     }
 
-    // 发送：用户消息立即上屏；AI 回答服务接入前用本地 mock 回复占位（不崩、不空屏）
-    var replyRound by remember { mutableIntStateOf(0) }
+    // 发送：用户消息立即上屏并落盘；2026-10-24 起走真实大模型（AiClient），
+    // 回答里可能带 KEWU_ACTION 指令 —— 由 AiAgent 真执行导航/代办；失败回退占位文案
+    var aiThinking by remember { mutableStateOf(false) }
     val doSend: (String) -> Unit = { raw ->
         val text = raw.trim()
         // 允许「只发引用 + 正文为空」的情况（QQ 同款）；两者都空则不动
-        if (text.isNotEmpty() || quotePreview != null) {
+        if ((text.isNotEmpty() || quotePreview != null) && !aiThinking) {
             val quoted = quotePreview
-            messages = messages + ChatMsg(text, isUser = true, quote = quoted)
+            val userMsg = ChatMsg(text, isUser = true, quote = quoted,
+                id = ChatHistory.nextId(), ts = nowMs())
+            messages = messages + userMsg
+            persistHistory(messages.filter { !it.isVoice }) // 语音消息不落盘
             input = ""
             quotePreview = null // 发出后清掉引用预览
             haptic(HapticKind.Light)
             scope.launch {
-                delay(650)
-                replyRound += 1
-                messages = messages + ChatMsg(AI_REPLY_MOCKS[replyRound % AI_REPLY_MOCKS.size], isUser = false)
+                aiThinking = true
+                // 多轮上下文：取最近 8 条纯文字消息（引用拼进正文）
+                val history = messages.filter { !it.isVoice }.takeLast(8).map { m ->
+                    val body = if (m.quote != null) "（引用：${m.quote}）${m.text}" else m.text
+                    AiClient.Msg(if (m.isUser) "user" else "assistant", body.ifBlank { "…" })
+                }
+                val system = buildString {
+                    append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和一名学生对话。")
+                    append("回答课堂疑问、作业思路、复习规划等问题；")
+                    append("讲解清晰、语气亲切，可适当分步；用中文；不要用 markdown 格式符号；")
+                    append("单次回答控制在 250 字以内，题目讲解可稍长。")
+                    append("不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），")
+                    append("也不要每次回复都重复问候或复述用户的问题，直接回答内容本身。\n")
+                    append("学生当前情况：共 $courseCount 门课程 · $pendingCount 份作业")
+                    if (assignmentTitles.isNotEmpty()) {
+                        append("，作业包括：")
+                        append(assignmentTitles.take(6).joinToString("、"))
+                    }
+                    append("\n\n")
+                    append(AiAgent.studentCapability())
+                }
+                val reply = AiClient.chat(listOf(AiClient.Msg("system", system)) + history)
+                aiThinking = false
+                when {
+                    reply == null -> {
+                        val fallback = ChatMsg(AI_REPLY_MOCKS.random(), isUser = false,
+                            id = ChatHistory.nextId(), ts = nowMs())
+                        messages = messages + fallback
+                    }
+                    else -> {
+                        val parsed = AiAgent.parse(reply)
+                        // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
+                        val note = parsed.action?.let { AiAgent.execute("student", it) }
+                        val body = listOfNotNull(
+                            parsed.text.ifEmpty { null },
+                            note,
+                        ).joinToString("\n")
+                        val aiMsg = ChatMsg(body, isUser = false,
+                            id = ChatHistory.nextId(), ts = nowMs())
+                        messages = messages + aiMsg
+                    }
+                }
+                persistHistory(messages.filter { !it.isVoice })
             }
         }
     }
@@ -358,7 +460,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                             Canvas(Modifier.size(7.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
                         }
                         Spacer(Modifier.height(3.dp))
-                        Text("KEWU AI", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+                        // 2026-10-24：等待 AI 回复时顶部状态改为「小悟正在输入中…」
+                        Text(
+                            if (aiThinking) "小悟正在输入中…" else "KEWU AI",
+                            color = cs.onSurfaceSecondary, fontSize = 12.sp,
+                        )
                     }
                     Spacer(Modifier.height(12.dp))
 
@@ -381,13 +487,47 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             }
 
             // ── 对话列 ──
+            // 2026-10-24：顶部下拉加载更早对话（nestedScroll 累积下拉量，越过阈值自动加载前一天）
+            val pullLoadPx = with(LocalDensity.current) { 110.dp.toPx() }
+            var pullAcc by remember { mutableFloatStateOf(0f) }
+            val pullConnection = remember {
+                object : NestedScrollConnection {
+                    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                        val atTop = listState.firstVisibleItemIndex == 0 &&
+                            listState.firstVisibleItemScrollOffset == 0
+                        if (atTop && available.y > 0 && hasMoreHistory) {
+                            pullAcc += available.y
+                            if (pullAcc >= pullLoadPx) {
+                                pullAcc = 0f
+                                loadOlderDay()
+                            }
+                            return Offset(0f, available.y)
+                        }
+                        if (available.y < 0) pullAcc = 0f
+                        return Offset.Zero
+                    }
+                }
+            }
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(pullConnection),
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item {
+                item(key = "history-tip") {
+                    Text(
+                        when {
+                            pullAcc > 10f -> "松开加载更早的对话…"
+                            hasMoreHistory -> "下拉加载更早的对话"
+                            else -> ""
+                        },
+                        color = cs.onSurfaceSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                item(key = "date-divider") {
                     Text(
                         "今天",
                         color = cs.onSurfaceSecondary,
@@ -397,28 +537,31 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     )
                 }
                 messages.forEach { msg ->
-                    item {
-                        if (msg.isUser) {
-                            UserBubble(
-                                msg,
-                                // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
-                                reportBounds = msg == menuMsg,
-                                onBounds = { menuAnchor = it },
-                            ) {
-                                menuMsg = msg
-                                menuIsUser = true
-                                haptic(HapticKind.Medium)
-                            }
-                        } else {
-                            AiBubble(
-                                msg,
-                                pageBackdrop,
-                                reportBounds = msg == menuMsg,
-                                onBounds = { menuAnchor = it },
-                            ) {
-                                menuMsg = msg
-                                menuIsUser = false
-                                haptic(HapticKind.Medium)
+                    // 2026-10-24：稳定 key + animateItem —— 新消息滑入，聊天更丝滑
+                    item(key = msg.id, contentType = msg.isUser) {
+                        Box(Modifier.animateItem()) {
+                            if (msg.isUser) {
+                                UserBubble(
+                                    msg,
+                                    // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
+                                    reportBounds = msg == menuMsg,
+                                    onBounds = { menuAnchor = it },
+                                ) {
+                                    menuMsg = msg
+                                    menuIsUser = true
+                                    haptic(HapticKind.Medium)
+                                }
+                            } else {
+                                AiBubble(
+                                    msg,
+                                    pageBackdrop,
+                                    reportBounds = msg == menuMsg,
+                                    onBounds = { menuAnchor = it },
+                                ) {
+                                    menuMsg = msg
+                                    menuIsUser = false
+                                    haptic(HapticKind.Medium)
+                                }
                             }
                         }
                     }
@@ -453,7 +596,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         voiceSecs = voiceSecs,
                         onCancel = { panel = AssistantPanel.NONE },
                         onSend = {
-                            messages = messages + ChatMsg("", isUser = true, isVoice = true, voiceSecs = voiceSecs)
+                            messages = messages + ChatMsg("", isUser = true, isVoice = true,
+                                voiceSecs = voiceSecs, id = ChatHistory.nextId(), ts = nowMs())
                             panel = AssistantPanel.NONE
                         },
                     )
@@ -615,6 +759,10 @@ private data class ChatMsg(
     val isVoice: Boolean = false,
     val voiceSecs: Int = 0,
     val formula: String? = null,
+    /** 稳定 id：列表动画 key 与聊天记录持久化用（2026-10-24）。 */
+    val id: Long = 0L,
+    /** 发送时刻 epoch 毫秒；恢复的历史带原值。 */
+    val ts: Long = 0L,
     /**
      * 被引用的原文（第三轮 12.8）：QQ 式引用 —— 发送时随消息带上，
      * 气泡顶部渲染一块灰色引用小条；null 表示这条消息没有引用。
@@ -635,6 +783,9 @@ private val AI_REPLY_MOCKS = listOf(
 
 /** 手写 mm:ss（commonMain 禁 String.format）。 */
 private fun two(n: Int) = if (n < 10) "0$n" else "$n"
+
+/** 当前 epoch 毫秒（2026-10-24 聊天记录持久化用）。 */
+private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 private fun fmtClock(totalSec: Int) = "${two(totalSec / 60)}:${two(totalSec % 60)}"
 
 // ───────────────────────── 通用按压 Q 弹 ─────────────────────────

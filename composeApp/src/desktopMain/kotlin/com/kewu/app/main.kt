@@ -46,7 +46,16 @@ private val TargetWidth = 430.dp
 private val TargetHeight = 740.dp
 
 @OptIn(ExperimentalComposeUiApi::class)
-fun main() = application {
+fun main() {
+    // ★★★ Windows 原生崩溃修复（2026-10-24，hs_err_pid*.log 实锤）★★★
+    // JDK 21 的 AWT 在 Windows 上有已知 bug：系统显示配置变化事件（显示器插拔、DPI/缩放变化、
+    // 显卡驱动事件）触发 Win32GraphicsEnvironment.displayChanged → D3DGraphicsDevice.displayChanged
+    // → Win32GraphicsConfig.getBounds，在 awt.dll 内 EXCEPTION_ACCESS_VIOLATION，整个 JVM 直接死，
+    // 表现为「打开某个界面时程序闪退」。课悟桌面端渲染走 Skiko/OpenGL，java2d 的 D3D 管线
+    // 根本用不到 —— 在 AWT 初始化前禁用它，彻底绕开崩溃路径。
+    System.setProperty("sun.java2d.d3d", "false")
+    System.setProperty("sun.java2d.ddoffscreen", "false")
+    application {
     // 初始尺寸直接给定（竖屏瘦长长方形），第一帧就是竖屏；fitWindowToScreen 仅在不超屏前提下二次收敛。
     val windowState = rememberWindowState(
         size = DpSize(TargetWidth, TargetHeight),
@@ -73,6 +82,7 @@ fun main() = application {
                 )
             },
         )
+    }
     }
 }
 

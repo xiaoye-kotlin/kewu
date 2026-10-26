@@ -37,6 +37,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.AiNav
 import com.kewu.app.BackHandler
 import com.kewu.app.HapticKind
 import com.kewu.app.haptic
@@ -60,6 +61,15 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们（编号与学生端对齐）
     var screen by remember { mutableStateOf(0) }
+
+    // 2026-10-24：AI 助教代操作 —— 小悟可经 AiNav 直接打开教师「我的」的子页（发起签到/发布笔记/班级管理等）
+    LaunchedEffect(AiNav.teacherMyScreen.value) {
+        val req = AiNav.teacherMyScreen.value
+        if (req != 0) {
+            screen = req
+            AiNav.teacherMyScreen.value = 0
+        }
+    }
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
 
@@ -240,13 +250,23 @@ private fun TeacherMyHome(
         Spacer(Modifier.height(24.dp))
     }
 
+    // ★ 与「结束课程」同因同解：onConfirm 里若立刻 onLogout() 触发整页重组（主界面→登录页），
+    // 弹窗退场动画还在采样玻璃背景，coui 玻璃采样到正在销毁的父节点会 SIGSEGV 闪退。
+    // 故 onConfirm 只置位 + 收起弹窗，真正退出延后到 onDismissFinished（弹窗完全退场后）执行。
+    var logoutConfirmed by remember { mutableStateOf(false) }
     KewuConfirmDialog(
         show = confirmLogout,
         title = "退出登录",
         summary = "退出后需要重新登录才能发起签到、批阅作业和管理班级",
         confirmText = "退出登录",
-        onConfirm = { confirmLogout = false; onLogout() },
+        onConfirm = { logoutConfirmed = true; confirmLogout = false },
         onDismiss = { confirmLogout = false },
+        onDismissFinished = {
+            if (logoutConfirmed) {
+                logoutConfirmed = false
+                onLogout()
+            }
+        },
     )
     }
 }

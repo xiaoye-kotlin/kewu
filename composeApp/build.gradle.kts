@@ -58,6 +58,9 @@ kotlin {
             implementation(libs.coui.ui)
             implementation(libs.coui.preference)
             implementation(libs.coui.icons)
+            // coui 弹窗内部用 navigationevent 的 NavigationBackHandler，根组合必须提供
+            // LocalNavigationEventDispatcherOwner（见 KewuTheme），否则弹窗展示即崩
+            implementation(libs.androidx.navigationevent.compose)
             // 录音测试页调后端上传接口用：客户端核心放 common，引擎按平台放各自 sourceSet
             implementation(libs.ktor.client.core)
             implementation(libs.kotlinx.serialization.json)

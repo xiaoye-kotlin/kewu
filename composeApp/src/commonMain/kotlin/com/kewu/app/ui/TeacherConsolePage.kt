@@ -67,6 +67,10 @@ import com.kewu.app.kvSet
 import com.kewu.app.platformActivity
 import com.kewu.app.requestAudioPermission
 import com.kewu.app.todayCn
+import com.kewu.app.Notifications
+import com.kewu.app.currentRole
+import com.kewu.app.ui.NotificationBellButton
+import com.kewu.app.ui.NotificationSheet
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.basic.Badge
@@ -176,6 +180,14 @@ fun TeacherConsolePage(
     }
     LaunchedEffect(Unit) { reload() }
 
+    // 通知中心：铃铛未读数 + 弹窗显隐（首页系统通知，与助教 AI 红点无关）
+    var showNotif by remember { mutableStateOf(false) }
+    var notifUnread by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        Notifications.seedIfEmpty(currentRole())
+        notifUnread = Notifications.unreadCount()
+    }
+
     // 导航栏随滚动收起（与学生端同款增量判断）
     LaunchedEffect(scrollState) {
         var last = 0
@@ -215,6 +227,12 @@ fun TeacherConsolePage(
                     console = console,
                     activeSession = activeSession,
                     activeLoaded = activeLoaded,
+                    unread = notifUnread,
+                    onOpenNotifications = {
+                        notifUnread = 0
+                        Notifications.markAllRead()
+                        showNotif = true
+                    },
                     onGoToTab = onGoToTab,
                     onStarted = { s ->
                         activeSession = s
@@ -251,6 +269,10 @@ fun TeacherConsolePage(
                 )
             }
         }
+        NotificationSheet(show = showNotif, onDismiss = {
+            showNotif = false
+            notifUnread = Notifications.unreadCount()
+        })
     }
 }
 
@@ -265,6 +287,8 @@ private fun ConsoleHome(
     console: TeacherConsole?,
     activeSession: AttendanceSession?,
     activeLoaded: Boolean,
+    unread: Int,
+    onOpenNotifications: () -> Unit,
     onGoToTab: (Int) -> Unit,
     onStarted: (AttendanceSession) -> Unit,
     onClosed: () -> Unit,
@@ -290,6 +314,8 @@ private fun ConsoleHome(
                     Text(teacherName, color = cs.onSurface, fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1)
                 }
+                NotificationBellButton(unread = unread, onClick = onOpenNotifications)
+                Spacer(Modifier.width(8.dp))
                 TeacherAvatar(teacherName) { onGoToTab(3) }
             }
         }

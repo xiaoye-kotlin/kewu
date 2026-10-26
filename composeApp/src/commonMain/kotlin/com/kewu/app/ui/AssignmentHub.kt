@@ -25,6 +25,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,8 +34,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.AiClient
 import com.kewu.app.AssignmentInfo
 import com.kewu.app.AssignmentStats
+import com.kewu.app.Question
 import com.kewu.app.AiSuggestion
 import com.kewu.app.Analytics
 import com.kewu.app.HapticKind
@@ -238,7 +242,12 @@ fun AssignmentDetailScreen(
                         onRun = {
                             aiLoading = true
                             scope.launch {
-                                aiSuggestion = mySub?.id?.let { KewuApi.aiPrereview(it) }
+                                // 2026-10-24：优先真实大模型（AiClient，作业要求+提交内容）；
+                                // 失败回退后端规则引擎 aiPrereview
+                                val sub = mySub
+                                aiSuggestion = if (sub != null) {
+                                    AiClient.gradeSubmission(a, sub) ?: KewuApi.aiPrereview(sub.id)
+                                } else null
                                 aiLoading = false
                             }
                         },
@@ -279,9 +288,10 @@ fun AssignmentDetailScreen(
     SubmitDialog(
         show = showSubmit,
         title = assignment?.title ?: "提交作业",
-        onSubmit = { content ->
+        questions = assignment?.questions ?: emptyList(),
+        onSubmit = { content, answers ->
             scope.launch {
-                val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content)
+                val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, answers)
                 showSubmit = false
                 if (err == null) {
                     onSubmitted(assignmentId)
@@ -544,6 +554,7 @@ private fun TeacherPublishCard(backdrop: LayerBackdrop, courseId: String, publis
     var deadline by remember { mutableStateOf("") }
     var totalScore by remember { mutableStateOf("100") }
     var kps by remember { mutableStateOf("") }
+    var questions by remember { mutableStateOf<List<Question>>(emptyList()) }
     var publishing by remember { mutableStateOf(false) }
     var msg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
@@ -568,6 +579,10 @@ private fun TeacherPublishCard(backdrop: LayerBackdrop, courseId: String, publis
                 Spacer(Modifier.height(8.dp))
                 TextField(kps, { kps = it }, Modifier.fillMaxWidth(), backgroundMode = TextFieldMode.Rectangle, label = "知识点（逗号分隔）", singleLine = true)
                 Spacer(Modifier.height(10.dp))
+                QuestionEditorCard(
+                    questions = questions, onChange = { questions = it },
+                    backdrop = backdrop, onToast = { msg = it },
+                )
                 msg?.let {
                     Text(it, color = if (it.contains("成功")) KewuGreen else cs.error, fontSize = 13.sp)
                     Spacer(Modifier.height(6.dp))
@@ -582,7 +597,7 @@ private fun TeacherPublishCard(backdrop: LayerBackdrop, courseId: String, publis
                                 description = desc, deadline = deadline,
                                 totalScore = totalScore.toIntOrNull() ?: 100,
                                 knowledgePoints = kps.split(",").map { it.trim() }.filter { it.isNotEmpty() },
-                                publisher = publisher,
+                                publisher = publisher, questions = questions,
                             )
                             publishing = false
                             msg = if (info != null) "发布成功" else "发布失败，请稍后重试"
@@ -608,30 +623,57 @@ private fun EmptyHint(text: String) {
 
 /**
  * 提交作业弹窗：coui [OverlayDialog]（窗口内覆盖层）+ coui [TextField] + [DialogButtonBar]。
- * 答案为空时「提交」置灰；关闭动画播完才清空输入，避免退场时文字闪没。
+ *
+ * v17 题目化作业：若 [questions] 非空，弹窗按题型渲染作答控件（选择/判断/填空/简答），
+ * 答案实时收集进 [answers]，提交时走原生 `answers` 字段（服务端自动判分），`content` 仅保留补充说明文字。
+ * 无题目时退化为原来的纯文本答案框。关闭动画播完才清空输入，避免退场时文字闪没。
  */
 @Composable
-private fun SubmitDialog(show: Boolean, title: String, onSubmit: (String) -> Unit, onDismiss: () -> Unit) {
+private fun SubmitDialog(
+    show: Boolean,
+    title: String,
+    questions: List<Question>,
+    onSubmit: (String, Map<String, String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
     var content by remember { mutableStateOf("") }
+    var note by remember { mutableStateOf("") }
+    val answers = remember { mutableStateMapOf<String, String>() }
     OverlayDialog(
         show = show,
         title = title,
-        summary = "请输入答案后提交",
+        summary = if (questions.isNotEmpty()) "请按题型作答后提交" else "请输入答案后提交",
         onDismissRequest = onDismiss,
-        onDismissFinished = { content = "" },
+        onDismissFinished = { content = ""; note = ""; answers.clear() },
     ) {
-        Column {
-            TextField(
-                value = content, onValueChange = { content = it },
-                modifier = Modifier.fillMaxWidth(),
-                backgroundMode = TextFieldMode.Rectangle,
-                label = "答案", minLines = 4,
-            )
+        Column(Modifier.verticalScroll(rememberScrollState())) {
+            if (questions.isNotEmpty()) {
+                QuestionRenderList(questions = questions, answers = answers)
+                Spacer(Modifier.height(8.dp))
+                HubSectionLabel("补充说明（可选）")
+                TextField(
+                    value = note, onValueChange = { note = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundMode = TextFieldMode.Rectangle, label = "有想对老师说的？", minLines = 2,
+                )
+            } else {
+                TextField(
+                    value = content, onValueChange = { content = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundMode = TextFieldMode.Rectangle, label = "答案", minLines = 4,
+                )
+            }
             Spacer(Modifier.height(12.dp))
+            val canSubmit = if (questions.isNotEmpty()) note.isNotBlank() || answers.isNotEmpty()
+            else content.isNotBlank()
             DialogButtonBar(
                 negative = DialogButtonBarAction("取消") { haptic(HapticKind.Tick); onDismiss() },
-                positive = DialogButtonBarAction("提交", enabled = content.isNotBlank()) {
-                    haptic(HapticKind.Light); onSubmit(content.trim())
+                positive = DialogButtonBarAction("提交", enabled = canSubmit) {
+                    haptic(HapticKind.Light)
+                    // v17：content 仅留补充说明，答案走原生 answers 字段（服务端自动判分）
+                    val payload = if (questions.isNotEmpty()) note.trim() else content.trim()
+                    val ans = if (questions.isNotEmpty()) answers.toMap() else emptyMap()
+                    onSubmit(payload, ans)
                 },
             )
         }

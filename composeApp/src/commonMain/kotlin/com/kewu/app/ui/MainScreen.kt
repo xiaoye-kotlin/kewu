@@ -27,10 +27,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import kotlin.math.roundToInt
 import io.github.suqi8.coui.kmp.basic.Surface
 import io.github.suqi8.coui.kmp.basic.Text
+import com.kewu.app.ChatHistory
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -66,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import com.kewu.app.AiNav
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuBlue
 import com.kewu.app.haptic
@@ -113,6 +116,13 @@ fun MainScreen(
     var previewFloat by remember { mutableStateOf(0f) }
     // 向下浏览内容时收起底部导航栏（课堂页滚动时回调），回到顶部自动展开
     var navHidden by remember { mutableStateOf(false) }
+    // 助教（index=1）tab 的 AI 未读红点：仅统计 ChatHistory 里晚于「已读游标」的 assistant 消息，
+    // 与首页铃铛通知完全无关（详见通知系统需求文档）。进入助教页即清空。
+    var assistantUnread by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        ChatHistory.seedWelcomeIfEmpty(ChatHistory.KEY_STUDENT)
+        assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_STUDENT)
+    }
     // 滑行/拖拽经过每一栏只触发一次极轻震动：记录上一次触发的栏索引，跨栏才打，同栏内移动不重复
     var lastPreviewHaptic by remember { mutableStateOf(-1) }
     // ★ 泡泡中心 / tab 宽度提升到本层：页内入口（作业待交→任务、头像→我的）也要能驱动
@@ -193,6 +203,13 @@ fun MainScreen(
             selected = idx
             preview = idx
             navHidden = false // 切 tab 时一律把导航栏放出来
+            // ★ 助教（index=1）：进入即清空 AI 未读红点；切走则重新统计（可能期间来了新消息）
+            if (idx == ASSISTANT_TAB) {
+                ChatHistory.markAllAssistantRead(ChatHistory.KEY_STUDENT)
+                assistantUnread = 0
+            } else {
+                assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_STUDENT)
+            }
             // 泡泡滑行走统一驾驶入口（与点选 tab 同一条线路，快速连点不瞬移）
             slideBubbleTo(idx * tabW.value + tabW.value / 2f)
             tabSwitchJob?.cancel()
@@ -207,6 +224,15 @@ fun MainScreen(
             }
         }
         onGoToTab(idx)
+    }
+    // 2026-10-24：AI 助教代操作 —— 小悟的导航指令经 AiNav 总线到这里执行切 tab
+    LaunchedEffect(Unit) {
+        AiNav.studentTab.collect { idx ->
+            if (idx in NAV_ITEMS.indices) {
+                goToTab(idx)
+                AiNav.studentTab.value = -1
+            }
+        }
     }
     Box(
         Modifier
@@ -284,6 +310,13 @@ fun MainScreen(
                 selected = it
                 preview = it
                 navHidden = false // 切 tab 时一律把导航栏放出来
+                // ★ 助教（index=1）进入即清空 AI 未读红点；切走则重新统计
+                if (it == ASSISTANT_TAB) {
+                    ChatHistory.markAllAssistantRead(ChatHistory.KEY_STUDENT)
+                    assistantUnread = 0
+                } else {
+                    assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_STUDENT)
+                }
                 // 内容区交叉淡入也走弹簧（与泡泡滑行同步）；centerAnim 由 navGestures
                 // 内部驱动，这里不重复动画它。
                 tabSwitchJob?.cancel()
@@ -314,6 +347,7 @@ fun MainScreen(
             },
             backdrop = backdrop,
             hidden = navHidden,
+            badges = mapOf(ASSISTANT_TAB to assistantUnread),
             tabW = tabW,
             centerAnim = centerAnim,
             onSlideTo = slideBubbleTo,
@@ -400,6 +434,8 @@ internal fun AppleLiquidGlassNavBar(
     onPreviewFloat: (Float) -> Unit,
     backdrop: LayerBackdrop,
     hidden: Boolean = false,
+    /** 各 tab 未读数（index → count）。目前仅 index=1「助教」的 AI 消息红点，与首页铃铛无关。 */
+    badges: Map<Int, Int> = emptyMap(),
     tabW: MutableState<Float>,
     centerAnim: Animatable<Float, AnimationVector1D>,
     /** 泡泡统一滑行入口（MainScreen 单驾驶协程）：点选 tab 从这里走，快速连点不瞬移 */
@@ -733,6 +769,28 @@ internal fun AppleLiquidGlassNavBar(
                         tabCenterX = tx,
                         tabLeftX = tabW.value * i,
                     )
+                    // ★ AI 未读红点（仅 index=1「助教」）：显示在 tab 右上角，
+                    //   与首页铃铛通知红点完全独立（小悟消息在助教页内读，不进铃铛）。
+                    //   该 tab 正处于选中态时不显示（用户正在看，无需红点）。
+                    val badge = badges[i] ?: 0
+                    if (badge > 0 && selected != i) {
+                        Box(
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .offset(x = (-12).dp, y = 8.dp)
+                                .size(if (badge > 9) 20.dp else 18.dp)
+                                .clip(CircleShape)
+                                .background(Color(0xFFFF3B30)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                if (badge > 99) "99+" else badge.toString(),
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                            )
+                        }
+                    }
                 }
             }
         }
