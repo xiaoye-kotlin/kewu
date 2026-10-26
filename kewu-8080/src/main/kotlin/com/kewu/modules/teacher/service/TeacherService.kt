@@ -107,6 +107,9 @@ class TeacherService(
         if (!cls.studentIds.add(student.id)) {
             return Result.failure(IllegalArgumentException("你已经在这个班里了"))
         }
+        // ★ 2026-10-27 修「输入邀请码显示加入成功，但老师端 0 人、学生端也没有班级」：
+        //   旧版只往内存里的 studentIds 加了一下，从没写进 class_students 表（MySQL 化之后遗留）
+        repository.addStudent(cls.id, student.id)
         // 加班顺手把这门课绑到学生身上, 学生端课程列表就能看到
         if (cls.courseId.isNotBlank()) userRepository.bindCourse(student.id, cls.courseId)
         // 课表里本班的所有课程也绑上（2026-10-27：班级可以先建后导课表，学生加班就能看到整张课表的课）

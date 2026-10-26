@@ -176,7 +176,9 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
     // ★ 接入真实资料：拉取 /user/me，映射到 UserProfile。
     // 后端 UserInfo 仅含 id/username/nickname，无 学号/学校/班级/手机/邮箱，
     // 这些字段用默认值补；学号 = 登录账号(username)。失败则保留默认资料（离线也可用）。
-    LaunchedEffect(Unit) {
+    // 每次回到「我的」首页都重拉（2026-10-27：加入班级后返回，班级要马上显示；旧版只在进页时拉一次）
+    LaunchedEffect(screen == 0) {
+        if (screen != 0) return@LaunchedEffect
         KewuApi.me(force = true) // 进「我的」强制拉一次：班级 / 联系方式可能刚被老师端改过
         val u = KewuApi.currentUser
         val uname = KewuApi.username ?: u?.user?.id ?: ""

@@ -235,9 +235,9 @@ object ScheduleService {
                 }.toList()
             } else {
                 val classIds = ClassStudents.selectAll().where { ClassStudents.studentId eq u.id }.map { it[ClassStudents.classId] }
-                val courseIds = UserCourses.selectAll().where { UserCourses.userId eq u.id }.map { it[UserCourses.courseId] }
+                // 2026-10-27：老师导入的课表只给加入了这个班的同学看（旧版绑过同名课程的人也能看到别的班的课表）
                 CourseSchedules.selectAll().toList().filter { r ->
-                    (r[CourseSchedules.classId] != null && r[CourseSchedules.classId] in classIds) || r[CourseSchedules.courseId] in courseIds
+                    r[CourseSchedules.classId] != null && r[CourseSchedules.classId] in classIds
                 }
             }
         }

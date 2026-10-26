@@ -459,8 +459,15 @@ internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                     }
                     if (r.data != null) {
                         code = ""
-                        KewuApi.currentUser = null
-                        KewuApi.me(force = true) // 刷新我的课程（最佳努力）
+                        haptic(HapticKind.Light)
+                        snackbar.toast(r.data)
+                        // 2026-10-27：加入成功立刻退回「我的」（旧版停在原页，看起来像没反应），
+                        // 并刷新本人资料 / 课程 / 作业：班级、课表里的课马上可见
+                        onBack()
+                        KewuApi.me(force = true)
+                        com.kewu.app.CourseRepo.refresh(force = true)
+                        com.kewu.app.AssignmentRepo.refresh()
+                        return@launch
                     }
                     result?.let { snackbar.toast(it.second) }
                 }
