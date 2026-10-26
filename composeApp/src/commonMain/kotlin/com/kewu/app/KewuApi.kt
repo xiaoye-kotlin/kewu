@@ -77,6 +77,8 @@ data class SubmissionInfo(
     val answers: List<QuestionAnswer> = emptyList(),
     /** 逐题判定结果（客观题自动判分，主观题 correct=null 等老师）。 */
     val questionResults: List<QuestionResult> = emptyList(),
+    /** 提交附件（图片 / 文件 / 录音，2026-10-26；后端未上线时为空）。 */
+    val attachments: List<AttachmentInfo> = emptyList(),
 )
 data class AiReason(val item: String, val detail: String, val score: Double)
 data class AiSuggestion(
@@ -599,6 +601,7 @@ object KewuApi {
     suspend fun submitAssignment(
         id: String, studentId: String, studentName: String, content: String,
         answers: Map<String, String> = emptyMap(),
+        attachments: List<AttachmentInfo> = emptyList(),
     ): String? = try {
         val body = mutableMapOf<String, Any?>(
             "studentId" to studentId, "studentName" to studentName, "content" to content,
@@ -607,11 +610,60 @@ object KewuApi {
         if (answers.isNotEmpty()) {
             body["answers"] = answers.map { (k, v) -> mapOf("questionId" to k, "value" to v) }
         }
+        // 附件（作业附件需求文档 §3）：只传已上传成功的服务端附件
+        if (attachments.isNotEmpty()) {
+            body["attachments"] = attachments.map { a ->
+                mapOf(
+                    "id" to a.id, "kind" to a.kind.value, "name" to a.name, "url" to a.url,
+                    "mime" to a.mime, "size" to a.size, "durationSec" to a.durationSec,
+                )
+            }
+        }
         val el = postJson("$BASE_URL/api/assignments/${pathSegment(id)}/submissions", body)
         el.asDataOrThrow()
         null
     } catch (e: ApiException) { e.message }
     catch (_: Exception) { "网络异常，请稍后重试" }
+
+    /**
+     * 上传一个作业附件（作业附件需求文档 §2：`POST /api/uploads`，multipart 字段 `file` + `kind` + `uploader`）。
+     * 成功返回 (附件, null)；失败返回 (null, 可展示原因)。后端未上线时（404）给出明确提示，绝不静默丢附件。
+     */
+    suspend fun uploadAttachment(a: LocalAttachment): Pair<AttachmentInfo?, String?> = try {
+        val bytes = platformReadFile(a.path) ?: return null to "读取本地文件失败"
+        val content = MultiPartFormDataContent(formData {
+            append("kind", a.kind.value)
+            append("uploader", username ?: "")
+            if (a.durationSec != null) append("durationSec", a.durationSec.toString())
+            append("file", bytes, Headers.build {
+                append(HttpHeaders.ContentType, a.mime)
+                append(HttpHeaders.ContentDisposition, "filename=\"${safeFilename(a.name)}\"")
+            })
+        })
+        val resp = client.post("$BASE_URL/api/uploads") {
+            authHeaders().forEach { (k, v) -> header(k, v) }
+            setBody(content)
+        }
+        if (resp.status.value == 404) {
+            null to "服务器暂不支持附件上传（后端附件接口未上线）"
+        } else {
+            val d = json.parseToJsonElement(resp.bodyAsText()).asDataOrThrow() as? JsonObject
+                ?: throw ApiException("服务器响应异常，请稍后重试")
+            parseAttachment(d)?.let { it to null } ?: (null to "服务器未返回附件地址")
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { null to e.message }
+    catch (_: Exception) { null to "网络异常，请稍后重试" }
+
+    private fun parseAttachment(o: JsonObject): AttachmentInfo? {
+        val url = o["url"].str().takeIf { it.isNotBlank() } ?: return null
+        return AttachmentInfo(
+            id = o["id"].str(), kind = AttachmentKind.from(o["kind"].strOrNull()),
+            name = o["name"].str().ifBlank { url.substringAfterLast('/') }, url = url,
+            mime = o["mime"].str(), size = (o["size"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L,
+            durationSec = (o["durationSec"] as? JsonPrimitive)?.content?.toIntOrNull(),
+        )
+    }
 
     /** 我的提交（版本轨迹）。失败返回 null。 */
     suspend fun getMySubmissions(id: String, studentId: String): SubmissionInfo? = try {
@@ -1231,6 +1283,8 @@ object KewuApi {
             reviewedAt = o["reviewedAt"].strOrNull(), history = history, ai = ai,
             answers = parseQuestionAnswers(o["answers"]),
             questionResults = parseQuestionResults(o["questionResults"]),
+            attachments = (o["attachments"] as? JsonArray).orEmpty()
+                .mapNotNull { (it as? JsonObject)?.let(::parseAttachment) },
         )
     }
 

@@ -128,7 +128,10 @@ import io.github.suqi8.coui.kmp.preference.ArrowPreference
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kewu.composeapp.generated.resources.Res
 import kewu.composeapp.generated.resources.student_logo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.sin
@@ -180,6 +183,11 @@ fun LoginScreen(onLogin: () -> Unit) {
     var pwd2 by remember { mutableStateOf("") }
     // 学校选择器：底部弹层开关（MIUI 风选项 + 模糊搜索）
     var schoolSheetOpen by remember { mutableStateOf(false) }
+    // ★ 2026-10-26：注册页一出现就在后台线程预热高校数据（ALL_UNIVERSITIES 是 lazy），
+    //   点「选择学校」时不再在主线程做首次初始化（vivo 闪退兼容修复，见 Universities.kt 头注释）。
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.Default) { runCatching { ALL_UNIVERSITIES.size } }
+    }
     // 登录/注册失败文案（网络异常 / 账号密码错误），成功后清空
     var loginError by remember { mutableStateOf("") }
 
@@ -737,11 +745,19 @@ private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect:
         Spacer(Modifier.height(10.dp))
 
         // 结果列表（模糊搜索：名称 / 全拼 / 简写；全量 2900+ 所）
-        val results = remember(query) { searchUniversities(query) }
+        // ★ 2026-10-26 兼容性：搜索放后台线程（Dispatchers.Default），主线程只渲染结果；
+        //   searched = 「已算完的那个查询串」，没算完前不显示「使用『xxx』」兜底项，避免一闪而过。
+        val searchState by produceState<Pair<String, List<University>>?>(null, query) {
+            value = query to withContext(Dispatchers.Default) {
+                try { searchUniversities(query) } catch (_: Throwable) { emptyList() }
+            }
+        }
+        val results = searchState?.second.orEmpty()
+        val searched = searchState?.first == query
         Box(Modifier.fillMaxWidth().height(340.dp)) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 // 未命中时给「自由输入」兜底项（后端 register 接受任意 nickname/school 字符串）
-                if (results.isEmpty() && query.isNotBlank()) {
+                if (searched && results.isEmpty() && query.isNotBlank()) {
                     item {
                         SchoolOptionRow(
                             name = "使用「${query.trim()}」",

@@ -100,6 +100,24 @@ object ChatHistory {
         }
     }
 
+    /** 追加一条（[AssistantHub.deliver] 用：页面不在前台时也能落盘）。 */
+    fun append(key: String, entry: Entry) = upsert(key, listOf(entry))
+
+    /**
+     * 按 id 合并写入：已有的替换、新的追加，**不删除**存档里其它消息。
+     * 页面落盘统一走这里（2026-10-26）：旧版 saveAll(页面内存里的消息) 会把「页面没加载的更早几天」
+     * 以及「页面不在时 AssistantHub 追加的回复」一并覆盖掉。
+     */
+    fun upsert(key: String, entries: List<Entry>) {
+        if (entries.isEmpty()) return
+        // 老数据可能 id=0，退回用 时间戳+角色+正文 作合并键，避免多条 id=0 被并成一条
+        fun mk(e: Entry): String = if (e.id != 0L) "i${e.id}" else "t${e.ts}|${e.role}|${e.text.hashCode()}"
+        val merged = LinkedHashMap<String, Entry>()
+        loadAll(key).forEach { merged[mk(it)] = it }
+        entries.forEach { merged[mk(it)] = it }
+        saveAll(key, merged.values.toList())
+    }
+
     /**
      * 未读的 AI（小悟，role=="assistant"）消息数：晚于「已读游标」的 assistant 消息。
      * ★ 仅用于底部导航栏第二个「助教」tab 的红点；与首页铃铛通知完全独立。

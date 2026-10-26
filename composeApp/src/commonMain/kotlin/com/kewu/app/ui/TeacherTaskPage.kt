@@ -1002,6 +1002,11 @@ private fun ReviewSubmissionScreen(
                             Text(s.content.ifBlank { "（无文字内容）" }, color = cs.onSurface,
                                 fontSize = 13.5.sp, lineHeight = 20.sp, modifier = Modifier.padding(12.dp))
                         }
+                        // 学生提交的附件（图片 / 文件 / 录音，2026-10-26），点开用系统应用查看
+                        if (s.attachments.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            AttachmentList(s.attachments)
+                        }
                         if (s.history.size > 1) {
                             Spacer(Modifier.height(8.dp))
                             Text("历史版本 ${s.history.size} 个", color = cs.onSurfaceSecondary, fontSize = 12.sp)
@@ -1287,6 +1292,7 @@ private fun PublishAssignmentScreen(
                 text = if (publishing) "发布中…" else "发布作业",
                 onClick = {
                     if (courseId.isBlank() || title.isBlank() || publishing) return@KewuPrimaryButton
+                    validateQuestions(questions)?.let { scope.launch { snackbar.toast(it) }; return@KewuPrimaryButton }
                     publishing = true
                     scope.launch {
                         val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""

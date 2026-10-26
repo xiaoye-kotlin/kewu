@@ -49,6 +49,7 @@ fun App() {
             kvSet("kewu_logged", "")
             kvSet("kewu_account", "")
             kvSet("kewu_pwd", "")
+            CourseRepo.clear() // 课程缓存属于上一个账号
             loggedIn = false
         }
         if (loggedIn) {

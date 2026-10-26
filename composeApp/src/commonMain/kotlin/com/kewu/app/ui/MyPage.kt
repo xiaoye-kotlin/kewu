@@ -52,6 +52,7 @@ import androidx.compose.ui.util.lerp
 import com.kewu.app.AiNav
 import com.kewu.app.BackHandler
 import com.kewu.app.CourseInfo
+import com.kewu.app.CourseRepo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
@@ -272,7 +273,9 @@ private fun MyHome(
     // 退出登录二次确认（coui OverlayDialog）：误触一下就丢登录态太伤
     var confirmLogout by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        myCourses = KewuApi.getCourses()
+        // 2026-10-26：与首页共用 CourseRepo（先显示缓存，再静默刷新；这里拉到的结果首页也立刻可见）
+        CourseRepo.courses.value?.let { myCourses = it; coursesLoading = false }
+        myCourses = CourseRepo.refresh(force = true)
         coursesLoading = false
     }
 
@@ -407,6 +410,7 @@ private fun MyHome(
                     // 后端暂无退出课程接口（KewuApi 无 leaveCourse）：本地移出列表，
                     // 接口后补后在这里调 KewuApi.leaveCourse(courseId)
                     myCourses = myCourses?.filter { it.id != exitCourse.id }
+                    CourseRepo.remove(exitCourse.id)
                     close()
                 }
             }

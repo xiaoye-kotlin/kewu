@@ -4,6 +4,7 @@ import com.kewu.app.BackHandler
 import com.kewu.app.AiAgent
 import com.kewu.app.AiClient
 import com.kewu.app.ChatHistory
+import com.kewu.app.AssistantHub
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -51,6 +52,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -177,7 +179,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 text = m.text, ts = if (m.ts != 0L) m.ts else nowMs(), quote = m.quote,
             )
         }
-        ChatHistory.saveAll(ChatHistory.KEY_STUDENT, entries)
+        // 按 id 合并写入（不覆盖页面没加载的更早消息 / 页面不在时 AssistantHub 追加的回复）
+        ChatHistory.upsert(ChatHistory.KEY_STUDENT, entries)
         // 是否还有更早历史：以全量存档为准（内存里可能只有今天的消息）
         hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
     }
@@ -288,7 +291,22 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     // 发送：用户消息立即上屏并落盘；2026-10-24 起走真实大模型（AiClient），
     // 回答里可能带 KEWU_ACTION 指令 —— 由 AiAgent 真执行导航/代办；失败回退占位文案
-    var aiThinking by remember { mutableStateOf(false) }
+    // 2026-10-26：AI 请求改由进程级 AssistantHub 发起——切到别的 tab 请求不会被取消，回答到达时
+    // 若不在本页则点亮底部「助教」红点；回到本页时 pending 仍在就继续显示「正在输入中」。
+    val pendingKeys by AssistantHub.pending.collectAsState()
+    val aiThinking = ChatHistory.KEY_STUDENT in pendingKeys
+    LaunchedEffect(Unit) {
+        // 先补齐「本页组合之后、开始监听之前」已落盘的回复（极短窗口，防漏显示）
+        val known = messages.map { it.id }.toSet()
+        val missed = ChatHistory.loadAll(ChatHistory.KEY_STUDENT)
+            .filter { it.ts >= visibleCutoff && it.id !in known && it.id != 0L }
+        if (missed.isNotEmpty()) messages = messages + entriesToMsgs(missed)
+        AssistantHub.incoming.collect { inc ->
+            if (inc.key == ChatHistory.KEY_STUDENT && messages.none { it.id == inc.entry.id }) {
+                messages = messages + ChatMsg(inc.entry.text, isUser = false, id = inc.entry.id, ts = inc.entry.ts)
+            }
+        }
+    }
     val doSend: (String) -> Unit = { raw ->
         val text = raw.trim()
         // 允许「只发引用 + 正文为空」的情况（QQ 同款）；两者都空则不动
@@ -301,50 +319,37 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             input = ""
             quotePreview = null // 发出后清掉引用预览
             haptic(HapticKind.Light)
-            scope.launch {
-                aiThinking = true
-                // 多轮上下文：取最近 8 条纯文字消息（引用拼进正文）
-                val history = messages.filter { !it.isVoice }.takeLast(8).map { m ->
-                    val body = if (m.quote != null) "（引用：${m.quote}）${m.text}" else m.text
-                    AiClient.Msg(if (m.isUser) "user" else "assistant", body.ifBlank { "…" })
+            // 多轮上下文：取最近 8 条纯文字消息（引用拼进正文）
+            val history = messages.filter { !it.isVoice }.takeLast(8).map { m ->
+                val body = if (m.quote != null) "（引用：${m.quote}）${m.text}" else m.text
+                AiClient.Msg(if (m.isUser) "user" else "assistant", body.ifBlank { "…" })
+            }
+            val system = buildString {
+                append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和一名学生对话。")
+                append("回答课堂疑问、作业思路、复习规划等问题；")
+                append("讲解清晰、语气亲切，可适当分步；用中文；不要用 markdown 格式符号；")
+                append("单次回答控制在 250 字以内，题目讲解可稍长。")
+                append("不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），")
+                append("也不要每次回复都重复问候或复述用户的问题，直接回答内容本身。\n")
+                append("学生当前情况：共 $courseCount 门课程 · $pendingCount 份作业")
+                if (assignmentTitles.isNotEmpty()) {
+                    append("，作业包括：")
+                    append(assignmentTitles.take(6).joinToString("、"))
                 }
-                val system = buildString {
-                    append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和一名学生对话。")
-                    append("回答课堂疑问、作业思路、复习规划等问题；")
-                    append("讲解清晰、语气亲切，可适当分步；用中文；不要用 markdown 格式符号；")
-                    append("单次回答控制在 250 字以内，题目讲解可稍长。")
-                    append("不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），")
-                    append("也不要每次回复都重复问候或复述用户的问题，直接回答内容本身。\n")
-                    append("学生当前情况：共 $courseCount 门课程 · $pendingCount 份作业")
-                    if (assignmentTitles.isNotEmpty()) {
-                        append("，作业包括：")
-                        append(assignmentTitles.take(6).joinToString("、"))
-                    }
-                    append("\n\n")
-                    append(AiAgent.studentCapability())
-                }
+                append("\n\n")
+                append(AiAgent.studentCapability())
+            }
+            AssistantHub.ask(ChatHistory.KEY_STUDENT) {
                 val reply = AiClient.chat(listOf(AiClient.Msg("system", system)) + history)
-                aiThinking = false
-                when {
-                    reply == null -> {
-                        val fallback = ChatMsg(AI_REPLY_MOCKS.random(), isUser = false,
-                            id = ChatHistory.nextId(), ts = nowMs())
-                        messages = messages + fallback
-                    }
-                    else -> {
-                        val parsed = AiAgent.parse(reply)
-                        // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
-                        val note = parsed.action?.let { AiAgent.execute("student", it) }
-                        val body = listOfNotNull(
-                            parsed.text.ifEmpty { null },
-                            note,
-                        ).joinToString("\n")
-                        val aiMsg = ChatMsg(body, isUser = false,
-                            id = ChatHistory.nextId(), ts = nowMs())
-                        messages = messages + aiMsg
-                    }
+                if (reply == null) {
+                    // 直连 / 代理 / 8081 中转全部失败：如实告知，不再用随机占位语冒充回答
+                    AssistantHub.Reply("小悟暂时连不上 AI 服务（网络不通或服务繁忙），请稍后再试～")
+                } else {
+                    val parsed = AiAgent.parse(reply)
+                    // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
+                    val note = parsed.action?.let { AiAgent.execute("student", it) }
+                    AssistantHub.Reply(listOfNotNull(parsed.text.ifEmpty { null }, note).joinToString("\n"))
                 }
-                persistHistory(messages.filter { !it.isVoice })
             }
         }
     }
@@ -773,13 +778,6 @@ private data class ChatMsg(
     val displayText: String
         get() = if (isVoice) "语音消息 · ${fmtClock(voiceSecs)}" else text
 }
-
-/** AI 回答服务接入前的本地占位回复（后端后补：走对话接口替换这里即可）。 */
-private val AI_REPLY_MOCKS = listOf(
-    "收到！这个问题我记下了，回答服务接入后给你完整展开。",
-    "好问题～我先整理一下思路，稍后把步骤发你。",
-    "这部分我在同步课程资料，接通后第一时间回复你。",
-)
 
 /** 手写 mm:ss（commonMain 禁 String.format）。 */
 private fun two(n: Int) = if (n < 10) "0$n" else "$n"

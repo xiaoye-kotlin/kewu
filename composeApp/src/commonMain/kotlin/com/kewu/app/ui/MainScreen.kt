@@ -33,7 +33,10 @@ import kotlin.math.roundToInt
 import io.github.suqi8.coui.kmp.basic.Surface
 import io.github.suqi8.coui.kmp.basic.Text
 import com.kewu.app.ChatHistory
+import com.kewu.app.AssistantHub
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -118,11 +121,27 @@ fun MainScreen(
     var navHidden by remember { mutableStateOf(false) }
     // 助教（index=1）tab 的 AI 未读红点：仅统计 ChatHistory 里晚于「已读游标」的 assistant 消息，
     // 与首页铃铛通知完全无关（详见通知系统需求文档）。进入助教页即清空。
-    var assistantUnread by remember { mutableStateOf(0) }
+    // 2026-10-26：未读数改由 AssistantHub 统一维护（在助教页里看着回答的不算未读；切走后才到的、
+    // 以及小悟主动发来的消息才算）。每分钟重算一次，跨天时教师端「今日简报未读」能自动出现。
+    val assistantUnread by AssistantHub.unread(ChatHistory.KEY_STUDENT).collectAsState()
     LaunchedEffect(Unit) {
         ChatHistory.seedWelcomeIfEmpty(ChatHistory.KEY_STUDENT)
-        assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_STUDENT)
+        AssistantHub.refreshUnread(ChatHistory.KEY_STUDENT)
+        launch {
+            while (true) {
+                delay(60_000)
+                AssistantHub.refreshUnread(ChatHistory.KEY_STUDENT)
+            }
+        }
+        // 学生端：老师打回作业时小悟主动发修改建议（启动查一次，之后每 3 分钟查一次）
+        launch {
+            while (true) {
+                AssistantHub.checkReturnedAssignments()
+                delay(180_000)
+            }
+        }
     }
+    DisposableEffect(Unit) { onDispose { AssistantHub.setVisible(ChatHistory.KEY_STUDENT, false) } }
     // 滑行/拖拽经过每一栏只触发一次极轻震动：记录上一次触发的栏索引，跨栏才打，同栏内移动不重复
     var lastPreviewHaptic by remember { mutableStateOf(-1) }
     // ★ 泡泡中心 / tab 宽度提升到本层：页内入口（作业待交→任务、头像→我的）也要能驱动
@@ -204,12 +223,7 @@ fun MainScreen(
             preview = idx
             navHidden = false // 切 tab 时一律把导航栏放出来
             // ★ 助教（index=1）：进入即清空 AI 未读红点；切走则重新统计（可能期间来了新消息）
-            if (idx == ASSISTANT_TAB) {
-                ChatHistory.markAllAssistantRead(ChatHistory.KEY_STUDENT)
-                assistantUnread = 0
-            } else {
-                assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_STUDENT)
-            }
+            AssistantHub.setVisible(ChatHistory.KEY_STUDENT, idx == ASSISTANT_TAB)
             // 泡泡滑行走统一驾驶入口（与点选 tab 同一条线路，快速连点不瞬移）
             slideBubbleTo(idx * tabW.value + tabW.value / 2f)
             tabSwitchJob?.cancel()
@@ -311,12 +325,7 @@ fun MainScreen(
                 preview = it
                 navHidden = false // 切 tab 时一律把导航栏放出来
                 // ★ 助教（index=1）进入即清空 AI 未读红点；切走则重新统计
-                if (it == ASSISTANT_TAB) {
-                    ChatHistory.markAllAssistantRead(ChatHistory.KEY_STUDENT)
-                    assistantUnread = 0
-                } else {
-                    assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_STUDENT)
-                }
+                AssistantHub.setVisible(ChatHistory.KEY_STUDENT, it == ASSISTANT_TAB)
                 // 内容区交叉淡入也走弹簧（与泡泡滑行同步）；centerAnim 由 navGestures
                 // 内部驱动，这里不重复动画它。
                 tabSwitchJob?.cancel()

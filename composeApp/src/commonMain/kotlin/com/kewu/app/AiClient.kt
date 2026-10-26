@@ -44,15 +44,23 @@ import kotlinx.serialization.json.put
 object AiClient {
 
     /**
-     * 候选接入点，按顺序尝试，成功即止。
-     * 1) ModelArts 官方端点（生产环境应直连）；
-     * 2) 局域网调试代理（kewu_ai_proxy.py，PC 转发；当前测试网络直连 443 被阻断）。
-     * 可用 kv `kewu_ai_endpoint` 覆盖为单一端点。
+     * 直连接入点（OpenAI 兼容），按顺序尝试，成功即止。
+     * 1) ModelArts 官方端点（固定配置，见交接文档 26.1）；
+     * 2) 局域网调试代理（kewu_ai_proxy.py，PC 转发；仅开发机网络可达时有效）。
+     * 两者都失败时再走 [RELAY_URL]（8081 业务后端的 MaaS 中转，手机能连上业务后端就能用 AI）。
+     * 可用 kv `kewu_ai_endpoint` 覆盖为单一直连端点（总控端「自定义 AI 模型」预留口）。
      */
     private val ENDPOINTS = listOf(
         "https://api.modelarts-maas.com/v2/chat/completions",
         "http://192.168.100.104:8377/v2/chat/completions",
     )
+
+    /**
+     * 兜底中转：8081 `POST /api/ai/answer {question, context}` → `{answer}`（接口文档 10.11.2，
+     * 服务器用自己的环境变量调同一个 MaaS）。部分校园网 / 运营商会拦 api.modelarts-maas.com:443，
+     * 而业务后端 47.99.42.168 是 App 必须能连的，所以把它放在最后兜底（2026-10-26 用户反馈「AI 又不可用」）。
+     */
+    private const val RELAY_URL = "http://47.99.42.168:8081/api/ai/answer"
 
     private val endpointOverride: String? = kvGet("kewu_ai_endpoint")?.takeIf { it.isNotBlank() }
 
@@ -103,7 +111,47 @@ object AiClient {
             val r = chatOnce(ep, messages, maxTokens)
             if (r != null) return r
         }
-        return null
+        return relayOnce(messages)
+    }
+
+    /**
+     * 8081 中转：多轮消息压成 {question = 最后一条用户消息, context = system + 之前的对话}。
+     * 服务器未配置 / 调用失败时也会回 200 + 可读文案，这里只认非空 answer。
+     */
+    private suspend fun relayOnce(messages: List<Msg>): String? = try {
+        val lastUser = messages.indexOfLast { it.role == "user" }
+        val question = messages.getOrNull(lastUser)?.content.orEmpty()
+        val context = buildString {
+            messages.forEachIndexed { i, m ->
+                if (i == lastUser) return@forEachIndexed
+                when (m.role) {
+                    "system" -> appendLine(m.content)
+                    "user" -> appendLine("【用户】${m.content}")
+                    else -> appendLine("【助手】${m.content}")
+                }
+            }
+            appendLine("（以上是你的身份设定与之前的对话，请据此直接回答最新的问题，不要局限于课堂内容。）")
+        }
+        val resp = client.post(RELAY_URL) {
+            contentType(ContentType.Application.Json)
+            timeout { requestTimeoutMillis = 120_000 }
+            setBody(buildJsonObject {
+                put("question", question)
+                put("context", context)
+            }.toString())
+        }
+        val bodyText = resp.bodyAsText()
+        val answer = if (resp.status.value in 200..299) {
+            (json.parseToJsonElement(bodyText) as? JsonObject)?.get("answer")
+                ?.jsonPrimitive?.content?.trim()?.takeIf { it.isNotEmpty() }
+        } else null
+        if (answer == null) lastError = "relay HTTP ${resp.status.value}: ${bodyText.take(200)}" else lastError = null
+        answer
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        logErr("relay", e)
+        null
     }
 
     private suspend fun chatOnce(endpoint: String, messages: List<Msg>, maxTokens: Int): String? = try {
@@ -124,10 +172,19 @@ object AiClient {
             header(HttpHeaders.Authorization, "Bearer $apiKey")
             contentType(ContentType.Application.Json)
             // 大模型推理耗时远长于业务接口，单请求超时放宽到 120s
-            timeout { requestTimeoutMillis = 120_000 }
+            // 直连握手 8s 就放弃：被网络拦截时尽快落到下一个接入点，不让用户干等
+            timeout {
+                requestTimeoutMillis = 120_000
+                connectTimeoutMillis = 8_000
+            }
             setBody(body.toString())
         }
         val bodyText = resp.bodyAsText()
+        if (resp.status.value !in 200..299) {
+            lastError = "HTTP ${resp.status.value} @ $endpoint: ${bodyText.take(200)}"
+            println("[AiClient] $lastError")
+            return null
+        }
         println("[AiClient] chat HTTP ok, ${bodyText.length} chars")
         val root = json.parseToJsonElement(bodyText).jsonObject
         val content = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject

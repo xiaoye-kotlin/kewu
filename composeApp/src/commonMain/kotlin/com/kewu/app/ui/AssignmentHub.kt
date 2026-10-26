@@ -26,6 +26,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateListOf
+import com.kewu.app.AttachmentInfo
+import com.kewu.app.LocalAttachment
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,9 +94,10 @@ internal fun HubSectionLabel(text: String) {
 private fun HubCard(
     backdrop: LayerBackdrop,
     onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val m = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+    val m = modifier.fillMaxWidth().padding(horizontal = 12.dp)
     KewuGlassCard(
         backdrop = backdrop,
         shape = RoundedCornerShape(16.dp), blurRadius = 18.dp, tintAlpha = 0.30f,
@@ -158,6 +162,9 @@ fun AssignmentDetailScreen(
     var aiLoading by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var showSubmit by remember { mutableStateOf(false) }
+    var submitting by remember { mutableStateOf(false) }
+    var submitError by remember { mutableStateOf<String?>(null) }
+    val snackbar = LocalKewuSnackbar.current
 
     val studentId = KewuApi.username ?: ""
     val studentName = KewuApi.currentUser?.user?.nickname ?: "学生"
@@ -289,17 +296,41 @@ fun AssignmentDetailScreen(
         show = showSubmit,
         title = assignment?.title ?: "提交作业",
         questions = assignment?.questions ?: emptyList(),
-        onSubmit = { content, answers ->
+        submitting = submitting,
+        error = submitError,
+        onSubmit = { content, answers, localAtts ->
+            if (studentId.isBlank()) {
+                submitError = "登录信息已失效，请重新登录后再提交"
+                return@SubmitDialog
+            }
+            submitting = true
+            submitError = null
             scope.launch {
-                val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, answers)
-                showSubmit = false
+                // 附件先逐个上传换成服务端 url；任一失败就停下并说明原因（不静默丢附件）
+                val uploaded = mutableListOf<AttachmentInfo>()
+                for (a in localAtts) {
+                    val (info, err) = KewuApi.uploadAttachment(a)
+                    if (info == null) {
+                        submitError = "附件「${a.name}」上传失败：${err ?: "未知错误"}"
+                        submitting = false
+                        return@launch
+                    }
+                    uploaded += info
+                }
+                val err = KewuApi.submitAssignment(assignmentId, studentId, studentName, content, answers, uploaded)
+                submitting = false
                 if (err == null) {
+                    showSubmit = false
+                    snackbar.toast("提交成功")
                     onSubmitted(assignmentId)
                     reload()
+                } else {
+                    submitError = err
                 }
             }
         },
-        onDismiss = { showSubmit = false },
+        onDismiss = { showSubmit = false; submitError = null },
+        onToast = { scope.launch { snackbar.toast(it) } },
     )
 }
 
@@ -328,6 +359,10 @@ private fun MySubmissionCard(backdrop: LayerBackdrop, submission: SubmissionInfo
             Spacer(Modifier.height(6.dp))
             MetaRow("版本", "v${submission.version} · ${submission.submittedAt.ifBlank { "—" }}")
             MetaRow("状态", submission.status.ifBlank { "—" })
+            if (submission.attachments.isNotEmpty()) {
+                Spacer(Modifier.height(8.dp))
+                AttachmentList(submission.attachments)
+            }
             submission.comment?.takeIf { it.isNotBlank() }?.let {
                 Spacer(Modifier.height(6.dp))
                 Text("老师评语：$it", color = cs.onSurfaceSecondary, fontSize = 13.sp)
@@ -559,8 +594,14 @@ private fun TeacherPublishCard(backdrop: LayerBackdrop, courseId: String, publis
     var msg by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
-    // 整卡点按展开/收起（与改造前同为 hapticClickable）；输入框自己消费点击，不会误触收起
-    HubCard(backdrop, onClick = { expanded = !expanded }) {
+    // 整卡点按展开/收起（与改造前同为 hapticClickable）；输入框自己消费点击，不会误触收起。
+    // 展开时页面跟着卡片一起滑到底部（followGrowth，2026-10-26）
+    val follow = remember { FollowWindow() }
+    HubCard(
+        backdrop,
+        onClick = { expanded = !expanded; if (expanded) follow.arm() },
+        modifier = Modifier.followGrowth { follow.active() },
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("老师 · 发布新作业", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
             Text(if (expanded) "收起" else "展开", color = cs.onSurfaceSecondary, fontSize = 13.sp)
@@ -590,6 +631,7 @@ private fun TeacherPublishCard(backdrop: LayerBackdrop, courseId: String, publis
                 KewuPrimaryButton(
                     text = if (publishing) "发布中…" else "发布作业",
                     onClick = {
+                        validateQuestions(questions)?.let { msg = it; return@KewuPrimaryButton }
                         publishing = true; msg = null
                         scope.launch {
                             val info = KewuApi.publishAssignment(
@@ -624,27 +666,32 @@ private fun EmptyHint(text: String) {
 /**
  * 提交作业弹窗：coui [OverlayDialog]（窗口内覆盖层）+ coui [TextField] + [DialogButtonBar]。
  *
- * v17 题目化作业：若 [questions] 非空，弹窗按题型渲染作答控件（选择/判断/填空/简答），
- * 答案实时收集进 [answers]，提交时走原生 `answers` 字段（服务端自动判分），`content` 仅保留补充说明文字。
- * 无题目时退化为原来的纯文本答案框。关闭动画播完才清空输入，避免退场时文字闪没。
+ * v17 题目化作业：若 [questions] 非空，弹窗按题型渲染作答控件（选择/判断/填空/简答），答案走原生 `answers`；
+ * 无题目时为纯文本答案框。2026-10-26：下方加「附件」区（图片 / 文件 / 录音，[AttachmentPicker]）；
+ * 提交中按钮置灰显示「提交中…」，失败原因直接显示在弹窗里（旧版失败无任何反馈 = 用户说的「点了没反应」）。
+ * 关闭动画播完才清空输入，避免退场时文字闪没。
  */
 @Composable
 private fun SubmitDialog(
     show: Boolean,
     title: String,
     questions: List<Question>,
-    onSubmit: (String, Map<String, String>) -> Unit,
+    submitting: Boolean,
+    error: String?,
+    onSubmit: (content: String, answers: Map<String, String>, attachments: List<LocalAttachment>) -> Unit,
     onDismiss: () -> Unit,
+    onToast: (String) -> Unit,
 ) {
     var content by remember { mutableStateOf("") }
     var note by remember { mutableStateOf("") }
     val answers = remember { mutableStateMapOf<String, String>() }
+    val attachments = remember { mutableStateListOf<LocalAttachment>() }
     OverlayDialog(
         show = show,
         title = title,
         summary = if (questions.isNotEmpty()) "请按题型作答后提交" else "请输入答案后提交",
-        onDismissRequest = onDismiss,
-        onDismissFinished = { content = ""; note = ""; answers.clear() },
+        onDismissRequest = { if (!submitting) onDismiss() },
+        onDismissFinished = { content = ""; note = ""; answers.clear(); attachments.clear() },
     ) {
         Column(Modifier.verticalScroll(rememberScrollState())) {
             if (questions.isNotEmpty()) {
@@ -663,17 +710,27 @@ private fun SubmitDialog(
                     backgroundMode = TextFieldMode.Rectangle, label = "答案", minLines = 4,
                 )
             }
+            Spacer(Modifier.height(10.dp))
+            HubSectionLabel("附件（可选）")
+            AttachmentPicker(attachments = attachments, enabled = !submitting, onToast = onToast)
+            error?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = COUITheme.colorScheme.error, fontSize = 13.sp)
+            }
             Spacer(Modifier.height(12.dp))
-            val canSubmit = if (questions.isNotEmpty()) note.isNotBlank() || answers.isNotEmpty()
+            val hasAnswer = if (questions.isNotEmpty()) note.isNotBlank() || answers.values.any { it.isNotBlank() }
             else content.isNotBlank()
+            val canSubmit = !submitting && (hasAnswer || attachments.isNotEmpty())
             DialogButtonBar(
-                negative = DialogButtonBarAction("取消") { haptic(HapticKind.Tick); onDismiss() },
-                positive = DialogButtonBarAction("提交", enabled = canSubmit) {
+                negative = DialogButtonBarAction("取消", enabled = !submitting) { haptic(HapticKind.Tick); onDismiss() },
+                positive = DialogButtonBarAction(if (submitting) "提交中…" else "提交", enabled = canSubmit) {
                     haptic(HapticKind.Light)
-                    // v17：content 仅留补充说明，答案走原生 answers 字段（服务端自动判分）
-                    val payload = if (questions.isNotEmpty()) note.trim() else content.trim()
-                    val ans = if (questions.isNotEmpty()) answers.toMap() else emptyMap()
-                    onSubmit(payload, ans)
+                    val ans = if (questions.isNotEmpty()) answers.filterValues { it.isNotBlank() } else emptyMap()
+                    // content 必填（文档 3.12 ②）：题目化作业拼成可读文本，纯文本作业即答案本身
+                    val payload = if (questions.isNotEmpty()) {
+                        buildReadableSubmitContent(questions, ans, note, attachments.isNotEmpty())
+                    } else content.trim().ifBlank { if (attachments.isNotEmpty()) "（见附件）" else "" }
+                    onSubmit(payload, ans, attachments.toList())
                 },
             )
         }

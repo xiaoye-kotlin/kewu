@@ -27,6 +27,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import com.kewu.app.AiAgent
 import com.kewu.app.AiClient
 import com.kewu.app.ChatHistory
+import com.kewu.app.AssistantHub
 import com.kewu.app.Analytics
 import com.kewu.app.AssignmentInfo
 import com.kewu.app.AssignmentStats
@@ -94,7 +96,7 @@ import kotlinx.coroutines.launch
  * 教学简报播报日期标记（kv，存「当天 00:00」的时间戳）。
  * 2026-10-25：教师端助教页每天只在第一次进入时播报一次简报，当天再进入不重复发。
  */
-private const val KEY_TA_BRIEF_DAY = "kewu_ta_brief_day"
+private const val KEY_TA_BRIEF_DAY = AssistantHub.KEY_TA_BRIEF_DAY
 
 private data class WatchStudent(val name: String, val reason: String, val kind: Int) // 0=退步 1=风险 2=关注
 
@@ -168,7 +170,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 ts = m.ts,
             )
         }
-        ChatHistory.saveAll(ChatHistory.KEY_TEACHER, entries)
+        // 按 id 合并写入（不覆盖更早几天的记录 / 页面不在时 AssistantHub 追加的回复）
+        ChatHistory.upsert(ChatHistory.KEY_TEACHER, entries)
         hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
     }
 
@@ -415,7 +418,21 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         else -> listOf(TaBlock.Text("这个问题我还在学习（本地规则暂不支持）。可以试试问我：谁需要关注、作业质量、签到情况、薄弱知识点。"))
     }
 
-    var aiThinking by remember { mutableStateOf(false) }
+    // 2026-10-26：AI 请求改由进程级 AssistantHub 发起——切走页面不取消，回答到达时若不在本页
+    // 就点亮底部「助教」红点；回到本页 pending 仍在则继续显示「正在输入中」。
+    val pendingKeys by AssistantHub.pending.collectAsState()
+    val aiThinking = ChatHistory.KEY_TEACHER in pendingKeys
+    LaunchedEffect(Unit) {
+        AssistantHub.incoming.collect { inc ->
+            if (inc.key != ChatHistory.KEY_TEACHER || messages.any { it.id == inc.entry.id }) return@collect
+            @Suppress("UNCHECKED_CAST")
+            val blocks = (inc.payload as? List<TaBlock>)
+                ?: inc.entry.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it) }
+            // 已由 AssistantHub 落盘，这里只上屏（keep=true：之后整体落盘时保留）
+            messages += TaMsg(false, blocks, id = inc.entry.id, ts = inc.entry.ts, keep = true)
+            msgVersion++
+        }
+    }
 
     fun send() {
         val q = input.trim()
@@ -423,15 +440,13 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         push(TaMsg(true, listOf(TaBlock.Text(q))), persist = true)
         input = ""
         haptic(HapticKind.Light)
-        scope.launch {
-            aiThinking = true
+        AssistantHub.ask(ChatHistory.KEY_TEACHER) {
             // 优先真实大模型；失败回退本地规则（学情数据仍有价值），并明确告知用户
-            val aiBlocks = aiAnswer(q)
-            aiThinking = false
-            push(TaMsg(false, aiBlocks ?: buildList {
+            val blocks = aiAnswer(q) ?: buildList {
                 add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
                 addAll(answer(q))
-            }), persist = true)
+            }
+            AssistantHub.Reply(blocksToText(blocks), payload = blocks)
         }
     }
 

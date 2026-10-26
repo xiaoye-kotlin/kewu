@@ -1,5 +1,25 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import io.github.suqi8.coui.kmp.icon.extended.Edit
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -79,13 +99,71 @@ private fun newQuestionId(): String = "q${System.nanoTime().toString(36)}${Rando
 /** 默认 N 个空选项（教师编辑时再填文本）。 */
 private fun defaultOptions(n: Int): List<String> = List(n) { "" }
 
-/** 题目默认模板。 */
+/**
+ * 题型模板（2026-10-26「手动出题」）：选完题型直接给出该题型的完整骨架，老师只需逐项填内容——
+ * 单选 / 多选 = 4 个空选项（A–D）+ 默认答案；判断 = 固定「正确 / 错误」；填空 = 题干里预置空位「____」；
+ * 简答 = 题干 + 参考答案。分值给常用默认值（客观题 10、简答 20），可改。
+ */
 private fun defaultQuestion(type: QuestionType): Question = when (type) {
-    QuestionType.SINGLE_CHOICE -> Question(newQuestionId(), type, "", defaultOptions(4), "A")
-    QuestionType.MULTIPLE_CHOICE -> Question(newQuestionId(), type, "", defaultOptions(4), "")
-    QuestionType.TRUE_FALSE -> Question(newQuestionId(), type, "", listOf("正确", "错误"), "正确")
-    QuestionType.FILL_BLANK -> Question(newQuestionId(), type, "", emptyList(), "")
-    QuestionType.SHORT_ANSWER -> Question(newQuestionId(), type, "", emptyList(), "")
+    QuestionType.SINGLE_CHOICE -> Question(newQuestionId(), type, "", defaultOptions(4), "A", score = 10)
+    QuestionType.MULTIPLE_CHOICE -> Question(newQuestionId(), type, "", defaultOptions(4), "", score = 10)
+    QuestionType.TRUE_FALSE -> Question(newQuestionId(), type, "", listOf("正确", "错误"), "正确", score = 10)
+    QuestionType.FILL_BLANK -> Question(newQuestionId(), type, "____", emptyList(), "", score = 10)
+    QuestionType.SHORT_ANSWER -> Question(newQuestionId(), type, "", emptyList(), "", score = 20)
+}
+
+/** 各题型题干输入框的提示语（模板里的「怎么填」说明，不占用实际内容）。 */
+private fun stemHint(type: QuestionType): String = when (type) {
+    QuestionType.SINGLE_CHOICE -> "题干，如：下列关于 Kotlin 空安全的说法正确的是"
+    QuestionType.MULTIPLE_CHOICE -> "题干，如：以下哪些属于不可变集合（多选）"
+    QuestionType.TRUE_FALSE -> "题干，如：val 声明的变量可以重新赋值"
+    QuestionType.FILL_BLANK -> "题干，用 ____ 标出需要填写的位置"
+    QuestionType.SHORT_ANSWER -> "题目要求，如：简述 ?. 与 !! 的区别"
+}
+
+/**
+ * 发布前校验题目（两处发布页共用）：返回第一条问题描述，全部合格返回 null。
+ * 只拦「明显没填完」的情况，避免把空题发给学生。
+ */
+fun validateQuestions(questions: List<Question>): String? {
+    questions.forEachIndexed { i, q ->
+        val no = i + 1
+        if (q.stem.isBlank() || q.stem.trim() == "____") return "第 $no 题的题干还没填"
+        when (q.type) {
+            QuestionType.SINGLE_CHOICE, QuestionType.MULTIPLE_CHOICE -> {
+                val blank = q.options.indexOfFirst { it.isBlank() }
+                if (blank >= 0) return "第 $no 题的选项 ${optionLetter(blank)} 还没填"
+                if (q.answer.isBlank()) return "第 $no 题还没选正确答案"
+            }
+            QuestionType.FILL_BLANK, QuestionType.SHORT_ANSWER ->
+                if (q.answer.isBlank()) return "第 $no 题还没填参考答案"
+            else -> {}
+        }
+    }
+    return null
+}
+
+/**
+ * 「跟随展开」：被修饰的块尺寸变化时（展开动画的每一帧 / 新题长出来），让外层滚动容器把它整块
+ * 带进可视区——页面随着卡片一起滑到底部，而不是展开到屏幕外还要手动往下翻（2026-10-26 用户反馈）。
+ * [follow] 返回 true 时才跟随（只在用户刚操作后的那段动画里跟，平时打字改变高度不乱滚）。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun Modifier.followGrowth(follow: () -> Boolean): Modifier {
+    val requester = remember { BringIntoViewRequester() }
+    val scope = rememberCoroutineScope()
+    return this
+        .bringIntoViewRequester(requester)
+        .onSizeChanged { if (follow()) scope.launch { runCatching { requester.bringIntoView() } } }
+}
+
+/** 记录「最近一次用户触发展开」的时刻，供 [followGrowth] 只在随后 [windowMs] 内跟随。 */
+internal class FollowWindow(private val windowMs: Long = 900L) {
+    private var since = 0L
+    fun arm() { since = nowMillis() }
+    fun active(): Boolean = nowMillis() - since < windowMs
+    private fun nowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 }
 
 /** 显示用选项：去掉 AI 生成的「A. 」前缀，仅保留纯文本；判断题固定 正确/错误。 */
@@ -150,8 +228,11 @@ private fun QuestionTypeChips(selected: QuestionType, enabled: Boolean, onSelect
 // ───────────────────────── 教师端：题目编辑器 ─────────────────────────
 
 /**
- * 题目编辑区（发布页用）：题型切换 chip + 已添加题目列表 + 「AI 生成题目」块。
- * [questions] 由宿主页面持有（受控），通过 [onChange] 回写。
+ * 题目编辑区（发布页用），自上而下：
+ *   1. 「手动出题」卡：点题型 → 追加一道该题型的完整模板（选项 / 答案 / 分值骨架都已就位）；
+ *   2. 已添加的题目列表（逐题编辑，新增从 0 高度「长」出来、删除收起后再移除）；
+ *   3. 「AI 生成题目」卡。
+ * 两张卡展开 / 新题出现时页面跟随滚动（[followGrowth]）。[questions] 由宿主页面持有（受控），经 [onChange] 回写。
  */
 @Composable
 fun QuestionEditorCard(
@@ -161,36 +242,152 @@ fun QuestionEditorCard(
     onToast: (String) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
+    // 刚由用户新增的题 id：只有它们播入场动画（已有题目重组时不重复播）
+    val freshIds = remember { mutableStateMapOf<String, Boolean>() }
+    val follow = remember { FollowWindow() }
     Column(Modifier.fillMaxWidth()) {
         KewuSectionTitle("题目（可选 · 留空则发布纯文本作业）")
 
-        // 添加题目：点题型 chip 直接追加一道该类型空题
-        Text("添加题目", color = cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        QuestionTypeChips(selected = QuestionType.SINGLE_CHOICE, enabled = true) { t ->
-            onChange(questions + defaultQuestion(t))
+        ManualQuestionBlock { t ->
+            val q = defaultQuestion(t)
+            freshIds[q.id] = true
+            follow.arm()
+            onChange(questions + q)
         }
-
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
 
         if (questions.isEmpty()) {
-            Text("还没有题目，点上方题型添加，或让 AI 按知识点出题。",
+            Text("还没有题目：在上方选题型生成模板，或在下方让 AI 按知识点出题。",
                 color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            Spacer(Modifier.height(6.dp))
         } else {
             questions.forEachIndexed { i, q ->
-                QuestionEditItem(
-                    q = q, index = i + 1, backdrop = backdrop,
-                    onReplace = { nq -> onChange(questions.toMutableList().also { it[i] = nq }) },
-                    onRemove = { onChange(questions.filterIndexed { j, _ -> j != i }) },
-                )
-                Spacer(Modifier.height(10.dp))
+                key(q.id) {
+                    AnimatedQuestionItem(
+                        fresh = freshIds[q.id] == true,
+                        follow = { follow.active() },
+                        onRemoved = {
+                            freshIds.remove(q.id)
+                            onChange(questions.filter { it.id != q.id })
+                        },
+                    ) { requestRemove ->
+                        QuestionEditItem(
+                            q = q, index = i + 1, backdrop = backdrop,
+                            onReplace = { nq -> onChange(questions.map { if (it.id == q.id) nq else it }) },
+                            onRemove = requestRemove,
+                        )
+                    }
+                }
             }
         }
 
         Spacer(Modifier.height(4.dp))
-        AiGenerateBlock(questions = questions, onChange = onChange, onToast = onToast)
+        AiGenerateBlock(questions = questions, onChange = { list ->
+            list.drop(questions.size).forEach { freshIds[it.id] = true }
+            follow.arm()
+            onChange(list)
+        }, onToast = onToast)
         Spacer(Modifier.height(4.dp))
+    }
+}
+
+/**
+ * 单题的进出场：高度从 0「长」出来 + 轻微上浮 + 内容淡入；删除时反向收起再真正移除。
+ * ★ 题目卡是液态玻璃采样者，外层禁止 alpha / scale / graphicsLayer（coui 首帧 SIGSEGV 硬约束），
+ *   所以这里只用 layout 高度 + placement 位移；淡入只作用在玻璃**内部**内容上（[LocalItemAlpha]）。
+ */
+@Composable
+private fun AnimatedQuestionItem(
+    fresh: Boolean,
+    follow: () -> Boolean,
+    onRemoved: () -> Unit,
+    content: @Composable (requestRemove: () -> Unit) -> Unit,
+) {
+    val p = remember { Animatable(if (fresh) 0f else 1f) }
+    var removing by remember { mutableStateOf(false) }
+    LaunchedEffect(removing) {
+        if (removing) {
+            p.animateTo(0f, tween(220, easing = FastOutSlowInEasing))
+            onRemoved()
+        } else if (p.value < 1f) {
+            p.animateTo(1f, spring(dampingRatio = 0.78f, stiffness = 320f))
+        }
+    }
+    val v = p.value.coerceIn(0f, 1f)
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .followGrowth { follow() && !removing }
+            .layout { measurable, constraints ->
+                val placeable = measurable.measure(constraints)
+                val h = (placeable.height * v).toInt()
+                layout(placeable.width, h) {
+                    placeable.place(0, ((1f - v) * 24.dp.toPx()).toInt())
+                }
+            },
+    ) {
+        CompositionLocalProvider(LocalItemAlpha provides v) {
+            Column {
+                content { if (!removing) { haptic(HapticKind.Tick); removing = true } }
+                Spacer(Modifier.height(10.dp))
+            }
+        }
+    }
+}
+
+/** 题目卡内部内容的淡入系数（由 [AnimatedQuestionItem] 提供，玻璃外壳本身不参与 alpha）。 */
+private val LocalItemAlpha = compositionLocalOf { 1f }
+
+/** 「手动出题」卡：coui 白卡，点头部展开 / 收起（默认展开）；内含 5 个题型按钮，点一下生成该题型模板。 */
+@Composable
+private fun ManualQuestionBlock(onAdd: (QuestionType) -> Unit) {
+    val cs = COUITheme.colorScheme
+    var expanded by remember { mutableStateOf(true) }
+    val follow = remember { FollowWindow() }
+    Card(
+        onClick = {
+            haptic(HapticKind.Tick)
+            expanded = !expanded
+            if (expanded) follow.arm()
+        },
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp))
+            .followGrowth { follow.active() },
+        cornerRadius = 16.dp, insideMargin = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+        colors = kewuCardColors(),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(COUIIcons.Edit, contentDescription = null, tint = KewuBlue, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("手动出题", color = cs.onSurface, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f))
+            Text(if (expanded) "收起" else "展开", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 380f)) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+        ) {
+            Column {
+                Spacer(Modifier.height(8.dp))
+                Text("选择题型，自动生成该题型的模板，再逐项填写题干、选项和答案",
+                    color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp, lineHeight = 17.sp)
+                Spacer(Modifier.height(10.dp))
+                Row(
+                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    QuestionType.entries.forEach { t ->
+                        Chip(
+                            selected = false,
+                            onClick = { haptic(HapticKind.Light); onAdd(t) },
+                            label = "＋ ${t.label}",
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -206,7 +403,7 @@ private fun QuestionEditItem(
             .fillMaxWidth().padding(horizontal = 12.dp)
             .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp)),
     ) {
-        Column(Modifier.padding(14.dp)) {
+        Column(Modifier.padding(14.dp).alpha(LocalItemAlpha.current)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Surface(
                     modifier = Modifier.width(26.dp).height(26.dp),
@@ -218,9 +415,9 @@ private fun QuestionEditItem(
                     }
                 }
                 Spacer(Modifier.width(8.dp))
-                Text("题目 $index", color = cs.onSurface, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.weight(1f))
-                TextButton(text = "删除", onClick = { haptic(HapticKind.Tick); onRemove() },
+                Text("题目 $index · ${q.type.label}", color = cs.onSurface, fontSize = 14.5.sp,
+                    fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                TextButton(text = "删除", onClick = onRemove,
                     colors = ButtonDefaults.textButtonColorsPrimary(
                         color = cs.error, textColor = cs.onErrorContainer))
             }
@@ -233,7 +430,7 @@ private fun QuestionEditItem(
             // 题干
             FieldLabel("题干")
             TextField(q.stem, { onReplace(q.copy(stem = it)) }, Modifier.fillMaxWidth(),
-                backgroundMode = TextFieldMode.Rectangle, label = "请输入题干", minLines = 2)
+                backgroundMode = TextFieldMode.Rectangle, label = stemHint(q.type), minLines = 2)
 
             Spacer(Modifier.height(8.dp))
 
@@ -249,7 +446,9 @@ private fun QuestionEditItem(
                             val newOpts = q.options.toMutableList().also { it[oi] = nv }
                             onReplace(q.copy(options = newOpts,
                                 answer = normalizeAnswer(q.type, newOpts.size, q.answer)))
-                        }, Modifier.weight(1f), backgroundMode = TextFieldMode.Rectangle, label = "选项内容")
+                        }, Modifier.weight(1f), backgroundMode = TextFieldMode.Rectangle,
+                            label = "选项 ${optionLetter(oi)} 内容",
+                            enabled = q.type != QuestionType.TRUE_FALSE)
                         // 选择/多选可删选项（保留至少 2 个）
                         if (q.type != QuestionType.TRUE_FALSE && q.options.size > 2) {
                             TextButton(text = "删", onClick = {
@@ -270,6 +469,7 @@ private fun QuestionEditItem(
                 }
                 Spacer(Modifier.height(6.dp))
                 // 答案选择
+                FieldLabel(if (q.type == QuestionType.MULTIPLE_CHOICE) "正确答案（可多选）" else "正确答案")
                 when (q.type) {
                     QuestionType.SINGLE_CHOICE -> AnswerChips(
                         letters = opts.indices.map { optionLetter(it) }, selected = setOfNotNull(q.answer.takeIf { it.isNotBlank() }),
@@ -347,10 +547,16 @@ private fun AiGenerateBlock(
     var spec by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
 
+    val follow = remember { FollowWindow() }
     Card(
-        onClick = { haptic(HapticKind.Tick); expanded = !expanded },
+        onClick = {
+            haptic(HapticKind.Tick)
+            expanded = !expanded
+            if (expanded) follow.arm()
+        },
         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-            .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp)),
+            .border(1.dp, cs.dividerLine, RoundedCornerShape(16.dp))
+            .followGrowth { follow.active() },
         cornerRadius = 16.dp, insideMargin = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         colors = kewuCardColors(),
     ) {
@@ -361,7 +567,11 @@ private fun AiGenerateBlock(
                 modifier = Modifier.weight(1f))
             Text(if (expanded) "收起" else "展开", color = cs.onSurfaceSecondary, fontSize = 13.sp)
         }
-        if (expanded) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 380f)) + fadeIn(tween(220)),
+            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+        ) { Column {
             Spacer(Modifier.height(10.dp))
             Text("告诉 AI 出哪方面的题、什么题型、几道，例如：「出 3 道关于二次函数的小题，2 道单选 1 道简答」",
                 color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp, lineHeight = 17.sp)
@@ -393,7 +603,7 @@ private fun AiGenerateBlock(
                     enabled = !loading && spec.isNotBlank(),
                 )
             }
-        }
+        } }
     }
 }
 
@@ -481,4 +691,28 @@ private fun QuestionRenderItem(q: Question, index: Int, answers: SnapshotStateMa
 fun buildSubmitContent(note: String, answers: Map<String, String>): String {
     val base = note.trim()
     return if (answers.isNotEmpty()) base + "\n\n" + QuestionStore.answersToContent(answers) else base
+}
+
+/**
+ * 提交用的可读 content（接口文档 (19) 3.12 ②：**content 仍然必填**，要把各题答案拼成可读文本，
+ * 查重与 AI 预批阅都消费它）。格式：「1. B」逐行 + 补充说明；全空但带了附件时写「（见附件）」。
+ * 2026-10-26 修「题目化作业点提交没反应」：旧版 content 只放补充说明（常为空）→ 后端校验失败，前端又没提示。
+ */
+fun buildReadableSubmitContent(
+    questions: List<Question>,
+    answers: Map<String, String>,
+    note: String,
+    hasAttachments: Boolean,
+): String {
+    val lines = questions.mapIndexedNotNull { i, q ->
+        answers[q.id]?.trim()?.takeIf { it.isNotEmpty() }?.let { "${i + 1}. $it" }
+    }
+    val text = buildString {
+        if (lines.isNotEmpty()) append(lines.joinToString("\n"))
+        if (note.isNotBlank()) {
+            if (isNotEmpty()) append("\n\n")
+            append("补充说明：").append(note.trim())
+        }
+    }
+    return text.ifBlank { if (hasAttachments) "（见附件）" else "" }
 }

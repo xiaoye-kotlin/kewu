@@ -77,6 +77,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kewu.app.AttendanceSession
 import com.kewu.app.CourseInfo
+import com.kewu.app.CourseRepo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
@@ -436,7 +437,7 @@ internal fun ExclaimMark(
 }
 
 // 课堂主页下钻目标（5 态）；attendanceId 单独存值
-private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE }
+private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE, COURSES }
 
 // ───────────────────────── 课堂主页 ─────────────────────────
 
@@ -457,33 +458,37 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     // ★ 动画修复（2026-10-18）：初始必须是**空列表**而不是 mock —— 旧版先显示 mock 课程、
     //   接口返回后又整体换成真数据，等于「先出现一遍、再出现一遍」。现在先空着（内容区从
     //   零开始），加载成功才带凝结入场动画出现；只有断网失败才降级 mock。
-    var realCourses by remember { mutableStateOf(emptyList<Course>()) }
-    var coursesLoaded by remember { mutableStateOf(false) }
+    // ★ 2026-10-26：课程改读进程级缓存 CourseRepo（首页 / 我的 / 课程列表页共用，带超时与退避重试），
+    //   修「首页偶发加载不出课程显示无课，要去『我的』转一圈才出现」——旧版这里只请求一次，
+    //   还要先等 /user/me 返回，任一请求慢/失败首页就一直空着。
+    val repoCourses by CourseRepo.courses.collectAsState()
+    val repoLoaded by CourseRepo.loaded.collectAsState()
+    val courseInfos: List<CourseInfo>? = repoCourses
+    val realCourses = remember(repoCourses, repoLoaded) {
+        when {
+            repoCourses != null -> repoCourses.orEmpty().map { c ->
+                Course(
+                    name = c.name, teacher = c.teacher, room = "待定", time = "—",
+                    status = CourseStatus.PENDING, summary = c.description,
+                )
+            }
+            // 断网兜底：重试耗尽仍失败才降级 mock（用户看到的是「加载失败后的备用数据」，不是闪烁）
+            repoLoaded -> mockToday()
+            else -> emptyList()
+        }
+    }
+    val coursesLoaded = repoCourses != null || repoLoaded
     val today = realCourses
     val history = emptyList<Course>()
     val courses = if (showAll) today + history else today
 
     // 问候栏/头像用真实姓名（来自 /user/me 或登录账号）
     var displayName by remember { mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "同学") }
-    // 真实课程列表（带 id），供首页录音/上传挑选绑定课程；无 id 时禁用录音
-    var courseInfos by remember { mutableStateOf<List<CourseInfo>?>(null) }
     LaunchedEffect(Unit) {
+        // 课程与 /user/me 并行，互不阻塞；每次回到首页都静默刷新一次（有缓存先显示缓存）
+        launch { CourseRepo.refresh(force = true) }
         if (KewuApi.currentUser == null) KewuApi.me()
         displayName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: displayName
-        val list = KewuApi.getCourses()
-        if (list != null) {
-            realCourses = list.map { c ->
-                Course(
-                    name = c.name, teacher = c.teacher, room = "待定", time = "—",
-                    status = CourseStatus.PENDING, summary = c.description,
-                )
-            }
-            courseInfos = list
-        } else {
-            // 断网兜底：此时才降级 mock（用户看到的是「加载失败后的备用数据」，不是闪烁）
-            realCourses = mockToday()
-        }
-        coursesLoaded = true
     }
 
     // ★ coui 玻璃的硬约束：采样者必须在被采样层**之外**，否则首帧 RenderThread SIGSEGV。
@@ -539,6 +544,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             drill == ClassroomDrill.SCAN -> 3
             drill == ClassroomDrill.CODE && attId != null -> 4
             drill == ClassroomDrill.TIMETABLE -> 1
+            drill == ClassroomDrill.COURSES -> 5
             else -> 0
         }
         AnimatedContent(
@@ -600,6 +606,11 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     BackHandler { drill = ClassroomDrill.NONE }
                     TimetablePage(onBack = { drill = ClassroomDrill.NONE }, onNavHide = onNavHide)
                 }
+                5 -> {
+                    // 「我的课程」全部列表（点首页左侧大状态卡进入，coui 列表页，2026-10-26）
+                    BackHandler { drill = ClassroomDrill.NONE }
+                    AllCoursesPage(onBack = { drill = ClassroomDrill.NONE }, onNavHide = onNavHide)
+                }
                 else -> {
                     // 首次进场（开 app / 切回课堂 tab）：分块 Mac 式入场。
                     // ★ 动画修复（2026-10-18）：所有块都「从零开始」—— 初始帧即不可见
@@ -630,6 +641,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 // 与课表页今天的 3 节对齐
                                 todayCount = today.count { it.time.length == 5 && it.time[2] == ':' },
                                 loading = !coursesLoaded,
+                                onAllCourses = { drill = ClassroomDrill.COURSES },
                                 onTodayCourses = { drill = ClassroomDrill.TIMETABLE },
                                 onHomework = { onGoToTab(2) },
                             )
@@ -737,6 +749,7 @@ private fun StatusSection(
     courses: List<Course>,
     todayCount: Int,
     loading: Boolean = false,
+    onAllCourses: () -> Unit,
     onTodayCourses: () -> Unit,
     onHomework: () -> Unit,
 ) {
@@ -759,11 +772,13 @@ private fun StatusSection(
     ) {
         // 左侧大状态卡：coui Card（squircleSurface 本身就按卡片轮廓遮罩子内容）。
         // insideMargin 置 0，16dp 内边距挪到文字列上——水印要贴着卡片原点布局、越界部分被卡片裁掉。
+        // 2026-10-26：整卡可点 → 「我的课程」全部列表（coui 按压 Tint，与右侧小卡同一交互）
         Card(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             cornerRadius = 22.dp,
             insideMargin = PaddingValues(0.dp),
             colors = kewuCardColors(),
+            onClick = { haptic(HapticKind.Tick); onAllCourses() },
         ) {
             // 内容裁剪层（双保险：coui 遮罩之外再挂一层矩形 clipToBounds）。
             // ★ 裁剪节点必须留在卡片原点：水印子节点带 offset，若把 clip 挂到
