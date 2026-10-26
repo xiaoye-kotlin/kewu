@@ -159,6 +159,8 @@ private sealed class ClassDrill {
     data class STUDENTS(val cls: ClassRoomInfo) : ClassDrill()
     /** 导入课表（建班成功后自动进入，也可从学生名单页进入更新）。 */
     data class SCHEDULE(val cls: ClassRoomInfo) : ClassDrill()
+    /** 新建班级：先导入课表再建班（2026-10-27，不再要求先选课程）。 */
+    data class NEW_CLASS(val name: String, val term: String) : ClassDrill()
 }
 
 /**
@@ -252,23 +254,9 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(bottom = 10.dp),
                     )
 
-                    // 新建班级内联表单：选课（coui 单选组）+ 班名（coui TextField）+ 学期（coui Chip）
+                    // 新建班级内联表单（2026-10-27）：只填班名 + 学期，不再先选课程；
+                    // 「下一步」进导入课表页，导入时自动建班并关联课表里的课程（也可跳过课表直接建班）
                     if (showCreate) {
-                        KewuSectionTitle("选择课程")
-                        val cl = courses
-                        when {
-                            cl == null -> KewuLoading()
-                            cl.isEmpty() -> KewuEmpty("暂无课程，请先新建课程")
-                            else -> KewuCardGroup {
-                                cl.forEach { c ->
-                                    RadioButtonPreference(
-                                        title = c.name,
-                                        selected = courseId == c.id,
-                                        onClick = { haptic(HapticKind.Tick); courseId = c.id },
-                                    )
-                                }
-                            }
-                        }
                         TeacherToolField("班级名称", className, { className = it }, placeholder = "如：云计算 1 班")
                         Text("学期", color = cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
                             modifier = Modifier.padding(horizontal = 16.dp))
@@ -282,27 +270,12 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                         }
                         Spacer(Modifier.height(14.dp))
                         KewuPrimaryButton(
-                            text = if (creating) "正在创建…" else "创建班级",
+                            text = "下一步：导入课表",
                             onClick = {
-                                val cid = courseId ?: return@KewuPrimaryButton
-                                scope.launch {
-                                    creating = true
-                                    val r = KewuApi.createTeacherClass(cid, className.trim(), term)
-                                    creating = false
-                                    if (r.data != null) {
-                                        haptic(HapticKind.Light)
-                                        createResult = true to "已创建《${r.data.name}》，邀请码 ${r.data.inviteCode}"
-                                        className = ""
-                                        reload()
-                                        // 2026-10-26：建班后紧接着导入本班课表（时间 / 地点 / 任课老师）
-                                        drill = ClassDrill.SCHEDULE(r.data)
-                                    } else {
-                                        createResult = false to (r.error ?: "创建失败，请稍后重试")
-                                    }
-                                    createResult?.let { snackbar.toast(it.second) }
-                                }
+                                haptic(HapticKind.Light)
+                                drill = ClassDrill.NEW_CLASS(className.trim(), term)
                             },
-                            enabled = courseId != null && className.isNotBlank() && !creating,
+                            enabled = className.isNotBlank(),
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
                         )
                         TeacherToolFailTips(createResult) { createResult = null }
@@ -324,6 +297,24 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
                 is ClassDrill.STUDENTS -> ClassStudentsScreen(
                     d.cls, onBack = { drill = ClassDrill.LIST },
                     onImportSchedule = { drill = ClassDrill.SCHEDULE(d.cls) },
+                )
+                is ClassDrill.NEW_CLASS -> ScheduleImportScreen(
+                    classId = null, className = d.name, defaultCourse = "",
+                    onBack = { drill = ClassDrill.LIST },
+                    onDone = {
+                        className = ""
+                        showCreate = false
+                        reload()
+                        drill = ClassDrill.LIST
+                    },
+                    createClass = {
+                        // 先建班（不带课程），课表导入时后端回填本班关联课程
+                        val r = KewuApi.createTeacherClass("", d.name, d.term)
+                        if (r.data != null) {
+                            snackbar.toast("已创建《${r.data.name}》，邀请码 ${r.data.inviteCode}")
+                            r.data.id to null
+                        } else null to (r.error ?: "建班失败，请稍后重试")
+                    },
                 )
                 is ClassDrill.SCHEDULE -> ScheduleImportScreen(
                     classId = d.cls.id, className = d.cls.name, defaultCourse = d.cls.courseName,

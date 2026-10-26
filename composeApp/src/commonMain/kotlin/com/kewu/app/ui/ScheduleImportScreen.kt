@@ -76,6 +76,11 @@ internal fun ScheduleImportScreen(
     defaultCourse: String,
     onBack: () -> Unit,
     onDone: () -> Unit,
+    /**
+     * 新建班级流程（2026-10-27「先导入课表再建班」）：传了它表示班级还没建，导入 / 跳过时先调它建班，
+     * 返回 (班级 id, 失败原因)。null = 给已有班级导入。
+     */
+    createClass: (suspend () -> Pair<String?, String?>)? = null,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -247,7 +252,13 @@ internal fun ScheduleImportScreen(
                     if (bad >= 0) { error = "第 ${bad + 1} 节缺少课程名或时间"; return@KewuPrimaryButton }
                     busy = true
                     scope.launch {
-                        val (res, err) = KewuApi.importSchedule(classId, entries.toList())
+                        // 新建班级：先建班拿到 id，再把课表导进这个班
+                        val cid = classId ?: createClass?.let { create ->
+                            val (id, e) = create()
+                            if (id == null) { busy = false; error = e ?: "建班失败"; return@launch }
+                            id
+                        }
+                        val (res, err) = KewuApi.importSchedule(cid, entries.toList())
                         busy = false
                         if (res != null) {
                             haptic(HapticKind.Light)
@@ -260,7 +271,20 @@ internal fun ScheduleImportScreen(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             )
             Spacer(Modifier.height(10.dp))
-            KewuSecondaryButton("稍后再导入", { if (!busy) onBack() }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            if (createClass != null) {
+                // 新建班级时也允许先不导课表：直接建班，之后在班级的学生名单页再导入
+                KewuSecondaryButton(if (busy) "处理中…" else "跳过课表，直接建班", {
+                    if (busy) return@KewuSecondaryButton
+                    busy = true
+                    scope.launch {
+                        val (id, e) = createClass()
+                        busy = false
+                        if (id != null) onDone() else error = e ?: "建班失败"
+                    }
+                }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            } else {
+                KewuSecondaryButton("稍后再导入", { if (!busy) onBack() }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            }
         }
     }
 }

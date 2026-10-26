@@ -59,14 +59,15 @@ class TeacherService(
             return Result.failure(IllegalArgumentException("这个账号不是老师, 只有老师账号能建班"))
         }
         if (req.name.isBlank()) return Result.failure(IllegalArgumentException("班级名不能为空"))
-        val course = courseRepository.findCourse(req.courseId)
+        // 课程可选（2026-10-27）：不传就先建班，导入课表时再关联（ScheduleService.import 回填 courseId）
+        val course = if (req.courseId.isBlank()) null else courseRepository.findCourse(req.courseId)
             ?: return Result.failure(IllegalArgumentException("课程不存在: ${req.courseId}"))
 
         val cls = ClassRoom(
             id = repository.nextId("k"),
             name = req.name,
-            courseId = course.id,
-            courseName = course.name,
+            courseId = course?.id ?: "",
+            courseName = course?.name ?: "",
             teacherId = teacher.id,
             teacherName = teacher.nickname ?: teacher.username,
             term = req.term,
@@ -107,7 +108,9 @@ class TeacherService(
             return Result.failure(IllegalArgumentException("你已经在这个班里了"))
         }
         // 加班顺手把这门课绑到学生身上, 学生端课程列表就能看到
-        userRepository.bindCourse(student.id, cls.courseId)
+        if (cls.courseId.isNotBlank()) userRepository.bindCourse(student.id, cls.courseId)
+        // 课表里本班的所有课程也绑上（2026-10-27：班级可以先建后导课表，学生加班就能看到整张课表的课）
+        com.kewu.modules.schedule.ScheduleService.courseIdsOfClass(cls.id).forEach { userRepository.bindCourse(student.id, it) }
         return Result.success(cls.toInfo())
     }
 
@@ -117,7 +120,8 @@ class TeacherService(
         val teacher = resolveUser(teacherIdOrName)
             ?: return Result.failure(IllegalArgumentException("老师账号不存在: $teacherIdOrName"))
         val today = LocalDate.now().toString()
-        val classes = repository.listByTeacher(teacher.id)
+        // 还没导入课表、没关联课程的班级不进控制台（无课可上）
+        val classes = repository.listByTeacher(teacher.id).filter { it.courseId.isNotBlank() }
         val courseIds = classes.map { it.courseId }.distinct()
 
         // ① 今日课程

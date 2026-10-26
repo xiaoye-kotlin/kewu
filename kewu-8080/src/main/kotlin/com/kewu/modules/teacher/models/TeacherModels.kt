@@ -60,7 +60,7 @@ data class CreateCourseRequest(
 
 @Serializable
 data class CreateClassRequest(
-    val courseId: String,
+    val courseId: String = "", // 可空（2026-10-27）：先建班、再导入课表，导入时自动关联本班课程
     val name: String,
     val term: String = "",
     val teacherId: String = ""

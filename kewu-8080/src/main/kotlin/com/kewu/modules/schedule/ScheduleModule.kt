@@ -180,6 +180,18 @@ object ScheduleService {
                 }
             }
         }
+        // 先建班后导课表的班级：回填班级关联课程 = 导入人自己任教的那门（没有就取第一门），控制台据此显示「今日课程」
+        if (cls != null && cls[Classes.courseId].isBlank()) {
+            val own = transaction {
+                CourseSchedules.selectAll().where { CourseSchedules.classId eq cls[Classes.id] }.toList()
+            }.let { rows -> rows.firstOrNull { it[CourseSchedules.teacherName] == importerName } ?: rows.firstOrNull() }
+            if (own != null) transaction {
+                Classes.update({ Classes.id eq cls[Classes.id] }) {
+                    it[courseId] = own[CourseSchedules.courseId]
+                    it[courseName] = own[CourseSchedules.courseName]
+                }
+            }
+        }
         // 班里的学生也绑上这些课，学生端课程列表直接可见
         if (cls != null) {
             val students = transaction { ClassStudents.selectAll().where { ClassStudents.classId eq cls[Classes.id] }.map { it[ClassStudents.studentId] } }
@@ -206,6 +218,11 @@ object ScheduleService {
             bindCourse(u.id, cid)
         }
         return rows.size
+    }
+
+    /** 某班课表里出现的全部课程 id（学生加班时一并绑定）。 */
+    fun courseIdsOfClass(classId: String): List<String> = transaction {
+        CourseSchedules.selectAll().where { CourseSchedules.classId eq classId }.map { it[CourseSchedules.courseId] }.distinct()
     }
 
     /** 我的课表：学生 = 所在班级的课表 + 已绑课程的课表；老师 = 我任教的。 */
