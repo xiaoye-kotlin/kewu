@@ -407,7 +407,10 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         // 118 → 110：输入框整体下移 8dp（用户微调，仍安全避开底部导航托盘 ~90dp）
         // 2026-10-26：键盘弹起时 14 → 8dp（用户反馈输入框离输入法太远）
         if (imeVisible) 8.dp else 110.dp,
-        spring(dampingRatio = 0.6f, stiffness = 380f),
+        // ★ 2026-10-26 修「点输入框弹键盘即闪退」（小米 Android 13 崩溃上报）：旧版弹簧 dampingRatio=0.6
+        //   从 110 收到 8 会过冲约 10dp → padding 变成负数 → IllegalArgumentException: Padding must be non-negative。
+        //   改临界阻尼（不过冲），使用处再兜底 coerceAtLeast(0.dp)。
+        spring(dampingRatio = 1f, stiffness = 420f),
         label = "dockBottomPad",
     )
 
@@ -677,7 +680,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     .offset(y = dockY) // placement 位移（采样者安全）
                     .padding(horizontal = 16.dp)
                     // 底部留白：无键盘时为导航栏兜底（≈114dp）；键盘弹起导航已被键盘盖住，只需小边距
-                    .padding(bottom = dockBottomPad),
+                    .padding(bottom = dockBottomPad.coerceAtLeast(0.dp)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.weight(1f)) {

@@ -718,7 +718,7 @@ private fun TaInputBar(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .padding(bottom = bottomPad, top = 6.dp),
+            .padding(bottom = bottomPad.coerceAtLeast(0.dp), top = 6.dp), // 弹簧可能轻微过冲，padding 不能为负（2026-10-26 小米闪退）
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // 玻璃输入框
