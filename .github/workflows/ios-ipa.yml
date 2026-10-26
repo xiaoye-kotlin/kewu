@@ -44,6 +44,9 @@ jobs:
           chmod +x gradlew
           # 本地 Windows 专用配置不能带到 macOS：去掉写死的 JDK 路径
           sed -i '' '/org.gradle.java.home/d' gradle.properties || true
+          # Kotlin/Native 链接 release 框架吃内存：本地 2GB 堆在 CI 上 OOM（Java heap space），runner 有 7GB，给到 5GB
+          sed -i '' '/org.gradle.jvmargs/d; /kotlin.daemon.jvmargs/d; /org.gradle.parallel/d' gradle.properties
+          printf '\norg.gradle.jvmargs=-Xmx5g -XX:MaxMetaspaceSize=1g -Dfile.encoding=UTF-8\nkotlin.daemon.jvmargs=-Xmx5g\norg.gradle.parallel=false\n' >> gradle.properties
           # Android SDK 路径（composeApp 同时有 android 目标，配置阶段需要）
           echo "sdk.dir=$ANDROID_HOME" > local.properties
 
