@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import kotlinx.cinterop.ByteVar
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
+import platform.Foundation.create
 import io.ktor.client.engine.darwin.Darwin
 import platform.UIKit.UIDevice
 import platform.UIKit.UIImpactFeedbackGenerator
@@ -66,7 +67,7 @@ actual fun platformCacheDir(): String = platform.Foundation.NSTemporaryDirectory
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 actual fun platformReadFile(path: String): ByteArray? {
-    val data = platform.Foundation.NSData.dataWithContentsOfFile(path) ?: return null
+    val data = platform.Foundation.NSData.create(contentsOfFile = path) ?: return null
     val len = data.length.toInt()
     if (len == 0) return ByteArray(0)
     val bytes = data.bytes ?: return null
