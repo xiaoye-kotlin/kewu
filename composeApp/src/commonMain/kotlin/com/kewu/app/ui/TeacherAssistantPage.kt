@@ -231,10 +231,19 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
         if (KewuApi.currentUser == null) KewuApi.me()
         teacherName = KewuApi.displayName("老师")
+        // 教师课程：/me 绑定课 → 控制台今日课程 → 教学班所属课程 → 全量（教师账号通常不在 /me 里绑课，
+        // 旧版简报一直显示「课程 0 门」，小悟据此回答「暂无课程」）
         val courses: List<CourseInfo>? =
-            KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+            KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.getTeacherConsole()?.todayCourses?.map { CourseInfo(it.courseId, it.courseName, "", "") }
+                    ?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.getTeacherClasses()?.classes?.map { CourseInfo(it.courseId, it.courseName, "", "") }
+                    ?.distinctBy { it.id }?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.getCourses()
         courseCount = courses?.size ?: 0
-        val assignments: List<AssignmentInfo>? = KewuApi.getAssignments(courses?.firstOrNull()?.id)
+        // 全部课程的作业（旧版只取第一门课）
+        val myIds = courses.orEmpty().map { it.id }.toSet()
+        val assignments: List<AssignmentInfo>? = KewuApi.getAssignments(null)?.filter { myIds.isEmpty() || it.courseId in myIds }
         assignmentCount = assignments?.size ?: 0
         // 控制台聚合：待批阅红点数（2026-10-21 接入，简报用）
         pendingReview = KewuApi.getTeacherConsole()?.pendingReview
