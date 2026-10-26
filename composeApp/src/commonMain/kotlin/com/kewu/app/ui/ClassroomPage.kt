@@ -103,6 +103,10 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import com.kewu.app.Notifications
+import com.kewu.app.currentRole
+import com.kewu.app.ui.NotificationBellButton
+import com.kewu.app.ui.NotificationSheet
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
@@ -504,6 +508,14 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var drill by remember { mutableStateOf(ClassroomDrill.NONE) }
     var attendanceId by remember { mutableStateOf<String?>(null) }
 
+    // 通知中心：铃铛未读数 + 弹窗显隐（首页右上角系统通知，与助教 AI 红点无关）
+    var showNotif by remember { mutableStateOf(false) }
+    var notifUnread by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        Notifications.seedIfEmpty(currentRole())
+        notifUnread = Notifications.unreadCount()
+    }
+
     Box(Modifier.fillMaxSize()) {
         // 背景层：coui 页面灰底（surface），是玻璃的采样源
         Box(
@@ -601,7 +613,15 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     ) {
                         Spacer(Modifier.height(12.dp))
                         Box(Modifier.greetIn(40)) {
-                            GreetingBar(name = displayName) { onGoToTab(3) }
+                            GreetingBar(
+                                name = displayName,
+                                unread = notifUnread,
+                                onOpenNotifications = {
+                                    notifUnread = 0
+                                    Notifications.markAllRead()
+                                    showNotif = true
+                                },
+                            ) { onGoToTab(3) }
                         }
                         Box(Modifier.macPopIn(140)) {
                             StatusSection(
@@ -633,13 +653,22 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                 }
             }
         }
+        NotificationSheet(show = showNotif, onDismiss = {
+            showNotif = false
+            notifUnread = Notifications.unreadCount()
+        })
     }
 }
 
 // ───────────────────────── 顶部：问候栏 ─────────────────────────
 
 @Composable
-private fun GreetingBar(name: String, onAvatar: () -> Unit) {
+private fun GreetingBar(
+    name: String,
+    unread: Int,
+    onOpenNotifications: () -> Unit,
+    onAvatar: () -> Unit,
+) {
     val cs = COUITheme.colorScheme
     Row(
         Modifier
@@ -654,6 +683,8 @@ private fun GreetingBar(name: String, onAvatar: () -> Unit) {
                 fontWeight = FontWeight.SemiBold, maxLines = 1,
             )
         }
+        NotificationBellButton(unread = unread, onClick = onOpenNotifications)
+        Spacer(Modifier.width(8.dp))
         Avatar(name, onAvatar)
     }
 }

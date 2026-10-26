@@ -23,9 +23,12 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -40,8 +43,18 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.AiAgent
+import com.kewu.app.AiClient
+import com.kewu.app.ChatHistory
 import com.kewu.app.Analytics
 import com.kewu.app.AssignmentInfo
 import com.kewu.app.AssignmentStats
@@ -53,6 +66,8 @@ import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
+import com.kewu.app.kvGet
+import com.kewu.app.kvSet
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.defaultKewuHighlight
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -69,11 +84,17 @@ import kotlinx.coroutines.launch
 // 形态与学生端 TaPage 同款：**AI 对话页**，进入时小悟主动连发教学简报（不直接堆卡片）：
 //   ① 今日概览（课程/作业/关注人数/签到/作业质量）→ ② 重点关注学生名单 → ③ 高频疑问 + 建议行动。
 // 数据来自 KewuApi 现有接口交叉计算（无专用画像接口；无数据时降级 mock 并标注「示例」）。
-// 教师可随时在底部输入框提问，AI 先用本地规则 mock 回答（按关键词匹配学情数据），
-// 后端问答接口就绪后替换 answer() 实现即可（接入点已标注）。
+// 教师可随时在底部输入框提问，2026-10-24 起接入真实大模型（AiClient，openpangu-2.0-flash），
+// 学情上下文随 system prompt 注入；AI 不可用时回退本地规则 answer() 兜底。
 //
 // 组件语言与学生端小悟一致：AI coui 毛玻璃气泡（标签行+内容块）/ 用户 coui Surface 品牌色气泡 /
 // 液态玻璃输入框常驻导航栏上方（bottom 118dp 兜底 + 根 imePadding 随键盘上移）。
+
+/**
+ * 教学简报播报日期标记（kv，存「当天 00:00」的时间戳）。
+ * 2026-10-25：教师端助教页每天只在第一次进入时播报一次简报，当天再进入不重复发。
+ */
+private const val KEY_TA_BRIEF_DAY = "kewu_ta_brief_day"
 
 private data class WatchStudent(val name: String, val reason: String, val kind: Int) // 0=退步 1=风险 2=关注
 
@@ -84,7 +105,15 @@ private sealed interface TaBlock {
     data class Chips(val list: List<String>) : TaBlock
 }
 
-private data class TaMsg(val isUser: Boolean, val blocks: List<TaBlock>)
+private data class TaMsg(
+    val isUser: Boolean, val blocks: List<TaBlock>,
+    /** 稳定 id（列表动画 key / 持久化），0 = 未分配（入场简报等不落盘消息） */
+    val id: Long = 0L,
+    /** 发送时刻 epoch 毫秒 */
+    val ts: Long = 0L,
+    /** true = 属于真实对话，需要写进聊天记录（入场简报每次进页现生成，不落盘） */
+    val keep: Boolean = false,
+)
 
 @Composable
 fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
@@ -108,14 +137,92 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     var hwStats by remember { mutableStateOf<AssignmentStats?>(null) }
     var pendingReview by remember { mutableStateOf<Int?>(null) } // 控制台聚合的待批阅数
 
+    // ── 对话状态：聊天记录落盘（2026-10-24）。默认只展示今天的，列表顶部下拉按天加载更早。
+    val chatStore = remember { ChatHistory.loadAll(ChatHistory.KEY_TEACHER) }
+    var visibleCutoff by remember {
+        mutableStateOf(ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds()))
+    }
+    var hasMoreHistory by remember {
+        mutableStateOf(chatStore.any { it.ts < visibleCutoff })
+    }
     val messages = remember { mutableListOf<TaMsg>() }
     var msgVersion by remember { mutableStateOf(0) }
-    fun push(msg: TaMsg) {
-        messages += msg
+
+    /** 块列表 → 纯文本（持久化用；Students/Chips 转为可读行）。 */
+    fun blocksToText(blocks: List<TaBlock>): String = blocks.joinToString("\n") { b ->
+        when (b) {
+            is TaBlock.Text -> b.s
+            is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
+            is TaBlock.Chips -> b.list.joinToString("、")
+        }
+    }
+
+    fun persistMessages(current: List<TaMsg>) {
+        // ★ 只落盘真实对话（keep=true）。入场简报不落盘，否则每次进页都会往历史里堆一份，
+        //   下次进来「历史里的简报」+「现生成的简报」会重复出现。
+        val entries = current.filter { it.keep && it.id != 0L }.map { m ->
+            ChatHistory.Entry(
+                id = m.id,
+                role = if (m.isUser) "user" else "assistant",
+                text = blocksToText(m.blocks),
+                ts = m.ts,
+            )
+        }
+        ChatHistory.saveAll(ChatHistory.KEY_TEACHER, entries)
+        hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
+    }
+
+    /**
+     * 广播一条消息。
+     * ★ 2026-10-24 闪退修复：LazyColumn 用 `key = msg.id`，id 必须唯一 ——
+     *   入场简报三条都带默认 id=0，key 重复会直接抛出并崩掉整页，所以这里统一补发 id。
+     * [persist] = true 才写聊天记录（简报这类每次进页现生成的消息不落盘）。
+     */
+    fun push(msg: TaMsg, persist: Boolean = false) {
+        val stamped = msg.copy(
+            id = if (msg.id != 0L) msg.id else ChatHistory.nextId(),
+            ts = if (msg.ts != 0L) msg.ts else nowMs(),
+            keep = msg.keep || persist,
+        )
+        messages += stamped
         msgVersion++ // 触发重组（LazyColumn items 读取 list 快照）
+        if (persist) persistMessages(messages.toList())
+    }
+
+    /**
+     * 聊天记录条目 → 气泡消息。
+     * ★ 2026-10-24 气泡身份颠倒修复：持久化写入是 `isUser → role="user"`（见 persistMessages），
+     *   还原必须用同一个方向 `role == "user" → isUser`。此前写成 `!=` 导致重新进页后
+     *   「用户发的显示成 AI 的、AI 发的显示成用户的」。
+     */
+    fun restored(e: ChatHistory.Entry): TaMsg = TaMsg(
+        isUser = e.role == "user",
+        blocks = e.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it) },
+        id = if (e.id != 0L) e.id else ChatHistory.nextId(),
+        ts = e.ts,
+        keep = true, // 来自历史，后续整体落盘时要保留
+    )
+
+    // 顶部下拉加载更早一天
+    fun loadOlderDay() {
+        val older = chatStore.filter { it.ts < visibleCutoff }
+        if (older.isEmpty()) return
+        val nextCutoff = ChatHistory.dayStart(visibleCutoff - 1)
+        val newly = older.filter { it.ts >= nextCutoff }.map { e ->
+            restored(e)
+        }
+        visibleCutoff = nextCutoff
+        messages.addAll(0, newly)
+        msgVersion++
     }
 
     LaunchedEffect(Unit) {
+        // 恢复今天的聊天记录（更早的由列表顶部下拉按天加载）
+        val today = chatStore.filter { it.ts >= visibleCutoff }.map { e -> restored(e) }
+        if (today.isNotEmpty()) {
+            messages.addAll(0, today)
+            msgVersion++
+        }
         if (KewuApi.currentUser == null) KewuApi.me()
         teacherName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师"
         val courses: List<CourseInfo>? =
@@ -163,6 +270,14 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         dataReady = true
 
         // ── AI 主动连发教学简报（错峰进场，像一条条发过来，不直接堆卡片） ──
+        // ★ 2026-10-25：同一天只在**第一次**进入助教页时播报一次；当天再进来直接复用
+        //   聊天记录里已存的简报，不再重复打扰（用户反馈「每次进入都会发」）。
+        //   判据用「当天 00:00 的时间戳」写进 kv，跨天自动失效；次日进入会重新播报。
+        if (kvGet(KEY_TA_BRIEF_DAY)?.toLongOrNull() == visibleCutoff) {
+            return@LaunchedEffect
+        }
+        kvSet(KEY_TA_BRIEF_DAY, visibleCutoff.toString())
+
         delay(500)
         push(TaMsg(false, buildList {
             add(TaBlock.Text("${greetingByHour()}，${teacherName}！我是小悟，先给你今天的教学简报："))
@@ -183,13 +298,13 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 add(TaBlock.Text("作业质量：均分 ${hwStats!!.avgScore} · 待批 ${hwStats!!.pendingCount} · " +
                     "高风险 ${hwStats!!.highRiskCount} 人"))
             }
-        }))
+        }), persist = true)
         delay(650)
         push(TaMsg(false, buildList {
             add(TaBlock.Text(if (watchFromMock) "以下学生近期需要关注（示例数据）：" else "以下学生近期需要关注：",
                 emphasis = true))
             add(TaBlock.Students(watchList))
-        }))
+        }), persist = true)
         delay(650)
         push(TaMsg(false, buildList {
             if (weakPoints.isNotEmpty()) {
@@ -200,15 +315,70 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 add(TaBlock.Text("暂未发现集中的薄弱知识点，继续保持！"))
             }
             add(TaBlock.Text("有问题随时问我，比如「谁退步了」「作业质量怎么样」「谁没签到」。"))
-        }))
+        }), persist = true)
     }
 
     // 新消息自动滚到底
+    // 新消息（自己发的 / AI 回的）进入后平滑滑到最底部：先让一帧给气泡完成布局，
+    // 再 animateScrollToItem —— 否则会「瞬间跳到底部」而不是滑动（2026-10-24 用户反馈）
     LaunchedEffect(msgVersion) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        if (messages.isEmpty()) return@LaunchedEffect
+        kotlinx.coroutines.yield()
+        listState.animateScrollToItem(messages.size - 1)
     }
 
-    /** ★ AI 问答接入点：后端就绪后把这里换成真实问答接口（上下文 courses/analytics/watchList 已备好）。 */
+    // ── 真实 AI 问答（2026-10-24 接入）：AiClient 大模型 + 本页已聚合的学情上下文 ──
+
+    /** 给大模型的学情上下文快照（数据来自页首已聚合的 KewuApi 结果）。 */
+    fun buildAiContext(): String = buildString {
+        appendLine("教师：$teacherName")
+        appendLine("课程数：$courseCount · 作业数：$assignmentCount" +
+            (pendingReview?.let { " · 待批阅 $it 份" } ?: ""))
+        attStats?.let {
+            appendLine("最近一次签到：应到 ${it.expected} · 实到 ${it.checked} · 迟到 ${it.late} · " +
+                "缺勤 ${it.absent} · 签到率 ${(it.checkRate * 100).toInt()}%")
+        }
+        hwStats?.let {
+            appendLine("最近一份作业：均分 ${it.avgScore} · 已交 ${it.submittedCount} · " +
+                "待批 ${it.pendingCount} · 高风险 ${it.highRiskCount} 人")
+        }
+        if (watchList.isNotEmpty()) {
+            appendLine("重点关注学生" + (if (watchFromMock) "（示例数据）" else "") + "：" +
+                watchList.joinToString("；") { "${it.name}（${it.reason}）" })
+        }
+        if (weakPoints.isNotEmpty()) {
+            appendLine("薄弱知识点：" + weakPoints.take(5).joinToString("、"))
+        }
+        if (mastery.isNotEmpty()) {
+            appendLine("知识点掌握度：" + mastery.take(5)
+                .joinToString("；") { "${it.point} ${(it.avgScoreRate * 100).toInt()}%" })
+        }
+    }
+
+    val aiSystemPrompt =
+        "你是「小悟」，课悟 App 里教师的 AI 教学洞察助手。回答教师关于班级学情、作业、签到、学生表现的问题。\n" +
+            "要求：基于给出的学情数据回答，数据里没有的信息不要编造，可说明「当前暂无该数据」；\n" +
+            "语气专业亲切、简洁，优先给可执行的教学建议；用中文回答；不要使用 markdown 格式符号，" +
+            "分点用「·」开头、每点一行；总长度控制在 200 字以内。" +
+            "不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），也不要复述问题。\n\n当前班级学情数据：\n"
+
+    /** 真实 AI 回答：成功返回文本块列表；失败返回 null（调用方回退本地规则）。 */
+    suspend fun aiAnswer(q: String): List<TaBlock>? {
+        val reply = AiClient.chat(
+            aiSystemPrompt + buildAiContext() + "\n\n" + AiAgent.teacherCapability(), q,
+        ) ?: return null
+        val parsed = AiAgent.parse(reply)
+        val blocks = parsed.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }.toMutableList()
+        // 2026-10-24：AI 软件操作代理 —— 执行 KEWU_ACTION 指令并把结果附在回答里
+        parsed.action?.let { action ->
+            AiAgent.execute("teacher", action)?.let { note ->
+                if (note.isNotBlank()) blocks += TaBlock.Text(note, emphasis = true)
+            }
+        }
+        return blocks
+    }
+
+    /** 本地规则兜底：AI 不可用（断网/超时/鉴权失败）时保证问答可用。 */
     fun answer(q: String): List<TaBlock> = when {
         q.contains("关注") || q.contains("退步") || q.contains("学生") -> buildList {
             add(TaBlock.Text(if (watchFromMock) "重点关注名单（示例数据）：" else "重点关注名单：", emphasis = true))
@@ -245,15 +415,23 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         else -> listOf(TaBlock.Text("这个问题我还在学习（本地规则暂不支持）。可以试试问我：谁需要关注、作业质量、签到情况、薄弱知识点。"))
     }
 
+    var aiThinking by remember { mutableStateOf(false) }
+
     fun send() {
         val q = input.trim()
-        if (q.isEmpty()) return
-        push(TaMsg(true, listOf(TaBlock.Text(q))))
+        if (q.isEmpty() || aiThinking) return
+        push(TaMsg(true, listOf(TaBlock.Text(q))), persist = true)
         input = ""
         haptic(HapticKind.Light)
         scope.launch {
-            delay(500) // 模拟 AI 思考（接后端时换成真实请求耗时）
-            push(TaMsg(false, answer(q)))
+            aiThinking = true
+            // 优先真实大模型；失败回退本地规则（学情数据仍有价值），并明确告知用户
+            val aiBlocks = aiAnswer(q)
+            aiThinking = false
+            push(TaMsg(false, aiBlocks ?: buildList {
+                add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
+                addAll(answer(q))
+            }), persist = true)
         }
     }
 
@@ -288,20 +466,59 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                         Box(Modifier.size(7.dp).background(KewuGreen, CircleShape))
                     }
                     Spacer(Modifier.height(2.dp))
-                    Text("KEWU AI · 学情分析", color = cs.onSurfaceSecondary, fontSize = 11.5.sp)
+                    // 2026-10-24：等待 AI 回复时顶部状态改为「小悟正在输入中…」
+                    Text(
+                        if (aiThinking) "小悟正在输入中…" else "KEWU AI · 学情分析",
+                        color = cs.onSurfaceSecondary, fontSize = 11.5.sp,
+                    )
                 }
                 KewuTag("主动播报", color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer)
             }
 
-            // ── 对话列 ──
+            // ── 对话列（2026-10-24：顶部下拉加载更早对话；消息 animateItem 滑入） ──
+            val pullLoadPx = with(LocalDensity.current) { 110.dp.toPx() }
+            var pullAcc by remember { mutableFloatStateOf(0f) }
+            val pullConnection = remember {
+                object : NestedScrollConnection {
+                    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                        val atTop = listState.firstVisibleItemIndex == 0 &&
+                            listState.firstVisibleItemScrollOffset == 0
+                        if (atTop && available.y > 0 && hasMoreHistory) {
+                            pullAcc += available.y
+                            if (pullAcc >= pullLoadPx) {
+                                pullAcc = 0f
+                                loadOlderDay()
+                            }
+                            return Offset(0f, available.y)
+                        }
+                        if (available.y < 0) pullAcc = 0f
+                        return Offset.Zero
+                    }
+                }
+            }
             val snapshot = messages.toList()
             LazyColumn(
                 state = listState,
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                modifier = Modifier.fillMaxWidth().weight(1f).nestedScroll(pullConnection),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
             ) {
-                itemsIndexed(snapshot, key = { i, _ -> i }) { _, msg ->
-                    TaBubble(pageBackdrop, msg)
+                item(key = "history-tip") {
+                    Text(
+                        when {
+                            pullAcc > 10f -> "松开加载更早的对话…"
+                            hasMoreHistory -> "下拉加载更早的对话"
+                            else -> ""
+                        },
+                        color = cs.onSurfaceSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        textAlign = TextAlign.Center,
+                    )
+                }
+                itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
+                    Box(Modifier.animateItem()) {
+                        TaBubble(pageBackdrop, msg)
+                    }
                     Spacer(Modifier.height(10.dp))
                 }
                 if (!dataReady && snapshot.isEmpty()) {
@@ -317,6 +534,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 input = input,
                 onInput = { input = it },
                 onSend = { send() },
+                enabled = !aiThinking,
             )
         }
     }
@@ -440,6 +658,7 @@ private fun TaInputBar(
     input: String,
     onInput: (String) -> Unit,
     onSend: () -> Unit,
+    enabled: Boolean = true,
 ) {
     val cs = COUITheme.colorScheme
     Row(
@@ -467,6 +686,9 @@ private fun TaInputBar(
                         singleLine = true,
                         textStyle = TextStyle(color = cs.onSurface, fontSize = 14.5.sp),
                         modifier = Modifier.fillMaxWidth(),
+                        // 2026-10-24：IME 发送键直接提问（与发送钮等效）；自动化/外接键盘也可用 Enter 发送
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                        keyboardActions = KeyboardActions(onSend = { onSend() }),
                         decorationBox = { inner ->
                             Box(Modifier.fillMaxWidth()) {
                                 if (input.isEmpty()) {
@@ -481,7 +703,7 @@ private fun TaInputBar(
             }
         }
         Spacer(Modifier.width(10.dp))
-        TaSendBtn(backdrop = backdrop, enabled = input.isNotBlank(), onClick = onSend)
+        TaSendBtn(backdrop = backdrop, enabled = enabled && input.isNotBlank(), onClick = onSend)
     }
 }
 
@@ -543,6 +765,9 @@ private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> 
         }
     }
 }
+
+/** 当前 epoch 毫秒（2026-10-24 聊天记录持久化用）。 */
+private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
 private fun greetingByHour(): String {
     val hour = ((kotlin.time.Clock.System.now().toEpochMilliseconds() / 3_600_000L + 8L) % 24L).toInt()

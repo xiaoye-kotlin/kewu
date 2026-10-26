@@ -28,11 +28,12 @@ actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp) {
     // 明文 HTTP（http://47.99.42.168:8080，非 https）——Android 9+ 需 usesCleartextTraffic，
     // 已在 AndroidManifest 开启；这里不额外配置引擎信任。
     engine {
-        // 适当超时，避免弱网卡死
+        // 适当超时，避免弱网卡死；read 放宽到 120s 兼容大模型推理耗时（AiClient），
+        // 业务接口响应快不受影响（超时只是上限）
         config {
             connectTimeout(15_000, java.util.concurrent.TimeUnit.MILLISECONDS)
-            readTimeout(15_000, java.util.concurrent.TimeUnit.MILLISECONDS)
-            writeTimeout(15_000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            readTimeout(120_000, java.util.concurrent.TimeUnit.MILLISECONDS)
+            writeTimeout(30_000, java.util.concurrent.TimeUnit.MILLISECONDS)
         }
     }
 }

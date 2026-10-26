@@ -56,6 +56,8 @@ import io.github.suqi8.coui.kmp.theme.Colors
 import io.github.suqi8.coui.kmp.theme.lightColorScheme
 import androidx.compose.material3.MaterialTheme as M3Theme
 import androidx.compose.material3.lightColorScheme as m3LightColorScheme
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+import androidx.navigationevent.compose.rememberNavigationEventDispatcherOwner
 
 // ───────────────────────── coui 全局主题（2026-10-23 全局 coui 化） ─────────────────────────
 //
@@ -123,9 +125,18 @@ suspend fun SnackbarHostState.toast(message: String) {
 fun KewuTheme(content: @Composable () -> Unit) {
     val colors = remember { kewuCouiColors() }
     val snackbar = remember { SnackbarHostState() }
+    // coui OverlayDialog/DialogContentLayout 内部的 NavigationBackHandler 从
+    // LocalNavigationEventDispatcherOwner 取 dispatcher，取不到直接抛
+    // IllegalStateException（任何 coui 弹窗一展示就闪退：结束课程确认 / 退出登录确认都中过招）。
+    // 根 dispatcher 必须显式提供：Android 侧的 ViewTree 回退在弹窗的子组合里链不到
+    // Activity 的 decorView。parent = null → 自建根 dispatcher（无父可链）。
+    val navEventOwner = rememberNavigationEventDispatcherOwner(parent = null)
     COUITheme(colors = colors) {
         M3Theme(colorScheme = m3FromCoui(colors)) {
-            CompositionLocalProvider(LocalKewuSnackbar provides snackbar) {
+            CompositionLocalProvider(
+                LocalKewuSnackbar provides snackbar,
+                LocalNavigationEventDispatcherOwner provides navEventOwner,
+            ) {
                 Scaffold(
                     containerColor = COUITheme.colorScheme.surface,
                     contentWindowInsets = WindowInsets(0, 0, 0, 0),

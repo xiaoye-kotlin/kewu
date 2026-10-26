@@ -35,6 +35,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.AiNav
+import com.kewu.app.ChatHistory
 import com.kewu.app.HapticKind
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -74,6 +76,13 @@ fun TeacherMainScreen(
     var previewFloat by remember { mutableStateOf(0f) }
     var navHidden by remember { mutableStateOf(false) }
     var lastPreviewHaptic by remember { mutableStateOf(-1) }
+    // 助教（index=1）tab 的 AI 未读红点：仅统计 ChatHistory 里晚于「已读游标」的 assistant 消息，
+    // 与首页铃铛通知完全无关（小悟消息在助教页内读，不进铃铛）。进入助教页即清空。
+    var assistantUnread by remember { mutableStateOf(0) }
+    LaunchedEffect(Unit) {
+        ChatHistory.seedWelcomeIfEmpty(ChatHistory.KEY_TEACHER)
+        assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_TEACHER)
+    }
     val navScope = rememberCoroutineScope()
     val tabW = remember { mutableStateOf(0f) }
     val centerAnim = remember { Animatable(0f) }
@@ -111,6 +120,13 @@ fun TeacherMainScreen(
             selected = idx
             preview = idx
             navHidden = false
+            // ★ 助教（index=1）进入即清空 AI 未读红点；切走则重新统计
+            if (idx == 1) {
+                ChatHistory.markAllAssistantRead(ChatHistory.KEY_TEACHER)
+                assistantUnread = 0
+            } else {
+                assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_TEACHER)
+            }
             slideBubbleTo(idx * tabW.value + tabW.value / 2f)
             tabSwitchJob?.cancel()
             tabSwitchJob = navScope.launch {
@@ -119,6 +135,16 @@ fun TeacherMainScreen(
                     targetValue = idx.toFloat(),
                     animationSpec = spring(dampingRatio = 0.68f, stiffness = 420f),
                 ) { previewFloat = value }
+            }
+        }
+    }
+
+    // 2026-10-24：AI 助教代操作 —— 小悟的导航指令经 AiNav 总线到这里执行切 tab
+    LaunchedEffect(Unit) {
+        AiNav.teacherTab.collect { idx ->
+            if (idx in TEACHER_NAV_ITEMS.indices) {
+                goToTab(idx)
+                AiNav.teacherTab.value = -1
             }
         }
     }
@@ -176,6 +202,13 @@ fun TeacherMainScreen(
                 selected = it
                 preview = it
                 navHidden = false
+                // ★ 助教（index=1）进入即清空 AI 未读红点；切走则重新统计
+                if (it == 1) {
+                    ChatHistory.markAllAssistantRead(ChatHistory.KEY_TEACHER)
+                    assistantUnread = 0
+                } else {
+                    assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_TEACHER)
+                }
                 tabSwitchJob?.cancel()
                 tabSwitchJob = navScope.launch {
                     val anim = Animatable(previewFloat)
@@ -200,6 +233,7 @@ fun TeacherMainScreen(
             },
             backdrop = backdrop,
             hidden = navHidden,
+            badges = mapOf(1 to assistantUnread),
             tabW = tabW,
             centerAnim = centerAnim,
             onSlideTo = slideBubbleTo,

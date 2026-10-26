@@ -29,3 +29,7 @@ composeApp/xiaoye.jks
 .workbuddy/
 /nav_*.png
 /shot.png
+
+# JVM 崩溃日志（构建/运行崩潰产物，非源码）
+hs_err_pid*.log
+replay_pid*.log

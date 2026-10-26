@@ -56,6 +56,8 @@ data class AssignmentInfo(
     val id: String, val courseId: String, val title: String, val description: String,
     val deadline: String, val totalScore: Int, val knowledgePoints: List<String>,
     val publisher: String, val createdAt: String,
+    /** 题目列表（2026-10-25 作业题目系统）。后端若落原生字段则用之，否则从 description 透传块提取。 */
+    val questions: List<Question> = emptyList(),
 )
 data class AssignmentStats(
     val submittedCount: Int, val reviewedCount: Int, val pendingCount: Int,
@@ -71,12 +73,30 @@ data class SubmissionInfo(
     val content: String, val version: Int, val submittedAt: String, val status: String,
     val score: Double?, val comment: String?, val reviewer: String?, val reviewedAt: String?,
     val history: List<SubmissionVersion>, val ai: AiSuggestion?,
+    /** 按题作答（文档 3.12，老提交为空）。 */
+    val answers: List<QuestionAnswer> = emptyList(),
+    /** 逐题判定结果（客观题自动判分，主观题 correct=null 等老师）。 */
+    val questionResults: List<QuestionResult> = emptyList(),
 )
 data class AiReason(val item: String, val detail: String, val score: Double)
 data class AiSuggestion(
     val suggestedScore: Double, val confidence: Double,
     val hitKnowledgePoints: List<String>, val missedKnowledgePoints: List<String>,
     val reasons: List<AiReason>, val riskLevel: String, val summary: String,
+    /** 客观题自动判分合计（文档 3.12：ai.objectiveScore / objectiveFullScore，老师一眼看客观题拿了多少）。 */
+    val objectiveScore: Double = 0.0,
+    val objectiveFullScore: Double = 0.0,
+    /** 逐题判定结果（同 submission.questionResults 内容一致）。 */
+    val questionResults: List<QuestionResult> = emptyList(),
+)
+/** 按题作答（文档 3.11/3.12：answers = [{questionId, value}]）。 */
+data class QuestionAnswer(val questionId: String, val value: String)
+/** 逐题判定结果（文档 3.12：correct=true/false/null，autoScore/fullScore，judgedBy=AUTO/TEACHER/PENDING）。 */
+data class QuestionResult(
+    val questionId: String, val type: String, val stem: String,
+    val studentValue: String, val standardAnswer: String,
+    val correct: Boolean?, val autoScore: Double, val finalScore: Double?, val fullScore: Double,
+    val judgedBy: String,
 )
 data class SimilarityPair(
     val submissionA: String, val studentA: String,
@@ -329,6 +349,7 @@ object KewuApi {
 
     private fun jsonValue(value: Any?): JsonElement = when (value) {
         null -> JsonNull
+        is JsonElement -> value
         is String -> JsonPrimitive(value)
         is Boolean -> JsonPrimitive(value)
         is Number -> JsonPrimitive(value)
@@ -524,6 +545,7 @@ object KewuApi {
                 description = obj["description"].str(), deadline = obj["deadline"].str(), totalScore = obj["totalScore"].int(),
                 knowledgePoints = (obj["knowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
                 publisher = obj["publisher"].str(), createdAt = obj["createdAt"].str(),
+                questions = parseAssignmentQuestions(obj),
             )
         } }
     } catch (_: Exception) { null }
@@ -538,8 +560,23 @@ object KewuApi {
             totalScore = data["totalScore"].int(),
             knowledgePoints = (data["knowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
             publisher = data["publisher"].str(), createdAt = data["createdAt"].str(),
+            questions = parseAssignmentQuestions(data),
         )
     } catch (_: Exception) { null }
+
+    /**
+     * 解析作业题目（2026-10-25）：后端若落原生 `questions` 字段优先用之；否则从 `description`
+     * 透传块 `[KEWU_QUESTIONS]…[/KEWU_QUESTIONS]` 提取。兼容历史纯文本作业（返回空）。
+     */
+    private fun parseAssignmentQuestions(o: JsonObject): List<Question> {
+        val native = (o["questions"] as? JsonArray)
+        if (native != null && native.isNotEmpty()) {
+            return runCatching { QuestionStore.parseQuestionsJson(native.toString()) }
+                .getOrDefault(emptyList())
+        }
+        val desc = o["description"]?.jsonPrimitive?.content ?: return emptyList()
+        return QuestionStore.extractFromDescription(desc)
+    }
 
     /** 统计看板（无需 token）。失败返回 null。 */
     suspend fun getAssignmentStats(id: String): AssignmentStats? = try {
@@ -558,14 +595,19 @@ object KewuApi {
         )
     } catch (_: Exception) { null }
 
-    /** 提交作业（无需 token；同一个学生会自动版本+1）。[studentId] 当前用本地 username。 */
+    /** 提交作业（无需 token；同一个学生会自动版本+1）。[answers] 非空时按文档 3.12 原生字段发送（客观题服务端自动判分）。 */
     suspend fun submitAssignment(
         id: String, studentId: String, studentName: String, content: String,
+        answers: Map<String, String> = emptyMap(),
     ): String? = try {
-        val el = postJson(
-            "$BASE_URL/api/assignments/${pathSegment(id)}/submissions",
-            mapOf("studentId" to studentId, "studentName" to studentName, "content" to content),
+        val body = mutableMapOf<String, Any?>(
+            "studentId" to studentId, "studentName" to studentName, "content" to content,
         )
+        // 原生按题作答：[{questionId, value}]。content 仍保留可读文本兼容老前端/查重。
+        if (answers.isNotEmpty()) {
+            body["answers"] = answers.map { (k, v) -> mapOf("questionId" to k, "value" to v) }
+        }
+        val el = postJson("$BASE_URL/api/assignments/${pathSegment(id)}/submissions", body)
         el.asDataOrThrow()
         null
     } catch (e: ApiException) { e.message }
@@ -645,11 +687,16 @@ object KewuApi {
     /** 批阅打分 / 打回（无需 token，当前用参数区分身份）。 */
     suspend fun reviewSubmission(
         id: String, score: Double, comment: String, reviewer: String, action: String,
+        questionScores: List<Pair<String, Int>>? = null,
     ): String? = try {
-        val el = postJson(
-            "$BASE_URL/api/submissions/${pathSegment(id)}/review",
-            mapOf("score" to score, "comment" to comment, "reviewer" to reviewer, "action" to action),
+        val body = mutableMapOf<String, Any?>(
+            "score" to score, "comment" to comment, "reviewer" to reviewer, "action" to action,
         )
+        // 按题给分（文档 3.12 ④）：传了 questionScores 可不传 score，服务端自动按题求和当总分。
+        if (questionScores != null) {
+            body["questionScores"] = questionScores.map { (qid, sc) -> mapOf("questionId" to qid, "score" to sc) }
+        }
+        val el = postJson("$BASE_URL/api/submissions/${pathSegment(id)}/review", body)
         el.asDataOrThrow()
         null
     } catch (e: ApiException) { e.message }
@@ -733,19 +780,22 @@ object KewuApi {
     } catch (e: CancellationException) { throw e }
     catch (e: Exception) { networkErrorMessage(e) }
 
-    /** 发布作业（老师入口；服务端仍应自行校验权限）。 */
+    /** 发布作业（老师入口；服务端仍应自行校验权限）。[questions] 非空时按文档 3.12 原生字段发送。 */
     suspend fun publishAssignment(
         courseId: String, title: String, description: String = "", deadline: String = "",
         totalScore: Int = 100, knowledgePoints: List<String> = emptyList(), publisher: String = "",
+        questions: List<Question> = emptyList(),
     ): AssignmentInfo? = try {
-        val el = postJson(
-            "$BASE_URL/api/assignments",
-            mapOf(
-                "courseId" to courseId, "title" to title, "description" to description,
-                "deadline" to deadline, "totalScore" to totalScore,
-                "knowledgePoints" to knowledgePoints, "publisher" to publisher,
-            ), auth = true,
+        val body = mutableMapOf<String, Any?>(
+            "courseId" to courseId, "title" to title, "description" to description,
+            "deadline" to deadline, "totalScore" to totalScore,
+            "knowledgePoints" to knowledgePoints, "publisher" to publisher,
         )
+        // 原生题目字段：直接发结构化数组（后端 3.12 支持，自动判分）。description 不再塞透传块。
+        if (questions.isNotEmpty()) {
+            body["questions"] = json.parseToJsonElement(QuestionStore.questionsToJson(questions))
+        }
+        val el = postJson("$BASE_URL/api/assignments", body, auth = true)
         val data = el.asDataOrThrow() as? JsonObject ?: return null
         AssignmentInfo(
             id = data["id"].str(), courseId = data["courseId"].str(), title = data["title"].str(),
@@ -753,6 +803,7 @@ object KewuApi {
             totalScore = data["totalScore"].int(),
             knowledgePoints = (data["knowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
             publisher = data["publisher"].str(), createdAt = data["createdAt"].str(),
+            questions = parseAssignmentQuestions(data),
         )
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
@@ -985,6 +1036,19 @@ object KewuApi {
     /** 当前用户的教师标识（id 或 username 后端都认）。 */
     fun teacherId(): String = username ?: currentUser?.user?.id ?: ""
 
+    // ── 通知系统（后端由队员实现；当前为本地 kv 兜底，结构对齐需求文档）──
+    // ★ 仅服务首页铃铛「系统通知」。AI（小悟）消息走 ChatHistory，不在此列。
+    suspend fun getNotifications(): List<Notifications.Info> =
+        Notifications.load()
+
+    suspend fun markNotificationRead(id: String) {
+        Notifications.markRead(id)
+    }
+
+    suspend fun markAllNotificationsRead() {
+        Notifications.markAllRead()
+    }
+
     /** 老师新建课程：成功 data 为课程对象（立刻出现在 /api/courses）。 */
     suspend fun createTeacherCourse(name: String, description: String, teacherId: String = teacherId()): ApiResult<CourseInfo> = try {
         val el = postJson(
@@ -1165,6 +1229,8 @@ object KewuApi {
             score = o["score"]?.takeUnless { it == JsonNull }?.num(),
             comment = o["comment"].strOrNull(), reviewer = o["reviewer"].strOrNull(),
             reviewedAt = o["reviewedAt"].strOrNull(), history = history, ai = ai,
+            answers = parseQuestionAnswers(o["answers"]),
+            questionResults = parseQuestionResults(o["questionResults"]),
         )
     }
 
@@ -1178,6 +1244,30 @@ object KewuApi {
             hitKnowledgePoints = (o["hitKnowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
             missedKnowledgePoints = (o["missedKnowledgePoints"] as? JsonArray).orEmpty().map { it.str() },
             reasons = reasons, riskLevel = o["riskLevel"].str(), summary = o["summary"].str(),
+            objectiveScore = o["objectiveScore"].num(), objectiveFullScore = o["objectiveFullScore"].num(),
+            questionResults = parseQuestionResults(o["questionResults"]),
         )
+    }
+
+    /** 解析按题作答 [{questionId, value}]（文档 3.12）。 */
+    private fun parseQuestionAnswers(o: JsonElement?): List<QuestionAnswer> {
+        val arr = (o as? JsonArray) ?: return emptyList()
+        return arr.mapNotNull { it as? JsonObject }.map { QuestionAnswer(it["questionId"].str(), it["value"].str()) }
+    }
+
+    /** 解析逐题判定结果（文档 3.12：correct 可 null；autoScore/fullScore；judgedBy）。 */
+    private fun parseQuestionResults(o: JsonElement?): List<QuestionResult> {
+        val arr = (o as? JsonArray) ?: return emptyList()
+        return arr.mapNotNull { it as? JsonObject }.map { q ->
+            val correct = q["correct"]
+            QuestionResult(
+                questionId = q["questionId"].str(), type = q["type"].str(), stem = q["stem"].str(),
+                studentValue = q["studentValue"].str(), standardAnswer = q["standardAnswer"].str(),
+                correct = if (correct == null || correct is JsonNull) null else (correct as? JsonPrimitive)?.content?.toBooleanStrictOrNull(),
+                autoScore = q["autoScore"].num(),
+                finalScore = q["finalScore"]?.takeUnless { it == JsonNull }?.num(),
+                fullScore = q["fullScore"].num(), judgedBy = q["judgedBy"].str(),
+            )
+        }
     }
 }
