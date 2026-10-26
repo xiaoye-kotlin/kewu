@@ -37,7 +37,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -394,7 +393,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     val dockBottomPad by animateDpAsState(
         // 118 → 110：输入框整体下移 8dp（用户微调，仍安全避开底部导航托盘 ~90dp）
-        if (imeVisible) 14.dp else 110.dp,
+        // 2026-10-26：键盘弹起时 14 → 8dp（用户反馈输入框离输入法太远）
+        if (imeVisible) 8.dp else 110.dp,
         spring(dampingRatio = 0.6f, stiffness = 380f),
         label = "dockBottomPad",
     )
@@ -403,11 +403,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .imePadding()
+            // 2026-10-26：输入法避让改由主界面内容区统一 imePadding（这里再加会与之叠加）
             .onGloballyPositioned { rootOrigin = it.positionInWindow() },
     ) {
         // 背景采样层：coui 页面底色（surface 灰底），与玻璃内容平级 ✓
-        // imePadding 加在页面根：窗口收缩时整页（含采样层）一起变小，weight 对话区自动让位。
+        // 主界面内容区 imePadding 让整页（含采样层）随键盘变小，weight 对话区自动让位。
         Box(
             Modifier
                 .matchParentSize()

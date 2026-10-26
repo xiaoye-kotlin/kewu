@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +25,10 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -90,7 +93,7 @@ import kotlinx.coroutines.launch
 // 学情上下文随 system prompt 注入；AI 不可用时回退本地规则 answer() 兜底。
 //
 // 组件语言与学生端小悟一致：AI coui 毛玻璃气泡（标签行+内容块）/ 用户 coui Surface 品牌色气泡 /
-// 液态玻璃输入框常驻导航栏上方（bottom 118dp 兜底 + 根 imePadding 随键盘上移）。
+// 液态玻璃输入框常驻导航栏上方（bottom 118dp；键盘弹起时 8dp，避让由主界面内容区 imePadding 统一处理）。
 
 /**
  * 教学简报播报日期标记（kv，存「当天 00:00」的时间戳）。
@@ -455,7 +458,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        Column(Modifier.fillMaxSize().imePadding()) {
+        // 2026-10-26：输入法避让由主界面内容区统一 imePadding，这里不再重复加
+        Column(Modifier.fillMaxSize()) {
             // ── AI 人格区（与学生端小悟同款语言） ──
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 16.dp, bottom = 8.dp),
@@ -673,11 +677,16 @@ private fun TaInputBar(
     enabled: Boolean = true,
 ) {
     val cs = COUITheme.colorScheme
+    // ★ 2026-10-26：底部 118dp 是给底部导航让位的；键盘弹起时导航在键盘下面，这段留白就成了
+    //   「输入框离输入法很远」——键盘弹起时只留 8dp，收起再弹回 118dp
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val bottomPad by animateDpAsState(if (imeVisible) 8.dp else 118.dp, spring(dampingRatio = 0.8f, stiffness = 420f),
+        label = "taDockPad")
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .padding(bottom = 118.dp, top = 6.dp),
+            .padding(bottom = bottomPad, top = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // 玻璃输入框

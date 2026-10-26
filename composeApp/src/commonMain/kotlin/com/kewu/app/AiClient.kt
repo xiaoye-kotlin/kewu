@@ -241,6 +241,38 @@ object AiClient {
             .getOrDefault(emptyList()).takeIf { it.isNotEmpty() }
     }
 
+    /**
+     * 只出 **1 道** 指定题型的题（2026-10-26）。
+     * 背景：一次让模型出 5 道，思维链 + 答案约 3000 token、耗时 40s 以上；手机直连华为云被拦时走 8081 中转，
+     * 而中转接口服务端 max_tokens 仅 768（实测 5 道题返回 `[]`），只有单题能稳定出完。所以 UI 按题型 / 数量
+     * 拆成单题并行调用本函数（见 AssignmentQuestionUi.AiGenerateBlock）。
+     * [angle]/[total] 让并行的同主题题目从不同角度出，减少重复。失败返回 null。
+     */
+    suspend fun generateOneQuestion(topic: String, type: QuestionType, angle: Int, total: Int): Question? {
+        val rule = when (type) {
+            QuestionType.SINGLE_CHOICE -> "options 为 4 个，以「A.」「B.」「C.」「D.」开头；answer 为唯一正确选项字母，如 \"B\""
+            QuestionType.MULTIPLE_CHOICE -> "options 为 4–5 个，以「A.」「B.」…开头；answer 为 2 个及以上正确字母，逗号分隔，如 \"A,C\""
+            QuestionType.TRUE_FALSE -> "options 固定为 [\"正确\",\"错误\"]；answer 为 \"true\" 或 \"false\""
+            QuestionType.FILL_BLANK -> "stem 中用「____」表示空位，options 为 []；answer 为标准答案文本"
+            QuestionType.SHORT_ANSWER -> "options 为 []；answer 为参考答案要点"
+        }
+        val system = """
+你是课悟的出题助手。只出 1 道「${type.label}」，只输出一个严格的 JSON 对象（不要数组、不要任何其他文字、不要 markdown 代码块）：
+{"type":"${type.value}","stem":"题干","options":[...],"answer":"...","score":分值整数,"analysis":"一句话解析"}
+规则：$rule；score 选择/判断/填空 10，简答 20；题干与答案用中文，准确无歧义，避免政治/宗教/敏感内容。
+""".trimIndent()
+        val user = buildString {
+            append("出题范围：").append(topic.ifBlank { "通用知识" })
+            if (total > 1) append("\n这是同一范围的第 $angle / $total 道，请换一个与其它题不同的考查角度。")
+        }
+        val text = chat(system, user, maxTokens = 4096) ?: return null
+        val s = text.indexOf('{')
+        val e = text.lastIndexOf('}')
+        if (s < 0 || e <= s) return null
+        return runCatching { QuestionStore.parseQuestionsJson("[" + text.substring(s, e + 1) + "]") }
+            .getOrNull()?.firstOrNull()?.copy(type = type)
+    }
+
     // ───────────────────────── 作业 AI 预批阅 ─────────────────────────
 
     /**
