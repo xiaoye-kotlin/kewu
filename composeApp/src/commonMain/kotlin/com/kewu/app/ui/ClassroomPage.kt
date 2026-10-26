@@ -492,12 +492,19 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     val courses = if (showAll) today + history else today
 
     // 问候栏/头像用真实姓名（来自 /user/me 或登录账号）
-    var displayName by remember { mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "同学") }
+    var displayName by remember { mutableStateOf(KewuApi.displayName("同学")) }
     LaunchedEffect(Unit) {
         // 课程与 /user/me 并行，互不阻塞；每次回到首页都静默刷新一次（有缓存先显示缓存）
         launch { CourseRepo.refresh(force = true) }
-        if (KewuApi.currentUser == null) KewuApi.me()
-        displayName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: displayName
+        // me 失败（后端不可达）时隔几秒重试，拿到真实昵称为止；期间显示缓存昵称
+        var delayMs = 3_000L
+        while (KewuApi.currentUser == null) {
+            KewuApi.me()
+            if (KewuApi.currentUser != null) break
+            kotlinx.coroutines.delay(delayMs)
+            delayMs = (delayMs * 2).coerceAtMost(30_000L)
+        }
+        displayName = KewuApi.displayName(displayName)
     }
 
     // ★ coui 玻璃的硬约束：采样者必须在被采样层**之外**，否则首帧 RenderThread SIGSEGV。
@@ -584,7 +591,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     AttendanceDetailScreen(
                         attendanceId = aid,
                         studentId = KewuApi.username ?: "",
-                        studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
+                        studentName = KewuApi.nameForServer(),
                         onBack = { drill = ClassroomDrill.NONE; attendanceId = null },
                     )
                 }

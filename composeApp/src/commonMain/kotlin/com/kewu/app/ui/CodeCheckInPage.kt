@@ -123,7 +123,7 @@ fun CodeCheckInPage(
             val err = KewuApi.attendanceCheckIn(
                 id = sessionId,
                 studentId = KewuApi.username ?: "",
-                studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
+                studentName = KewuApi.nameForServer(),
                 code = code.trim(),
                 answer = s.quiz?.let { answer.trim().ifBlank { null } },
                 latitude = 0.0, longitude = 0.0,

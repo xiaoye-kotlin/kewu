@@ -970,7 +970,7 @@ private fun ReviewSubmissionScreen(
         loading = false
     }
 
-    val reviewer = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师"
+    val reviewer = KewuApi.displayName(KewuApi.username ?: "老师")
     val results = sub?.questionResults ?: emptyList()
     val hasQuestions = results.isNotEmpty()
 
@@ -1403,7 +1403,7 @@ private fun PublishAssignmentScreen(
                     validateQuestions(questions)?.let { scope.launch { snackbar.toast(it) }; return@KewuPrimaryButton }
                     publishing = true
                     scope.launch {
-                        val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
+                        val publisher = KewuApi.nameForServer()
                         // v17：题目走原生 questions 字段（服务端自动判分），description 不再塞透传块
                         val info = KewuApi.publishAssignment(
                             courseId = courseId, title = title.trim(), description = desc.trim(),

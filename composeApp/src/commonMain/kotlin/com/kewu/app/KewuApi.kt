@@ -320,6 +320,27 @@ object KewuApi {
     var username: String? = kvGet("kewu_username")
     var currentUser: UserMe? = null
 
+    /**
+     * 昵称本地缓存（按账号，2026-10-26）：自动登录后 /user/me 还没回来或失败（后端宕机 / 弱网）时，
+     * 旧版各页面回退显示登录账号（学号 "1" 之类），首页问候栏就成了「1」。现在登录 / me 成功即落 kv，
+     * 拿不到就用缓存昵称，再没有就用调用方给的称呼（「同学」「老师」），不再把账号当名字展示。
+     */
+    private fun nickKey(user: String) = "kewu_nick_$user"
+
+    private fun cacheNickname(nick: String?) {
+        val u = username ?: return
+        if (!nick.isNullOrBlank()) kvSet(nickKey(u), nick)
+    }
+
+    /** 展示用名字：/user/me 昵称 → 本账号缓存昵称 → [fallback]。 */
+    fun displayName(fallback: String): String =
+        currentUser?.user?.nickname
+            ?: username?.let { kvGet(nickKey(it)) }?.takeIf { it.isNotBlank() }
+            ?: fallback
+
+    /** 提交给后端的姓名（签到 / 发布人等）：昵称 → 缓存昵称 → 账号。 */
+    fun nameForServer(): String = displayName(username.orEmpty())
+
     private fun authHeaders(): Map<String, String> =
         if (token != null) mapOf(HttpHeaders.Authorization to "Bearer $token") else emptyMap()
 
@@ -442,6 +463,7 @@ object KewuApi {
         // 服务端角色为准（登录页的角色选择只是注册默认值，见 5.1）
         val role = data["role"].str().ifEmpty { (data["user"] as? JsonObject)?.get("role").str() }
         if (role.isNotBlank()) kvSet("kewu_role", role.lowercase())
+        cacheNickname(data["nickname"].strOrNull() ?: (data["user"] as? JsonObject)?.get("nickname").strOrNull())
         null
     } catch (e: CancellationException) { throw e }
     catch (e: ApiException) { officialAuthMessage(e.message, isRegister = false) }
@@ -546,6 +568,7 @@ object KewuApi {
             courses = courses,
         )
         meFetchedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        cacheNickname(currentUser?.user?.nickname)
         null
     } catch (e: ApiException) { e.message }
     catch (e: CancellationException) { throw e }
@@ -1198,7 +1221,7 @@ object KewuApi {
             "$BASE_URL/api/teacher/courses",
             mapOf(
                 "name" to name, "description" to description,
-                "teacher" to (currentUser?.user?.nickname ?: username ?: ""),
+                "teacher" to nameForServer(),
                 "teacherId" to teacherId,
             ),
         )

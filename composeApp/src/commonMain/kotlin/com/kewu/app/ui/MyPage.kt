@@ -133,7 +133,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
         val uname = KewuApi.username.orEmpty()
         val stored = ProfileStore.load(uname) ?: defaultProfile
         mutableStateOf(stored.copy(
-            name = KewuApi.currentUser?.user?.nickname ?: stored.name.ifBlank { uname },
+            name = KewuApi.currentUser?.user?.nickname ?: stored.name.ifBlank { KewuApi.displayName("同学") },
             studentId = uname.ifBlank { stored.studentId },
         ))
     }
@@ -164,7 +164,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
         // 本地存的资料（学校 / 班级 / 手机 / 邮箱）+ 后端的昵称与学号（2026-10-26：不再用演示资料兜底）
         val stored = ProfileStore.load(uname) ?: defaultProfile
         profile = stored.copy(
-            name = (u?.user?.nickname ?: stored.name.ifBlank { uname }).ifBlank { "同学" },
+            name = (u?.user?.nickname ?: stored.name.ifBlank { KewuApi.displayName("同学") }).ifBlank { "同学" },
             studentId = uname.ifBlank { stored.studentId },
         )
     }

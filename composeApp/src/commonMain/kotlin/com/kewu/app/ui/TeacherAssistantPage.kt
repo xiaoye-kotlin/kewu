@@ -230,7 +230,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             msgVersion++
         }
         if (KewuApi.currentUser == null) KewuApi.me()
-        teacherName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师"
+        teacherName = KewuApi.displayName("老师")
         val courses: List<CourseInfo>? =
             KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
         courseCount = courses?.size ?: 0

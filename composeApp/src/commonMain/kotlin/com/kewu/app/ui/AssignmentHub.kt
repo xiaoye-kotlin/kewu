@@ -119,7 +119,7 @@ fun AssignmentDetailScreen(
     var submitAfterConfirm by remember { mutableStateOf(false) }
 
     val studentId = KewuApi.username ?: ""
-    val studentName = KewuApi.currentUser?.user?.nickname ?: "学生"
+    val studentName = KewuApi.displayName("学生")
 
     /** 用某次提交回填作答（重新提交时在上一版基础上改）。 */
     fun prefillFrom(sub: SubmissionInfo?) {

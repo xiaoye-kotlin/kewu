@@ -175,7 +175,7 @@ fun ScanPage(
             val err = KewuApi.attendanceCheckIn(
                 id = sid,
                 studentId = KewuApi.username ?: "",
-                studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
+                studentName = KewuApi.nameForServer(),
                 code = code.ifBlank { null },
                 latitude = 0.0, longitude = 0.0,
                 courseId = courseId,

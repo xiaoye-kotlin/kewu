@@ -75,11 +75,11 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
 
-    var name by remember { mutableStateOf(KewuApi.currentUser?.user?.nickname ?: "") }
+    var name by remember { mutableStateOf(KewuApi.displayName("")) }
     var account by remember { mutableStateOf(KewuApi.username ?: "") }
     LaunchedEffect(Unit) {
         if (KewuApi.currentUser == null) KewuApi.me()
-        name = KewuApi.currentUser?.user?.nickname ?: name
+        name = KewuApi.displayName(name)
         account = KewuApi.username ?: account
     }
 

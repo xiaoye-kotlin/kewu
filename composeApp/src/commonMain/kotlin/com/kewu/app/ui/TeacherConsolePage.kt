@@ -139,13 +139,13 @@ fun TeacherConsolePage(
     // ★ 控制台聚合（2026-10-20 后端第 5 节）：今日课程/待批阅红点/今日签到率一次拿全
     var console by remember { mutableStateOf<TeacherConsole?>(null) }
     var teacherName by remember {
-        mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师")
+        mutableStateOf(KewuApi.displayName("老师"))
     }
 
     fun reload() {
         scope.launch {
             if (KewuApi.currentUser == null) KewuApi.me()
-            teacherName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: teacherName
+            teacherName = KewuApi.displayName(teacherName)
             // ★ 控制台聚合优先：todayCourses 带班级名/学生数/上课状态/今日签到率
             val c = KewuApi.getTeacherConsole()
             console = c
@@ -683,7 +683,7 @@ private fun QuickStartCard(
                         scope.launch {
                             starting = true
                             error = null
-                            val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
+                            val publisher = KewuApi.nameForServer()
                             val s = KewuApi.createAttendance(
                                 courseId = cid,
                                 title = "$cname 课堂签到",

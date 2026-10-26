@@ -270,7 +270,7 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
         ) {
             scope.launch {
                 loading = true
-                val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
+                val publisher = KewuApi.nameForServer()
                 val session = KewuApi.createAttendance(
                     selectedId ?: return@launch, title.trim(), durationMinutes = duration, publisher = publisher,
                 )
