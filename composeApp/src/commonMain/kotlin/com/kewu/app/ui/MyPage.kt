@@ -176,22 +176,34 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
     // 后端 UserInfo 仅含 id/username/nickname，无 学号/学校/班级/手机/邮箱，
     // 这些字段用默认值补；学号 = 登录账号(username)。失败则保留默认资料（离线也可用）。
     LaunchedEffect(Unit) {
-        if (KewuApi.currentUser == null) KewuApi.me()
+        KewuApi.me(force = true) // 进「我的」强制拉一次：班级 / 联系方式可能刚被老师端改过
         val u = KewuApi.currentUser
         val uname = KewuApi.username ?: u?.user?.id ?: ""
         // 本地存的资料（学校 / 班级 / 手机 / 邮箱）+ 后端的昵称与学号（2026-10-26：不再用演示资料兜底）
         val stored = ProfileStore.load(uname) ?: defaultProfile
         // 学校 / 班级以后端为准（2026-10-26 起注册时存后端）；后端没有而本机有（老账号）→ 顺手补传一次
         val serverSchool = u?.user?.school.orEmpty()
-        val serverClass = u?.user?.className.orEmpty()
-        if (u != null && serverSchool.isBlank() && stored.school.isNotBlank()) {
-            KewuApi.updateProfile(school = stored.school, className = stored.className.ifBlank { null })
+        // 学生的班级 = 加入的教学班（老师建班、学生凭邀请码加入后绑定，不可自己改；被老师移出后自动消失）
+        val joined = u?.classes.orEmpty().joinToString("、") { it.name }
+        val serverClass = joined.ifBlank { u?.user?.className.orEmpty() }
+        // 老账号补传：后端没有而本机有的学校 / 手机 / 邮箱
+        if (u != null && ((serverSchool.isBlank() && stored.school.isNotBlank()) ||
+                (u.user?.phone.isNullOrBlank() && stored.phone.isNotBlank()) ||
+                (u.user?.email.isNullOrBlank() && stored.email.isNotBlank()))
+        ) {
+            KewuApi.updateProfile(
+                school = stored.school.takeIf { serverSchool.isBlank() && it.isNotBlank() },
+                phone = stored.phone.takeIf { u.user?.phone.isNullOrBlank() && it.isNotBlank() },
+                email = stored.email.takeIf { u.user?.email.isNullOrBlank() && it.isNotBlank() },
+            )
         }
         profile = stored.copy(
             name = (u?.user?.nickname ?: stored.name.ifBlank { KewuApi.displayName("同学") }).ifBlank { "同学" },
             studentId = uname.ifBlank { stored.studentId },
             school = serverSchool.ifBlank { stored.school },
-            className = serverClass.ifBlank { stored.className },
+            className = serverClass,
+            phone = u?.user?.phone?.ifBlank { null } ?: stored.phone,
+            email = u?.user?.email?.ifBlank { null } ?: stored.email,
         )
     }
 
@@ -232,10 +244,11 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     onSave = {
                         profile = it
                         ProfileStore.save(KewuApi.username.orEmpty(), it) // 持久化（旧版只在内存，切 tab 就丢）
-                        // 昵称 / 学校 / 班级同步到后端（换机不丢）；失败只提示，本地已保存
+                        // 昵称 / 学校 / 手机 / 邮箱同步到后端（换机不丢；联系方式只有任课老师能看到）；
+                        // 班级不提交（以加入的教学班为准）。失败只提示，本地已保存
                         val edited = it
                         profileScope.launch {
-                            KewuApi.updateProfile(edited.name, edited.school, edited.className)
+                            KewuApi.updateProfile(edited.name, edited.school, null, edited.phone, edited.email)
                                 ?.let { err -> snackbar.toast("资料已保存在本机，同步到服务器失败：$err") }
                         }
                         screen = 0
@@ -606,7 +619,7 @@ private fun EditProfilePage(
                 SmallButton("保存", primary = true, enabled = canSave, modifier = Modifier.padding(end = 12.dp)) { save() }
             })
 
-            Column(Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp)) {
+            Column(Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 128.dp) /* 底部导航托盘约 90dp：最下面的按钮要能滚到托盘上方（2026-10-26） */) {
                 Spacer(Modifier.height(6.dp))
 
                 // ── 液态玻璃名片（实时预览）──
@@ -678,8 +691,12 @@ private fun EditProfilePage(
                         onClick = { haptic(HapticKind.Tick); pickSchool = true },
                     )
                     RowDivider()
-                    ProfileInputRow(COUIIcons.Community, AccentPurple, "班级", className, "如 计科 2301 班",
-                        maxCount = 30) { className = it }
+                    // 班级只读：凭邀请码加入教学班后自动绑定；只有任课老师能把学生移出（2026-10-26）
+                    BasicComponent(
+                        title = "班级",
+                        summary = className.ifBlank { "还没有加入班级 · 在「我的 → 加入班级」输入老师给的邀请码" },
+                        startAction = { IconBadge(COUIIcons.Community, AccentPurple) },
+                    )
                 }
 
                 // ── 联系方式 ──
@@ -692,7 +709,7 @@ private fun EditProfilePage(
                         keyboardType = KeyboardType.Email, isError = emailErr != null) { email = it.trim() }
                 }
                 Text(
-                    firstErr ?: "手机号和邮箱只保存在本机，不会同步到服务器或展示给同学",
+                    firstErr ?: "手机号和邮箱会同步到服务器，只有你的任课老师能看到，同学看不到。班级由加入的教学班决定，不能自行修改或退出",
                     color = if (firstErr != null) cs.error else cs.onSurfaceVariantSummary,
                     fontSize = 12.sp,
                     modifier = Modifier.padding(horizontal = 28.dp).myEnter(7),
@@ -939,7 +956,7 @@ private fun RecordingManagePage(backdrop: LayerBackdrop, onBack: () -> Unit) {
         KewuTopBar("录音管理", onBack = onBack)
 
         Column(
-            Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp),
+            Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 128.dp) /* 底部导航托盘约 90dp：最下面的按钮要能滚到托盘上方（2026-10-26） */,
         ) {
             Spacer(Modifier.height(8.dp))
             // 概览玻璃头：总数 / 待重传 / 已上传
@@ -1244,7 +1261,7 @@ internal fun NotificationSettingsPage(backdrop: LayerBackdrop, onBack: () -> Uni
     Column(Modifier.fillMaxSize()) {
         KewuTopBar("通知设置", onBack = onBack)
 
-        Column(Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp)) {
+        Column(Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 128.dp) /* 底部导航托盘约 90dp：最下面的按钮要能滚到托盘上方（2026-10-26） */) {
             Spacer(Modifier.height(8.dp))
             // 说明玻璃卡
             KewuGlassCard(
@@ -1366,7 +1383,7 @@ internal fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
         KewuTopBar("关于我们", onBack = onBack)
 
         Column(
-            Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 40.dp),
+            Modifier.fillMaxWidth().verticalScroll(scrollState).padding(bottom = 128.dp) /* 底部导航托盘约 90dp：最下面的按钮要能滚到托盘上方（2026-10-26） */,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(10.dp))

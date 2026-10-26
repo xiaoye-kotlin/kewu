@@ -11,7 +11,9 @@ object Users : Table("users") {
     val nickname = varchar("nickname", 64).nullable()
     val role = varchar("role", 16)
     val school = varchar("school", 128).nullable()        // 注册时选的学校（2026-10-26，旧版只存在手机本地，换机就没了）
-    val className = varchar("class_name", 128).nullable() // 班级（个人资料可改）
+    val className = varchar("class_name", 128).nullable() // 班级（教师用；学生以加入的教学班为准）
+    val phone = varchar("phone", 32).nullable()           // 联系方式：只给任课老师看（2026-10-26）
+    val email = varchar("email", 128).nullable()
     override val primaryKey = PrimaryKey(id)
 }
 

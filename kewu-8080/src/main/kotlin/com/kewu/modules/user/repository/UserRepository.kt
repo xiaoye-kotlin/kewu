@@ -51,12 +51,14 @@ class UserRepository {
     }
 
     /** 改资料：参数为 null 的字段不动（空串 = 清空）。 */
-    fun updateProfile(userId: String, nickname: String?, school: String?, className: String?) {
+    fun updateProfile(userId: String, nickname: String?, school: String?, className: String?, phone: String? = null, email: String? = null) {
         transaction {
             Users.update({ Users.id eq userId }) {
                 if (nickname != null) it[Users.nickname] = nickname
                 if (school != null) it[Users.school] = school.ifBlank { null }
                 if (className != null) it[Users.className] = className.ifBlank { null }
+                if (phone != null) it[Users.phone] = phone.ifBlank { null }
+                if (email != null) it[Users.email] = email.ifBlank { null }
             }
         }
     }
@@ -81,7 +83,9 @@ class UserRepository {
             role = this[Users.role],
             courseIds = courseIds,
             school = this[Users.school],
-            className = this[Users.className]
+            className = this[Users.className],
+            phone = this[Users.phone],
+            email = this[Users.email]
         )
     }
 }

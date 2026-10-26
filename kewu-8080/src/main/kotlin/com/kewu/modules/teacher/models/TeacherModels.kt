@@ -46,7 +46,7 @@ data class TeacherOverview(
 )
 
 @Serializable
-data class StudentBrief(val studentId: String, val name: String = "")
+data class StudentBrief(val studentId: String, val name: String = "", val studentNo: String = "") // studentNo = 学号（登录账号）
 
 // ---- 请求体 ----
 

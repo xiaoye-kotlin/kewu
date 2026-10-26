@@ -60,7 +60,8 @@ fun Routing.userRoutes(userService: UserService) {
                     ApiResponse<UserProfileResponse>(
                         0, "ok", UserProfileResponse(
                             user = userService.getProfile(userId),
-                            courses = userService.getBoundCourses(userId)
+                            courses = userService.getBoundCourses(userId),
+                            classes = com.kewu.modules.roster.RosterService.joinedClasses(userId)
                         )
                     )
                 )

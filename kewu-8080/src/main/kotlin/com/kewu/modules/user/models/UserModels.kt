@@ -26,7 +26,9 @@ data class RegisterRequest(
 data class UpdateProfileRequest(
     val nickname: String? = null,
     val school: String? = null,
-    val className: String? = null
+    val className: String? = null, // 学生忽略：班级以加入的教学班为准
+    val phone: String? = null,
+    val email: String? = null
 )
 
 @Serializable
@@ -42,11 +44,17 @@ data class UserInfo(
     val nickname: String?,
     val role: String = UserRole.STUDENT,
     val school: String? = null,
-    val className: String? = null
+    val className: String? = null,
+    val phone: String? = null,   // 只在 /me（本人）里返回
+    val email: String? = null
 )
 
 @Serializable
-data class UserProfileResponse(val user: UserInfo?, val courses: List<CourseInfo>)
+data class UserProfileResponse(
+    val user: UserInfo?,
+    val courses: List<CourseInfo>,
+    val classes: List<com.kewu.modules.roster.JoinedClass> = emptyList() // 学生加入的教学班（2026-10-26）
+)
 
 // 内部用的用户实体, 密码不会往外吐
 data class User(
@@ -57,5 +65,7 @@ data class User(
     val role: String = UserRole.STUDENT,
     val courseIds: MutableSet<String> = mutableSetOf(),
     val school: String? = null,
-    val className: String? = null
+    val className: String? = null,
+    val phone: String? = null,
+    val email: String? = null
 )

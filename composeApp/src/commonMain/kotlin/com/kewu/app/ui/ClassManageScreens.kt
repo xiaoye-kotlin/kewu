@@ -409,7 +409,7 @@ private fun ClassStudentsScreen(cls: ClassRoomInfo, onBack: () -> Unit, onImport
                     list.forEach { st ->
                         BasicComponent(
                             title = st.name,
-                            summary = "学号 ${st.studentId}",
+                            summary = "学号 ${st.studentNo.ifBlank { st.studentId }}",
                             startAction = {
                                 // 姓氏头像：coui Surface 浅主色圆角块
                                 Surface(

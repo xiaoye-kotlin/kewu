@@ -27,6 +27,7 @@ import com.kewu.modules.questions.routes.questionRoutes
 import com.kewu.modules.questions.service.QuestionService
 import com.kewu.recserver.recordingModule
 import com.kewu.modules.schedule.scheduleRoutes
+import com.kewu.modules.roster.rosterRoutes
 import com.kewu.modules.upload.routes.uploadRoutes
 import io.ktor.server.application.*
 import io.ktor.server.response.respond
@@ -110,6 +111,8 @@ fun Application.configureRouting() {
         uploadRoutes(uploadRepository)
         // 课表导入 / 我的课表 / 崩溃上报（2026-10-26）
         scheduleRoutes()
+        // 班级通讯录 / 移出学生（2026-10-26）
+        rosterRoutes()
         // 某门课历次下课选出的最佳录音（转写状态 PENDING_ASR / DONE…）
         get("/api/courses/{courseId}/class-recordings") {
             call.respond(com.kewu.models.ApiResponse(0, "ok", classEnd.list(call.parameters["courseId"]!!)))

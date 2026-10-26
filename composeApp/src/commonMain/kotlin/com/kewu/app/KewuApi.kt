@@ -52,6 +52,8 @@ data class UserInfo(
     val id: String, val username: String, val nickname: String?, val role: String = "",
     /** 学校 / 班级（2026-10-26 起存后端，换机不丢）。 */
     val school: String? = null, val className: String? = null,
+    /** 联系方式（只在本人 /me 里返回；老师在班级通讯录里能看到学生的）。 */
+    val phone: String? = null, val email: String? = null,
 )
 data class CourseInfo(
     val id: String, val name: String, val description: String, val teacher: String,
@@ -60,7 +62,12 @@ data class ClassNoteInfo(
     val id: String, val courseId: String, val title: String, val content: String,
     val author: String, val createdAt: String,
 )
-data class UserMe(val user: UserInfo?, val courses: List<CourseInfo>)
+data class UserMe(
+    val user: UserInfo?, val courses: List<CourseInfo>,
+    /** 学生加入的教学班（2026-10-26：学生「班级」以此为准，不可手改）。 */
+    val classes: List<JoinedClass> = emptyList(),
+)
+data class JoinedClass(val id: String, val name: String, val courseId: String, val courseName: String, val teacherName: String)
 
 data class AssignmentInfo(
     val id: String, val courseId: String, val title: String, val description: String,
@@ -247,7 +254,13 @@ data class TeacherOverview(
     val classes: List<ClassRoomInfo>,
 )
 
-data class ClassStudent(val studentId: String, val name: String)
+/** [studentId] = 用户 id（移出班级用）；[studentNo] = 学号（登录账号，展示用）。 */
+data class ClassStudent(val studentId: String, val name: String, val studentNo: String = "")
+/** 班级通讯录里的一名学生（只有该班老师拿得到手机 / 邮箱）。 */
+data class StudentContact(
+    val userId: String, val studentNo: String, val name: String,
+    val school: String?, val phone: String?, val email: String?,
+)
 
 /** 控制台聚合里的今日课程项（state: ON=上课中 / OFF=未开课；todayCheckRate 可能为 null=今日未发签到）。 */
 data class TeacherTodayCourse(
@@ -606,8 +619,13 @@ object KewuApi {
     catch (_: Exception) { null }
 
     /** 修改个人资料（昵称 / 学校 / 班级，传 null 的不改）。成功返回 null，失败返回原因。 */
-    suspend fun updateProfile(nickname: String? = null, school: String? = null, className: String? = null): String? = try {
+    suspend fun updateProfile(
+        nickname: String? = null, school: String? = null, className: String? = null,
+        phone: String? = null, email: String? = null,
+    ): String? = try {
         val body = mutableMapOf<String, Any?>()
+        if (phone != null) body["phone"] = phone
+        if (email != null) body["email"] = email
         if (nickname != null) body["nickname"] = nickname
         if (school != null) body["school"] = school
         if (className != null) body["className"] = className
@@ -644,7 +662,11 @@ object KewuApi {
                 UserInfo(
                     it["id"].str(), it["username"].str(), it["nickname"].strOrNull(), it["role"].str(),
                     school = it["school"].strOrNull(), className = it["className"].strOrNull(),
+                    phone = it["phone"].strOrNull(), email = it["email"].strOrNull(),
                 )
+            },
+            classes = (data["classes"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map {
+                JoinedClass(it["id"].str(), it["name"].str(), it["courseId"].str(), it["courseName"].str(), it["teacherName"].str())
             },
             courses = courses,
         )
@@ -1425,9 +1447,32 @@ object KewuApi {
     suspend fun getClassStudents(classId: String): List<ClassStudent>? = try {
         val el = getJson("$BASE_URL/api/teacher/classes/${pathSegment(classId)}/students")
         el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }
-            .map { ClassStudent(it["studentId"].str(), it["name"].str()) }
+            .map { ClassStudent(it["studentId"].str(), it["name"].str(), it["studentNo"].str()) }
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
+
+    /** 班级通讯录（老师，需 token 且必须是该班老师）。失败返回 (null, 原因)。 */
+    suspend fun getClassContacts(classId: String): Pair<List<StudentContact>?, String?> = try {
+        val el = getJson("$BASE_URL/api/teacher/classes/${pathSegment(classId)}/contacts", auth = true)
+        el.asDataOrThrow()
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map {
+            StudentContact(
+                it["userId"].str(), it["studentNo"].str(), it["name"].str(),
+                it["school"].strOrNull(), it["phone"].strOrNull(), it["email"].strOrNull(),
+            )
+        } to null
+    } catch (e: ApiException) { null to e.message }
+    catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null to "网络异常，请稍后重试" }
+
+    /** 把学生移出班级（老师）。成功返回 null，失败返回原因。 */
+    suspend fun removeStudentFromClass(classId: String, userId: String): String? = try {
+        postJson("$BASE_URL/api/teacher/classes/${pathSegment(classId)}/students/${pathSegment(userId)}/remove",
+            emptyMap<String, Any?>(), auth = true).asDataOrThrow()
+        null
+    } catch (e: ApiException) { e.message }
+    catch (e: CancellationException) { throw e }
+    catch (_: Exception) { "网络异常，请稍后重试" }
 
     /** 学生用邀请码加入班级（成功后自动把课程绑到学生名下）。data=后端成功文案（如「已加入《云计算 1 班》」）。 */
     suspend fun joinClassByInvite(inviteCode: String, studentId: String = teacherId()): ApiResult<String> = try {

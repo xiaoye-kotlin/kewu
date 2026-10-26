@@ -61,17 +61,24 @@ class UserService(private val repository: UserRepository, private val courseRepo
         courseRepository.findCoursesByIds(repository.getBoundCourseIds(userId)).map { it.toInfo() }
 
     fun updateProfile(userId: String, req: UpdateProfileRequest): Result<UserInfo> {
-        repository.findUserById(userId) ?: return Result.failure(IllegalArgumentException("用户不存在"))
+        val u = repository.findUserById(userId) ?: return Result.failure(IllegalArgumentException("用户不存在"))
+        val phone = req.phone?.trim()
+        if (!phone.isNullOrEmpty() && !Regex("^1\\d{10}$").matches(phone)) return Result.failure(IllegalArgumentException("请输入 11 位手机号"))
+        val email = req.email?.trim()
+        if (!email.isNullOrEmpty() && !Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$").matches(email)) return Result.failure(IllegalArgumentException("邮箱格式不正确"))
         repository.updateProfile(
             userId,
             req.nickname?.trim()?.take(64)?.ifBlank { null },
             req.school?.trim()?.take(128),
-            req.className?.trim()?.take(128)
+            // 学生的班级以加入的教学班为准，不接受自己改（2026-10-26）
+            if (u.role == UserRole.TEACHER) req.className?.trim()?.take(128) else null,
+            phone?.take(32),
+            email?.take(128)
         )
         // 改了姓名 / 学校后再认领一次课表
         runCatching { com.kewu.modules.schedule.ScheduleService.autoBindTeacher(userId) }
         return Result.success(repository.findUserById(userId)!!.toInfo())
     }
 
-    private fun User.toInfo() = UserInfo(id, username, nickname, role, school, className)
+    private fun User.toInfo() = UserInfo(id, username, nickname, role, school, className, phone, email)
 }

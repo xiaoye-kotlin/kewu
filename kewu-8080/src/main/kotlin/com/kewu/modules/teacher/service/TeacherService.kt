@@ -257,7 +257,7 @@ class TeacherService(
         return Result.success(
             cls.studentIds.map { id ->
                 val u = userRepository.findUserById(id)
-                StudentBrief(id, u?.nickname ?: u?.username ?: id)
+                StudentBrief(id, u?.nickname ?: u?.username ?: id, u?.username ?: "")
             }
         )
     }

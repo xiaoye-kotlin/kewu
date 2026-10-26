@@ -60,7 +60,7 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 
 @Composable
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
-    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们（编号与学生端对齐）
+    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们 9=同学通讯录（编号与学生端对齐）
     var screen by remember { mutableStateOf(0) }
     LockTabSwipe(screen != 0)
 
@@ -124,6 +124,7 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                     onClasses = { screen = 5 },
                     onNotification = { screen = 6 },
                     onAbout = { screen = 7 },
+                    onDirectory = { screen = 9 },
                     onLogout = onLogout,
                 )
                 1 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
@@ -133,6 +134,7 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 5 -> TeacherClassesScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
+                9 -> StudentDirectoryScreen(onBack = { screen = 0 })
             }
         }
     }
@@ -151,6 +153,7 @@ private fun TeacherMyHome(
     onClasses: () -> Unit,
     onNotification: () -> Unit,
     onAbout: () -> Unit,
+    onDirectory: () -> Unit,
     onLogout: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
@@ -212,6 +215,7 @@ private fun TeacherMyHome(
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(2))) {
             FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop, onClick = onCreateCourse)
             FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop, onClick = onClasses)
+            FuncRow(5, "同学通讯录", "查看每位同学的联系方式与个人主页，可移出班级", backdrop, onClick = onDirectory)
             FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop, onClick = onBindCourse)
             FuncRow(7, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop, onClick = onCreateAttendance)
             FuncRow(8, "发布笔记", "记录课堂要点，学生端即时可见", backdrop, onClick = onPostNote)
