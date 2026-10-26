@@ -71,6 +71,8 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build > build/xcodebuild.log 2>&1 || true
           grep -E "error:|^e: |BUILD (SUCCEEDED|FAILED)" build/xcodebuild.log | head -80 || true
+          # 失败时直接把日志尾巴打进 Actions 输出（2026-10-27：runner 网络抽风时日志 artifact 也传不上去，失败原因就看不到了）
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log || tail -60 build/xcodebuild.log
           # 必须真编译成功且有可执行文件（旧版只查 .app 目录在不在：Kotlin 编译失败时会打出只有 Info.plist 的空包）
           grep -q "BUILD SUCCEEDED" build/xcodebuild.log
           test -f "build/ios/Build/Products/Release-iphoneos/Kewu.app/Kewu"
