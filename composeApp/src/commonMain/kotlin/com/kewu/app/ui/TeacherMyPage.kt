@@ -60,7 +60,7 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 
 @Composable
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
-    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们 9=同学通讯录（编号与学生端对齐）
+    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们 8=内存管理（编号与学生端对齐）
     var screen by remember { mutableStateOf(0) }
     LockTabSwipe(screen != 0)
 
@@ -124,6 +124,7 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                     onClasses = { screen = 5 },
                     onNotification = { screen = 6 },
                     onAbout = { screen = 7 },
+                    onStorage = { screen = 8 },
                     onDirectory = { screen = 9 },
                     onLogout = onLogout,
                 )
@@ -134,6 +135,7 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 5 -> TeacherClassesScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
+                8 -> StorageManagePage(onBack = { screen = 0 })
                 9 -> StudentDirectoryScreen(onBack = { screen = 0 })
             }
         }
@@ -153,6 +155,7 @@ private fun TeacherMyHome(
     onClasses: () -> Unit,
     onNotification: () -> Unit,
     onAbout: () -> Unit,
+    onStorage: () -> Unit,
     onDirectory: () -> Unit,
     onLogout: () -> Unit,
 ) {
@@ -224,6 +227,7 @@ private fun TeacherMyHome(
         GroupLabel("通用", Modifier.riseEnter(rememberEnterProgress(5)))
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(6))) {
             FuncRow(2, "通知设置", "签到提醒、作业提醒与权限管理", backdrop, onClick = onNotification)
+            FuncRow(9, "内存管理", "清理聊天记录、图片与缓存文件", backdrop, onClick = onStorage)
             FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout)
         }
 

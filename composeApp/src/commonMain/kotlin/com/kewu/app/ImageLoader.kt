@@ -83,4 +83,21 @@ object ImageLoader {
         }
         return bytes
     }
+
+    /** 缓存占用（内存管理页）：(原始字节 + 解码位图按 4 字节/像素, 图片张数)。 */
+    suspend fun cacheStats(): Pair<Long, Int> = mutex.withLock {
+        val raw = bytesCache.values.sumOf { it.size.toLong() }
+        val bmp = bitmapCache.values.sumOf { it.width.toLong() * it.height * 4 }
+        (raw + bmp) to maxOf(bytesCache.size, bitmapCache.size)
+    }
+
+    /** 清空图片缓存，返回释放的字节数。下次查看会重新下载。 */
+    suspend fun clear(): Long {
+        val freed = cacheStats().first
+        mutex.withLock {
+            bytesCache.clear()
+            bitmapCache.clear()
+        }
+        return freed
+    }
 }

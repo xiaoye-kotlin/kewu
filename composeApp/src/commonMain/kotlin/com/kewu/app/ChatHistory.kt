@@ -157,6 +157,24 @@ object ChatHistory {
         }
     }
 
+    /**
+     * 按条件删除（「我的 → 内存管理 → AI 聊天记录」：删某天 / 删所选几天 / 只留最近 N 天 / 删单条 / 清空）。
+     * 走 [saveAll] 全量重写——这里正是要真删，不能用只增不删的 [upsert]。返回删掉的条数。
+     */
+    fun deleteWhere(key: String, predicate: (Entry) -> Boolean): Int {
+        val all = loadAll(key)
+        val kept = all.filterNot(predicate)
+        val removed = all.size - kept.size
+        if (removed > 0) saveAll(key, kept)
+        return removed
+    }
+
+    /** 估算占用：(字节数, 条数)。按正文 / 引用的 UTF-8 长度 + 每条约 64 字节字段开销。 */
+    fun storedBytes(key: String): Pair<Long, Int> {
+        val all = loadAll(key)
+        return all.sumOf { e -> 64L + e.text.encodeToByteArray().size + (e.quote?.encodeToByteArray()?.size ?: 0) } to all.size
+    }
+
     /** 追加一条（[AssistantHub.deliver] 用：页面不在前台时也能落盘）。 */
     fun append(key: String, entry: Entry) = upsert(key, listOf(entry))
 
