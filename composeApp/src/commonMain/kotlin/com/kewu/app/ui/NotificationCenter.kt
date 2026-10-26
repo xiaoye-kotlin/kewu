@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.todayCn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -226,9 +227,8 @@ private fun formatNotifTime(ts: Long): String {
         diff < 86_400_000 && dayStartNow == dayStartTs -> "${diff / 3_600_000} 小时前"
         dayStartNow - dayStartTs == 1L -> "昨天"
         else -> {
-            val d = java.time.Instant.ofEpochMilli(ts)
-                .atZone(java.time.ZoneId.of("UTC+8"))
-            "${d.year}-${d.monthValue.toString().padStart(2, '0')}-${d.dayOfMonth.toString().padStart(2, '0')}"
+            // 2026-10-26：commonMain 不能用 java.time（iOS 编不过），用东八区日期工具
+            todayCn(ts)
         }
     }
 }

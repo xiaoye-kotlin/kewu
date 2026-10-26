@@ -93,12 +93,12 @@ object AiClient {
     private val json = Json { ignoreUnknownKeys = true }
 
     /** 最近一次调用的错误描述（调试用；成功置 null）。 */
-    @Volatile
+    @kotlin.concurrent.Volatile
     var lastError: String? = null
         private set
 
     private fun logErr(where: String, e: Exception) {
-        lastError = "$where: ${e.javaClass.simpleName}: ${e.message}"
+        lastError = "$where: ${e::class.simpleName}: ${e.message}"
         println("[AiClient] $where failed -> $lastError")
     }
 

@@ -67,7 +67,10 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             build > build/xcodebuild.log 2>&1 || true
           grep -E "error:|^e: |BUILD (SUCCEEDED|FAILED)" build/xcodebuild.log | head -80 || true
-          test -d "build/ios/Build/Products/Release-iphoneos/Kewu.app"
+          # 必须真编译成功且有可执行文件（旧版只查 .app 目录在不在：Kotlin 编译失败时会打出只有 Info.plist 的空包）
+          grep -q "BUILD SUCCEEDED" build/xcodebuild.log
+          test -f "build/ios/Build/Products/Release-iphoneos/Kewu.app/Kewu"
+          du -sh "build/ios/Build/Products/Release-iphoneos/Kewu.app"
 
       - name: Package IPA
         run: |
