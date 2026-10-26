@@ -15,7 +15,8 @@ on:
 
 concurrency:
   group: ios-ipa-${{ github.ref }}
-  cancel-in-progress: true
+  # 不取消进行中的编译（iOS 一次要 10 分钟以上，频繁推送会让它永远编不完）；新推送排队等待
+  cancel-in-progress: false
 
 jobs:
   build:
