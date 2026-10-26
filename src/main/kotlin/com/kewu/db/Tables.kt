@@ -1,0 +1,174 @@
+package com.kewu.db
+
+import org.jetbrains.exposed.sql.Table
+
+// 数据库表结构：每个内存 map 对应一张表，字段名和模型一一对应
+// 日期一律用字符串存（模型里本来就是 String），JSON 字段序列化成 TEXT
+object Users : Table("users") {
+    val id = varchar("id", 36)
+    val username = varchar("username", 64).uniqueIndex()
+    val passwordHash = varchar("password_hash", 100)
+    val nickname = varchar("nickname", 64).nullable()
+    val role = varchar("role", 16)
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 用户绑定的课程，多对多
+object UserCourses : Table("user_courses") {
+    val userId = varchar("user_id", 36)
+    val courseId = varchar("course_id", 64)
+    override val primaryKey = PrimaryKey(userId, courseId)
+}
+
+object Courses : Table("courses") {
+    val id = varchar("id", 64)
+    val name = varchar("name", 128)
+    val description = text("description")
+    val teacher = varchar("teacher", 64)
+    val coverUrl = varchar("cover_url", 512).nullable()
+    override val primaryKey = PrimaryKey(id)
+}
+
+object ClassNotes : Table("class_notes") {
+    val id = varchar("id", 64)
+    val courseId = varchar("course_id", 64).index()
+    val title = varchar("title", 256)
+    val content = text("content")
+    val author = varchar("author", 64)
+    val createdAt = varchar("created_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 教学班：老师开的班，学生拿邀请码加入
+object Classes : Table("classes") {
+    val id = varchar("id", 64)
+    val name = varchar("name", 128)
+    val courseId = varchar("course_id", 64).index()
+    val courseName = varchar("course_name", 128)
+    val teacherId = varchar("teacher_id", 64).index()
+    val teacherName = varchar("teacher_name", 64)
+    val term = varchar("term", 32)
+    val inviteCode = varchar("invite_code", 16).uniqueIndex()
+    val createdAt = varchar("created_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 班里的学生，多对多
+object ClassStudents : Table("class_students") {
+    val classId = varchar("class_id", 64)
+    val studentId = varchar("student_id", 64)
+    override val primaryKey = PrimaryKey(classId, studentId)
+}
+
+// 课程的开课/下课状态
+object ClassStates : Table("class_states") {
+    val courseId = varchar("course_id", 64)
+    val courseName = varchar("course_name", 128)
+    val state = varchar("state", 8)
+    val teacherId = varchar("teacher_id", 64)
+    val teacherName = varchar("teacher_name", 64)
+    val startedAt = varchar("started_at", 32).nullable()
+    val endedAt = varchar("ended_at", 32).nullable()
+    val updatedAt = varchar("updated_at", 32)
+    override val primaryKey = PrimaryKey(courseId)
+}
+
+object Assignments : Table("assignments") {
+    val id = varchar("id", 64)
+    val courseId = varchar("course_id", 64).index()
+    val title = varchar("title", 256)
+    val description = text("description")
+    val deadline = varchar("deadline", 32)
+    val totalScore = integer("total_score")
+    val knowledgePoints = text("knowledge_points") // JSON 数组
+    val publisher = varchar("publisher", 64)
+    val createdAt = varchar("created_at", 32)
+    // 结构化题目（单选/多选/判断/填空/简答），JSON 数组；为空就是老版纯文本作业。
+    // 用可空列而不是 DEFAULT '[]'：MySQL 对 TEXT 列加 DEFAULT 有版本限制（8.0.13 才允许），
+    // 老库 ALTER 上去容易踩坑，可空列在任何版本都成立，null 在仓储层按 "[]" 处理
+    val questions = text("questions").nullable()
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 一次提交：修改历史、AI 建议都是 JSON 文本
+object Submissions : Table("submissions") {
+    val id = varchar("id", 64)
+    val assignmentId = varchar("assignment_id", 64).index()
+    val studentId = varchar("student_id", 64).index()
+    val studentName = varchar("student_name", 64)
+    val content = text("content")
+    val version = integer("version")
+    val submittedAt = varchar("submitted_at", 32)
+    val status = varchar("status", 16).index()
+    val score = double("score").nullable()
+    val comment = text("comment")
+    val reviewer = varchar("reviewer", 64)
+    val reviewedAt = varchar("reviewed_at", 32)
+    val history = text("history") // JSON 数组
+    val ai = text("ai").nullable() // JSON 对象或 null
+    val answers = text("answers").nullable()             // JSON 数组，学生的结构化作答
+    val questionResults = text("question_results").nullable() // JSON 数组，逐题判定结果
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 签到场次；quiz 是 JSON；start_at_millis 单独存，重启后迟到计算才准
+object AttendanceSessions : Table("attendance_sessions") {
+    val id = varchar("id", 64)
+    val courseId = varchar("course_id", 64).index()
+    val title = varchar("title", 256)
+    val mode = varchar("mode", 16)
+    val state = varchar("state", 16)
+    val publisher = varchar("publisher", 64)
+    val createdAt = varchar("created_at", 32)
+    val expireAt = varchar("expire_at", 32)
+    val lateAfterSeconds = integer("late_after_seconds")
+    val latitude = double("latitude").nullable()
+    val longitude = double("longitude").nullable()
+    val radiusMeters = integer("radius_meters")
+    val quiz = text("quiz").nullable() // JSON 对象或 null
+    val startAtMillis = long("start_at_millis")
+    override val primaryKey = PrimaryKey(id)
+}
+
+object AttendanceRecords : Table("attendance_records") {
+    val id = varchar("id", 64)
+    val sessionId = varchar("session_id", 64).index()
+    val studentId = varchar("student_id", 64)
+    val studentName = varchar("student_name", 64)
+    val checkedInAt = varchar("checked_in_at", 32)
+    val status = varchar("status", 16)
+    val method = varchar("method", 16)
+    val answer = varchar("answer", 256).nullable()
+    val secondsAfterStart = long("seconds_after_start")
+    val distanceMeters = double("distance_meters").nullable()
+    val deviceId = varchar("device_id", 64).nullable()
+    val riskScore = integer("risk_score")
+    val riskReasons = text("risk_reasons") // JSON 数组
+    override val primaryKey = PrimaryKey(id)
+}
+
+// 课程的学生名单，算签到"应到人数"
+object AttendanceRoster : Table("attendance_roster") {
+    val courseId = varchar("course_id", 64)
+    val studentId = varchar("student_id", 64)
+    override val primaryKey = PrimaryKey(courseId, studentId)
+}
+
+// 助教页 / 学生端提问记录：学情雷达就是从这 50 条里提炼核心知识点
+object Questions : Table("questions") {
+    val id = varchar("id", 36)
+    val courseId = varchar("course_id", 64).index()
+    val content = text("content")
+    val studentId = varchar("student_id", 64).nullable()      // 谁提的问（可选，前端不传就留空）
+    val studentName = varchar("student_name", 128).nullable()  // 展示用昵称
+    val createdAt = varchar("created_at", 32)
+    override val primaryKey = PrimaryKey(id)
+}
+
+val allTables = arrayOf(
+    Users, UserCourses, Courses, ClassNotes,
+    Classes, ClassStudents, ClassStates,
+    Assignments, Submissions,
+    AttendanceSessions, AttendanceRecords, AttendanceRoster,
+    Questions
+)
