@@ -70,7 +70,9 @@ class SisTranscriptionService(private val cfg: SisConfig) {
         // 请求体按 SIS 文档结构：config 里放格式/模型参数，data_url 放 OBS 音频地址
         val body = buildJsonObject {
             put("config", buildJsonObject {
-                put("audio_format", audioFormat)
+                // 2026-10-27：按官方 audio_format 取值表，wav/mp3/m4a 等容器格式只能填 auto（系统自动判断），
+                // 只有裸 PCM / ulaw / alaw 才填具体值；旧版直接把 "wav" 传过去不在取值范围内
+                put("audio_format", if (audioFormat.startsWith("pcm") || audioFormat.startsWith("ulaw") || audioFormat.startsWith("alaw")) audioFormat else "auto")
                 put("property", "chinese_16k_media") // 课堂录音建议用媒体模型
                 put("add_punc", "yes")               // 加标点，便于后续 AI 总结
                 put("digit_norm", "no")
