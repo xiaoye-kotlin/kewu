@@ -260,7 +260,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 )
                 2 -> RecordingManagePage(pageBackdrop, onBack = { screen = 0 })
                 3 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
-                4 -> JoinClassScreen(pageBackdrop, onBack = { screen = 0 })
+                4 -> StudentClassScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
                 8 -> StorageManagePage(onBack = { screen = 0 })
@@ -417,7 +417,10 @@ private fun MyHome(
         GroupLabel("校园功能", Modifier.myEnter(3))
         KewuCardGroup(Modifier.myEnter(4)) {
             FuncRow(0, "课程绑定", "绑定课表，按时自动录音", backdrop, onClick = onBindCourse)
-            FuncRow(5, "加入班级", "输入老师发的 6 位邀请码加入班级", backdrop, onClick = onJoinClass)
+            // 2026-10-27：已加入班级 → 入口变「查看班级」（班级信息 + 本班课表）
+            val joinedClass = KewuApi.currentUser?.classes?.firstOrNull()?.name
+            if (joinedClass != null) FuncRow(5, "查看班级", "$joinedClass · 班级信息与本班课表", backdrop, onClick = onJoinClass)
+            else FuncRow(5, "加入班级", "输入老师发的 6 位邀请码加入班级", backdrop, onClick = onJoinClass)
             FuncRow(1, "录音管理", "录音回放、手动重传与多端择优融合", backdrop, onClick = onRecording)
         }
         KewuCardGroup(Modifier.myEnter(5)) {

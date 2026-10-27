@@ -59,6 +59,10 @@ class TeacherService(
             return Result.failure(IllegalArgumentException("这个账号不是老师, 只有老师账号能建班"))
         }
         if (req.name.isBlank()) return Result.failure(IllegalArgumentException("班级名不能为空"))
+        // 2026-10-27：同一老师不允许重名班级（旧版可建两个同名班，学生进了一个、课表导进另一个）
+        if (repository.listByTeacher(teacher.id).any { it.name.trim() == req.name.trim() }) {
+            return Result.failure(IllegalArgumentException("你已经有一个叫「${req.name.trim()}」的班级了，换个名字或直接在原班级里操作"))
+        }
         // 课程可选（2026-10-27）：不传就先建班，导入课表时再关联（ScheduleService.import 回填 courseId）
         val course = if (req.courseId.isBlank()) null else courseRepository.findCourse(req.courseId)
             ?: return Result.failure(IllegalArgumentException("课程不存在: ${req.courseId}"))

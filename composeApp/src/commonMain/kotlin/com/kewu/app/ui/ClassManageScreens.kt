@@ -433,11 +433,8 @@ private fun ClassStudentsScreen(cls: ClassRoomInfo, onBack: () -> Unit, onImport
  */
 @Composable
 internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
-    val scope = rememberCoroutineScope()
     val snackbar = LocalKewuSnackbar.current
     var code by remember { mutableStateOf("") }
-    var loading by remember { mutableStateOf(false) }
-    var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
         KewuTopBar("加入班级", onBack)
@@ -446,45 +443,97 @@ internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
             placeholder = "如 K7Q2XM")
         Spacer(Modifier.height(4.dp))
         KewuPrimaryButton(
-            text = if (loading) "正在加入…" else "加入班级",
+            text = "加入班级",
             onClick = {
-                scope.launch {
-                    loading = true
-                    val r = KewuApi.joinClassByInvite(code)
-                    loading = false
-                    result = if (r.data != null) {
-                        true to r.data
+                // ★ 2026-10-27 用户口径：点了就立刻退出本页 + 立刻有反馈，加入在后台完成、结果用提示告诉用户。
+                //   请求与刷新放在与页面无关的 scope：onBack() 后本页离开组合，rememberCoroutineScope 会被取消
+                //   （旧版把刷新写在 onBack() 后面，实际从没执行，课堂页课程一直是 0）
+                val c = code
+                haptic(HapticKind.Light)
+                onBack()
+                JoinRefreshScope.launch {
+                    val r = KewuApi.joinClassByInvite(c)
+                    // 已在班里也按成功处理：同样刷新
+                    val ok = r.data != null || r.error?.contains("已经在") == true
+                    if (ok) {
+                        KewuApi.me(force = true)
+                        com.kewu.app.CourseRepo.refresh(force = true)
+                        com.kewu.app.AssignmentRepo.refresh()
+                        val cls = KewuApi.currentUser?.classes?.lastOrNull()?.name
+                        snackbar.toast(
+                            if (r.data != null) "已加入${cls?.let { "「$it」" } ?: "班级"}，课程与课表已同步"
+                            else "你已在这个班级，课程已同步"
+                        )
                     } else {
-                        false to (r.error ?: "加入失败，请确认邀请码后重试")
+                        haptic(HapticKind.Medium)
+                        snackbar.toast("加入失败：" + (r.error ?: "请确认邀请码后重试"))
                     }
-                    // 已在班里也按成功处理：同样退出 + 刷新（重复点加入不该卡在原页）
-                    val already = r.error?.contains("已经在") == true
-                    if (r.data != null || already) {
-                        code = ""
-                        haptic(HapticKind.Light)
-                        snackbar.toast(r.data ?: "你已在这个班级，课程已同步")
-                        // 2026-10-27：加入成功立刻退回「我的」（旧版停在原页，看起来像没反应），
-                        // 并刷新本人资料 / 课程 / 作业：班级、课表里的课马上可见。
-                        // ★ 刷新必须放进与页面无关的 scope：onBack() 后本页离开组合，rememberCoroutineScope 随之取消，
-                        //   旧版把刷新写在 onBack() 后面，实际从没执行，课堂页课程一直是 0
-                        JoinRefreshScope.launch {
-                            KewuApi.me(force = true)
-                            com.kewu.app.CourseRepo.refresh(force = true)
-                            com.kewu.app.AssignmentRepo.refresh()
-                        }
-                        onBack()
-                        return@launch
-                    }
-                    result?.let { snackbar.toast(it.second) }
                 }
             },
-            enabled = code.length == 6 && !loading,
+            enabled = code.length == 6,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
         )
-        TeacherToolFailTips(result) { result = null }
+        Spacer(Modifier.height(24.dp))
+    }
+}
+
+// ───────────────────────── 我的班级（学生：已加入后「加入班级」变「查看班级」） ─────────────────────────
+
+/**
+ * 学生「我的 → 班级」入口（2026-10-27）：还没加入任何班级 → 邀请码加入页；
+ * 已加入 → 班级信息 + 本班课表（老师建班时导入的），底部可再加入其他班级。
+ */
+@Composable
+internal fun StudentClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
+    var joining by remember { mutableStateOf(false) }
+    var classes by remember { mutableStateOf(KewuApi.currentUser?.classes) }
+    var schedule by remember { mutableStateOf<List<com.kewu.app.ScheduleEntry>?>(null) }
+    LaunchedEffect(Unit) {
+        KewuApi.me(force = true)
+        classes = KewuApi.currentUser?.classes.orEmpty()
+        schedule = KewuApi.getMySchedule().orEmpty()
+    }
+    val list = classes
+    if (joining || (list != null && list.isEmpty())) {
+        JoinClassScreen(backdrop, onBack = { if (joining && !list.isNullOrEmpty()) joining = false else onBack() })
+        return
+    }
+    val cs = COUITheme.colorScheme
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+        KewuTopBar("我的班级", onBack)
+        if (list == null) { KewuLoading(); return@Column }
+        list.forEach { c ->
+            IntroGlass(backdrop, c.name, "班主任 / 任课老师：${c.teacherName.ifBlank { "未填写" }}")
+            val rows = schedule?.filter { it.classId == c.id }
+            when {
+                rows == null -> KewuLoading()
+                rows.isEmpty() -> KewuEmpty("老师还没有导入本班课表")
+                else -> {
+                    KewuSectionTitle("本班课表 · ${rows.size} 节")
+                    KewuCardGroup {
+                        rows.sortedWith(compareBy({ it.weekday }, { it.startTime })).forEach { e ->
+                            BasicComponent(
+                                title = e.courseName,
+                                summary = "${WEEK_NAMES.getOrElse(e.weekday - 1) { "" }} ${e.startTime}–${e.endTime}" +
+                                    (if (e.location.isNotBlank()) " · ${e.location}" else "") +
+                                    (if (e.teacherName.isNotBlank()) " · ${e.teacherName}" else "") +
+                                    (if (e.weeks.isNotBlank()) " · ${e.weeks}" else ""),
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+        }
+        Text(
+            "班级加入后不能自行退出，如需调整请联系老师。",
+            color = cs.onSurfaceSecondary, fontSize = 12.sp,
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+        )
+        KewuSecondaryButton("加入其他班级", { joining = true }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
         Spacer(Modifier.height(24.dp))
     }
 }
 
 /** 加入班级后的资料 / 课程刷新用：不随页面销毁取消（见 [JoinClassScreen]）。 */
-private val JoinRefreshScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+private val JoinRefreshScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)

@@ -92,6 +92,7 @@ internal fun ScheduleImportScreen(
     val entries = remember { mutableStateListOf<ScheduleEntry>() }
     var aiText by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
+    var createdClassId by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     val teacherName = KewuApi.displayName("")
 
@@ -253,9 +254,12 @@ internal fun ScheduleImportScreen(
                     busy = true
                     scope.launch {
                         // 新建班级：先建班拿到 id，再把课表导进这个班
-                        val cid = classId ?: createClass?.let { create ->
+                        // ★ 2026-10-27：建好的班级 id 记在本页，导入失败后再点只重试导入，不再重复建班
+                        //   （旧版每点一次都先建一个新班，出现了两个同名班级：学生进了前一个，课表导进了后一个）
+                        val cid = classId ?: createdClassId ?: createClass?.let { create ->
                             val (id, e) = create()
                             if (id == null) { busy = false; error = e ?: "建班失败"; return@launch }
+                            createdClassId = id
                             id
                         }
                         val (res, err) = KewuApi.importSchedule(cid, entries.toList())
@@ -277,6 +281,7 @@ internal fun ScheduleImportScreen(
                     if (busy) return@KewuSecondaryButton
                     busy = true
                     scope.launch {
+                        if (createdClassId != null) { busy = false; onDone(); return@launch }
                         val (id, e) = createClass()
                         busy = false
                         if (id != null) onDone() else error = e ?: "建班失败"
