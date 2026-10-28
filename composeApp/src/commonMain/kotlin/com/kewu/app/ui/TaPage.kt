@@ -855,7 +855,7 @@ private fun Modifier.pressBounce(onClick: () -> Unit): Modifier {
  * 单一 detectTapGestures 同时承载 onTap/onLongPress，避免 pressBounce 与 combinedClickable 抢手势。
  */
 @Composable
-private fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
+internal fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
     val pressed = remember { mutableStateOf(false) }
     // ★ 稳定手势：onLongPress 内联 lambda 每次重组身份都变，用 pointerInput(Unit) + rememberUpdatedState
     //   避免快速交互时手势监听被反复重建（第三轮 12.5 修复①）。
@@ -1095,7 +1095,7 @@ private fun UserBubble(
  * （旧版是把原文包「」塞进输入框，效果差且污染输入内容。）
  */
 @Composable
-private fun QuotePreviewBar(text: String, onCancel: () -> Unit) {
+internal fun QuotePreviewBar(text: String, onCancel: () -> Unit) {
     val cs = COUITheme.colorScheme
     // coui Surface 承载底色 + 描边；× 换 coui IconButton + Close 图标
     Surface(

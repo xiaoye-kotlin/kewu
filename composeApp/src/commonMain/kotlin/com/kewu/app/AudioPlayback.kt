@@ -83,6 +83,11 @@ object AudioPlayback {
         if (_state.value.key == key) stop()
     }
 
+    /** 当前播的 key 以 [prefix] 开头才停（如离开录音管理页时停掉所有 `rec:` 回放）。 */
+    fun stopIfPrefix(prefix: String) {
+        if (_state.value.key?.startsWith(prefix) == true) stop()
+    }
+
     private fun start(key: String, source: String) {
         releasePlayer()
         _state.value = State(key = key, phase = Phase.LOADING)

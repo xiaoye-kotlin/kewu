@@ -95,13 +95,13 @@ import io.github.suqi8.coui.kmp.basic.TextFieldMode
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
-import io.github.suqi8.coui.kmp.icon.extended.Folder
 import io.github.suqi8.coui.kmp.icon.extended.AddCircle
 import io.github.suqi8.coui.kmp.icon.extended.Alarm
 import io.github.suqi8.coui.kmp.icon.extended.Back
 import io.github.suqi8.coui.kmp.icon.extended.Community
 import io.github.suqi8.coui.kmp.icon.extended.Edit
 import io.github.suqi8.coui.kmp.icon.extended.Info
+import io.github.suqi8.coui.kmp.icon.extended.Folder
 import io.github.suqi8.coui.kmp.icon.extended.More
 import io.github.suqi8.coui.kmp.icon.extended.Notes
 import io.github.suqi8.coui.kmp.icon.extended.RecordingTape
@@ -212,7 +212,12 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
 
     // ★ 内部子页返回：screen != 0 时（编辑资料 / 录音管理 / 课程绑定 / 通知设置 / 关于我们）
     // 按返回键回到主页（screen=0），而不是直接 finish Activity 退出软件。
-    BackHandler(enabled = screen != 0) { screen = 0 }
+    BackHandler(enabled = screen != 0) {
+        if (screen == 2) AudioPlayback.stopIfPrefix("rec:")
+        screen = 0
+    }
+    // 切走「我的」tab 时停掉录音回放（录音管理页的播放条不随行销毁自动停，见 AudioPlayerBar.stopOnDispose）
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { AudioPlayback.stopIfPrefix("rec:") } }
 
     Box(Modifier.fillMaxSize()) {
         // 背景层：coui 页面灰底，是玻璃的采样源（采集层与玻璃平级 ✓）
@@ -222,12 +227,12 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(COUITheme.colorScheme.surface),
         )
-        // ★ 2026-10-26 Telegram 式推入 / 返回 + 右滑跟手返回（编辑资料页不开，免得一滑丢掉没保存的修改）
+        // ★ 2026-10-26 Telegram 式推入 / 返回 + 右滑跟手返回（编辑资料页不开，免得一滑丢掉没保存的修改；录音管理页不开，与播放进度条横向拖动冲突）
         KewuSlideHost(
             targetState = screen,
             modifier = Modifier.fillMaxSize(),
             isForward = { a, b -> b > a },
-            swipeEnabled = screen != 0 && screen != 1,
+            swipeEnabled = screen != 0 && screen != 1 && screen != 2, // 录音管理页有横向拖动的播放进度条，关右滑返回避免冲突
             swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
             onSwipeCommit = { screen = it },
         ) { s ->
@@ -258,7 +263,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
                         screen = 0
                     },
                 )
-                2 -> RecordingManagePage(pageBackdrop, onBack = { screen = 0 })
+                2 -> RecordingManagePage(pageBackdrop, onBack = { AudioPlayback.stopIfPrefix("rec:"); screen = 0 })
                 3 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
                 4 -> StudentClassScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
@@ -531,7 +536,7 @@ internal fun FuncRow(
     )
 }
 
-/** [ProfileGlyph] 编号 → coui 图标（0 课程 1 录音 2 通知 3 关于 5 班级 6 新建课程 7 签到 8 笔记）。 */
+/** [ProfileGlyph] 编号 → coui 图标（0 课程 1 录音 2 通知 3 关于 5 班级 6 新建课程 7 签到 8 笔记 9 内存管理）。 */
 private fun funcIcon(glyph: Int) = when (glyph) {
     0 -> COUIIcons.Weeks
     1 -> COUIIcons.RecordingTape
@@ -1125,6 +1130,7 @@ private fun RecordingRow(
                 durationHintSec = item.durationSec,
                 modifier = Modifier.padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
                 unavailableText = if (item.uploaded) "云端链接缺失，无法播放" else "本机录音文件已清理，无法播放",
+                stopOnDispose = false,
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -1370,20 +1376,27 @@ internal fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
     val scrollState = rememberScrollState()
     val scope = rememberCoroutineScope()
 
-    // ── 服务状态：8080 业务 / 8081 录音存储 / 8081 背后的 Redis 课堂缓存 ──
-    // checking=true 期间各行显示转圈；obs==null 且已检测 = 8081 连不上（Redis 状态随之未知）
+    // ── 服务状态（2026-10-26 起 8081 已并入 8080，单端口统一后端，见交接文档 §31）──
+    // 同一个 8080 上两条探测：`/api/health` = 业务模块；`/health` = 录音 / AI 模块，并带回 Redis 状态。
+    // checking=true 期间各行显示转圈；obs==null 且已检测 = 录音模块无响应（Redis 状态随之未知）
     var checking by remember { mutableStateOf(true) }
     var bizUp by remember { mutableStateOf(false) }
+    var bizMs by remember { mutableStateOf<Long?>(null) }
     var obs by remember { mutableStateOf<ObsHealth?>(null) }
     var probe by remember { mutableStateOf<Job?>(null) }
     fun refresh() {
         if (probe?.isActive == true) return // 防连点：上一轮没测完不重复发
         checking = true
         probe = scope.launch {
-            // 两个服务并行探测，总耗时取较慢的一个
-            val b = async { KewuApi.isBusinessUp() }
+            // 两条探测并行，总耗时取较慢的一个；业务探测顺带测一次往返耗时
+            val b = async {
+                val mark = kotlin.time.TimeSource.Monotonic.markNow()
+                KewuApi.isBusinessUp() to mark.elapsedNow().inWholeMilliseconds
+            }
             val o = async { KewuApi.obsHealthInfo() }
-            bizUp = b.await()
+            val (up, ms) = b.await()
+            bizUp = up
+            bizMs = if (up) ms else null
             obs = o.await()
             checking = false
         }
@@ -1449,14 +1462,18 @@ internal fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
                 )
             }
 
-            // 服务状态（10.2 健康检查 + 10.5 Redis 降级）
+            // 服务状态（统一后端 8080：业务模块 + 录音 / AI 模块 + Redis 课堂缓存）
             GroupLabel("服务状态", Modifier.fillMaxWidth())
             KewuCardGroup {
                 val obsUp = obs?.status.equals("up", ignoreCase = true) || obs?.status.equals("ok", ignoreCase = true)
                 val redis = obs?.redis.orEmpty()
-                ServiceRow("业务服务", "8080 · 课程、作业、签到等业务接口", checking,
-                    if (bizUp) ServiceState.Up else ServiceState.Down)
-                ServiceRow("录音存储服务", "8081 · 录音上传、质量评估与多端融合", checking,
+                ServiceRow(
+                    "课悟后端",
+                    "8080 统一后端 · 课程、作业、签到等业务接口" + (bizMs?.let { " · 响应 $it ms" } ?: ""),
+                    checking,
+                    if (bizUp) ServiceState.Up else ServiceState.Down,
+                )
+                ServiceRow("录音与 AI 模块", "已并入 8080 · 录音上传、多端择优与 AI 中转", checking,
                     when {
                         obs == null -> ServiceState.Down
                         obsUp -> ServiceState.Up
@@ -1477,7 +1494,7 @@ internal fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
                 BasicComponent(
                     title = if (checking) "检测中…" else "重新检测",
                     titleColor = io.github.suqi8.coui.kmp.basic.BasicComponentDefaults.titleColor(color = cs.primary),
-                    summary = obs?.time?.takeIf { it.isNotBlank() && !checking }?.let { "录音服务时间 $it" },
+                    summary = obs?.time?.takeIf { it.isNotBlank() && !checking }?.let { "服务器时间 ${serverTimeCn(it)}" },
                     enabled = !checking,
                     onClick = { haptic(HapticKind.Tick); refresh() },
                     endActions = {
@@ -1506,6 +1523,15 @@ internal fun AboutPage(backdrop: LayerBackdrop, onBack: () -> Unit) {
 }
 
 private enum class ServiceState { Up, Down, Degraded, Unknown }
+
+/** 后端 `/health` 的 time 是 UTC ISO（如 `2026-10-26T15:05:57.80Z`）→ 东八区 `yyyy-MM-dd HH:mm:ss`；解析不了原样返回。 */
+private fun serverTimeCn(iso: String): String = try {
+    val ms = kotlin.time.Instant.parse(iso).toEpochMilliseconds()
+    val sec = ((ms + 8 * 3_600_000L).mod(86_400_000L)) / 1000L
+    "${todayCn(ms)} ${two(sec / 3600)}:${two(sec % 3600 / 60)}:${two(sec % 60)}"
+} catch (_: Exception) {
+    iso
+}
 
 /** 服务状态行（coui `BasicComponent`）：检测中转圈，结束后显示状态胶囊。 */
 @Composable

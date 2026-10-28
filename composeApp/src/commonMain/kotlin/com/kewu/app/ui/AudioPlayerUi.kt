@@ -36,7 +36,11 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 
 /**
  * App 内录音播放条（2026-10-26，coui 原生件）：圆形播放 / 暂停键 + coui [Slider] 进度 + 已播 / 总时长。
- * 全局同一时刻只播一条（[AudioPlayback]），点别的条会自动停掉这条；这条离开界面时自动停止。
+ * 全局同一时刻只播一条（[AudioPlayback]），点别的条会自动停掉这条。
+ *
+ * [stopOnDispose]：这一条离开组合时是否自动停播。录音管理页传 false —— 由页面在用户明确离开时
+ * （返回 / 切 tab）统一停止；2026-10-26 实测回放刚开始，页面就因外层重组被移出，行级 onDispose 把刚起播的音频停掉，
+ * 表现为「一直无法播放」。
  *
  * @param key 播放会话标识（如 `rec:<localId>`），用来判断「正在播的是不是我」
  * @param source http 链接或本机文件路径；null = 无法播放（显示 [unavailableText]）
@@ -49,11 +53,12 @@ fun AudioPlayerBar(
     durationHintSec: Int,
     modifier: Modifier = Modifier,
     unavailableText: String = "本机文件已清理，无法播放",
+    stopOnDispose: Boolean = true,
 ) {
     val cs = COUITheme.colorScheme
     val st by AudioPlayback.state.collectAsState()
     val active = st.key == key
-    DisposableEffect(key) { onDispose { AudioPlayback.stopIf(key) } }
+    DisposableEffect(key, stopOnDispose) { onDispose { if (stopOnDispose) AudioPlayback.stopIf(key) } }
 
     val totalMs = if (active && st.durationMs > 0) st.durationMs else durationHintSec * 1000L
     // 拖动中先只改本地值，松手再 seek（避免每帧都让播放器跳转）

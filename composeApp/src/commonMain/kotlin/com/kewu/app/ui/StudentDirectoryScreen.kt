@@ -54,7 +54,7 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
 
 /**
- * 同学通讯录（教师端「我的」，2026-10-26）：选班级 → 学生名单（姓名 / 学号 / 手机）→ 学生个人主页
+ * 同学管理（原「同学通讯录」，教师端「我的」，2026-10-26）：选班级 → 学生名单（姓名 / 学号 / 手机）→ 学生个人主页
  * （学号、学校、手机、邮箱，可一键拨号 / 复制；可把学生移出班级）。
  * 手机 / 邮箱只有该班任课老师拿得到（后端 /contacts 校验 token），同学之间互相看不到。
  */
@@ -99,7 +99,7 @@ private fun ClassPickList(onBack: () -> Unit, onPick: (ClassRoomInfo) -> Unit) {
     var classes by remember { mutableStateOf<List<ClassRoomInfo>?>(null) }
     LaunchedEffect(Unit) { classes = KewuApi.getTeacherClasses()?.classes ?: emptyList() }
     Column(Modifier.fillMaxSize().background(COUITheme.colorScheme.surface).verticalScroll(rememberScrollState()).padding(bottom = 128.dp)) {
-        KewuTopBar("同学通讯录", onBack)
+        KewuTopBar("同学管理", onBack)
         KewuSectionTitle("选择班级")
         val list = classes
         when {

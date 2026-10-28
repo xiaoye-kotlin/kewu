@@ -16,6 +16,13 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.text.style.TextOverflow
+import com.kewu.app.shareText
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -118,7 +125,18 @@ private data class TaMsg(
     val ts: Long = 0L,
     /** true = 属于真实对话，需要写进聊天记录（入场简报每次进页现生成，不落盘） */
     val keep: Boolean = false,
+    /** 被引用的原文（与学生端 ChatMsg.quote 同口径）：用户气泡顶部渲染引用小条；null = 无引用。 */
+    val quote: String? = null,
 )
+
+/** 复制 / 引用 / 分享用的纯文本（Students / Chips 块转可读行，与落盘口径一致）。 */
+private fun TaMsg.plainText(): String = blocks.joinToString("\n") { b ->
+    when (b) {
+        is TaBlock.Text -> b.s
+        is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
+        is TaBlock.Chips -> b.list.joinToString("、")
+    }
+}
 
 @Composable
 fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
@@ -129,6 +147,16 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
     var input by remember { mutableStateOf("") }
     var dataReady by remember { mutableStateOf(false) }
+
+    // ── 长按气泡操作菜单（复制 / 引用 / 分享），与学生端 TaPage 同一套交互（2026-10-26） ──
+    // 引用：输入框上方单独一条引用小条，发送时随消息带上（TaMsg.quote），× 可取消
+    var quotePreview by remember { mutableStateOf<String?>(null) }
+    var menuMsg by remember { mutableStateOf<TaMsg?>(null) }
+    // 菜单贴气泡定位：被长按的气泡持续上报窗口坐标，减去根盒原点得相对坐标（滚动时菜单跟着走）
+    var menuAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
+    val snackbar = LocalKewuSnackbar.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // ── 学情数据（全部带兜底；问答与主动简报共用） ──
     var teacherName by remember { mutableStateOf("老师") }
@@ -171,6 +199,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 role = if (m.isUser) "user" else "assistant",
                 text = blocksToText(m.blocks),
                 ts = m.ts,
+                quote = m.quote,
             )
         }
         // 按 id 合并写入（不覆盖更早几天的记录 / 页面不在时 AssistantHub 追加的回复）
@@ -207,6 +236,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         id = if (e.id != 0L) e.id else ChatHistory.nextId(),
         ts = e.ts,
         keep = true, // 来自历史，后续整体落盘时要保留
+        quote = e.quote,
     )
 
     // 顶部下拉加载更早一天
@@ -453,11 +483,16 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     }
 
     fun send() {
-        val q = input.trim()
-        if (q.isEmpty() || aiThinking) return
-        push(TaMsg(true, listOf(TaBlock.Text(q))), persist = true)
+        val text = input.trim()
+        val quoted = quotePreview
+        // 允许「只发引用 + 正文为空」（与学生端一致）；两者都空则不动
+        if ((text.isEmpty() && quoted == null) || aiThinking) return
+        push(TaMsg(true, if (text.isEmpty()) emptyList() else listOf(TaBlock.Text(text)), quote = quoted), persist = true)
         input = ""
+        quotePreview = null
         haptic(HapticKind.Light)
+        // 引用拼进问题正文交给大模型 / 本地规则（学生端同口径）
+        val q = if (quoted != null) "（引用：$quoted）${text.ifEmpty { "请解释一下这段内容" }}" else text
         AssistantHub.askStream(ChatHistory.KEY_TEACHER) { emit ->
             // 优先真实大模型（流式）；失败回退本地规则（学情数据仍有价值），并明确告知用户
             val blocks = aiAnswer(q, emit) ?: buildList {
@@ -468,7 +503,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(cs.surface)) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(cs.surface)
+            .onGloballyPositioned { rootOrigin = it.positionInWindow() },
+    ) {
         // 背景采样层（玻璃气泡的采样源，与气泡平级；底色 = coui 页面灰底 surface）
         Box(
             Modifier
@@ -552,7 +592,15 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 }
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
                     Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
-                        TaBubble(pageBackdrop, msg)
+                        TaBubble(
+                            pageBackdrop, msg,
+                            // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
+                            reportBounds = msg == menuMsg,
+                            onBounds = { menuAnchor = it },
+                        ) {
+                            menuMsg = msg
+                            haptic(HapticKind.Medium)
+                        }
                     }
                     Spacer(Modifier.height(10.dp))
                 }
@@ -583,6 +631,34 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 onInput = { input = it },
                 onSend = { send() },
                 enabled = !aiThinking,
+                quote = quotePreview,
+                onCancelQuote = { quotePreview = null },
+            )
+        }
+
+        // ── 长按气泡的操作菜单（液态玻璃 + coui 选项，与学生端同款）：必须是根盒最后一个子节点（盖在最上层） ──
+        val activeMenuMsg = menuMsg
+        if (activeMenuMsg != null) {
+            val relRect = menuAnchor?.let { r ->
+                androidx.compose.ui.geometry.Rect(
+                    r.left - rootOrigin.x, r.top - rootOrigin.y,
+                    r.right - rootOrigin.x, r.bottom - rootOrigin.y,
+                )
+            }
+            val text = activeMenuMsg.plainText().ifBlank { activeMenuMsg.quote.orEmpty() }
+            LiquidGlassActionMenu(
+                visible = true,
+                anchor = if (activeMenuMsg.isUser) GlassMenuAnchor.TopEnd else GlassMenuAnchor.TopStart,
+                anchorRect = relRect,
+                actions = listOf(
+                    GlassMenuAction("复制", MenuGlyphKind.Copy) {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                        scope.launch { snackbar.toast("已复制") }
+                    },
+                    GlassMenuAction("引用", MenuGlyphKind.Quote) { quotePreview = text },
+                    GlassMenuAction("分享", MenuGlyphKind.Share) { shareText(text) },
+                ),
+                onDismiss = { menuMsg = null },
             )
         }
     }
@@ -590,14 +666,51 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
 // ───────────────────────── 气泡 ─────────────────────────
 
+/**
+ * 对话气泡。长按 → 复制 / 引用 / 分享菜单（[onLongPress] 为 null 时不响应，如流式草稿）。
+ * 按压 Q 弹只作用在气泡**内部内容**上（AI 气泡是玻璃采样者，外壳禁 scale）。
+ */
 @Composable
-private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
+private fun TaBubble(
+    backdrop: LayerBackdrop,
+    msg: TaMsg,
+    /** 被长按选中：持续上报气泡矩形（窗口坐标）供菜单贴脸定位 */
+    reportBounds: Boolean = false,
+    onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
+    onLongPress: (() -> Unit)? = null,
+) {
     val cs = COUITheme.colorScheme
+    val press = if (onLongPress != null) Modifier.bubblePress(onLongPress) else Modifier
+    val bounds = Modifier.onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
     if (msg.isUser) {
         // 用户：coui Surface 品牌蓝气泡（右对齐，与学生端同款）
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Surface(modifier = bounds.widthIn(max = 300.dp), shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
+                Column(press.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    // 引用小条（与学生端 UserBubble 同款：半透明底 + 左侧竖条）
+                    msg.quote?.let { quoted ->
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.16f))
+                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                        ) {
+                            Box(
+                                Modifier
+                                    .width(2.5.dp)
+                                    .heightIn(min = 22.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(Color.White.copy(alpha = 0.5f)),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                quoted, color = Color.White.copy(alpha = 0.72f),
+                                fontSize = 11.sp, lineHeight = 15.sp,
+                                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (msg.blocks.isNotEmpty()) Spacer(Modifier.height(7.dp))
+                    }
                     msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
                         Text(t.s, color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp)
                     }
@@ -614,9 +727,10 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
                 tintAlpha = 0.30f,
                 modifier = Modifier
                     .fillMaxWidth(0.88f)
-                    .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp)),
+                    .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp))
+                    .then(bounds),
             ) {
-                Column(Modifier.padding(14.dp)) {
+                Column(press.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("小悟", color = KewuGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(6.dp))
@@ -707,8 +821,27 @@ private fun TaInputBar(
     onInput: (String) -> Unit,
     onSend: () -> Unit,
     enabled: Boolean = true,
+    /** 待发送的引用（长按气泡 →「引用」）：输入框上方显示引用小条，× 取消 */
+    quote: String? = null,
+    onCancelQuote: () -> Unit = {},
 ) {
     val cs = COUITheme.colorScheme
+    Column(Modifier.fillMaxWidth()) {
+    // 引用预览条（学生端 QuotePreviewBar 同款；不是玻璃件，可以用带淡入的 AnimatedVisibility）
+    androidx.compose.animation.AnimatedVisibility(
+        visible = quote != null,
+        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
+            androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(180)) { it / 2 },
+        exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(110)) +
+            androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(140)) { it / 2 },
+    ) {
+        // 记住最后一条引用：退场动画期间 quote 已被置空，仍显示原文
+        var last by remember { mutableStateOf("") }
+        if (quote != null) last = quote
+        Box(Modifier.padding(start = 14.dp, end = 70.dp, bottom = 6.dp)) {
+            QuotePreviewBar(text = last) { onCancelQuote() }
+        }
+    }
     // ★ 2026-10-26：底部 118dp 是给底部导航让位的；键盘弹起时导航在键盘下面，这段留白就成了
     //   「输入框离输入法很远」——键盘弹起时只留 8dp，收起再弹回 118dp
     val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
@@ -756,7 +889,8 @@ private fun TaInputBar(
             }
         }
         Spacer(Modifier.width(10.dp))
-        TaSendBtn(backdrop = backdrop, enabled = enabled && input.isNotBlank(), onClick = onSend)
+        TaSendBtn(backdrop = backdrop, enabled = enabled && (input.isNotBlank() || quote != null), onClick = onSend)
+    }
     }
 }
 
