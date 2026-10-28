@@ -117,7 +117,7 @@ object QuestionStore {
                 id = id, type = type, stem = stem,
                 options = if (type == QuestionType.TRUE_FALSE && options.isEmpty()) listOf("正确", "错误") else options,
                 answer = answer,
-                score = o["score"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                score = o["score"]?.jsonPrimitive?.content?.toDoubleOrNull()?.toInt() ?: 0, // AI 可能给 20.0
                 analysis = o["analysis"]?.jsonPrimitive?.content ?: "",
             )
         }

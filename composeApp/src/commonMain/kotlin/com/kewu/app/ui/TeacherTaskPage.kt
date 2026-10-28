@@ -1,5 +1,9 @@
 package com.kewu.app.ui
 
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.horizontalScroll
+import kotlinx.coroutines.Job
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -84,6 +88,7 @@ import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
 import io.github.suqi8.coui.kmp.preference.RadioButtonPreference
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 
 // ───────────────────────── 教师端 · 作业（tab 2） ─────────────────────────
 //
@@ -102,19 +107,33 @@ import kotlinx.coroutines.launch
  * 作业 tab 下钻。[DETAIL] / [REVIEW] 带 `back`：从哪一层进来就回哪一层
  * （总览 → 批阅 → 返回总览；作业详情 → 批阅 → 返回详情），BackHandler 与顶栏返回同一口径。
  */
+/** 批阅保存完成的事件计数：批阅页立刻退出后，后台请求落库时 +1，作业详情 / 学生作业页据此再刷新一次。 */
+internal object ReviewEvents {
+    val saved = kotlinx.coroutines.flow.MutableStateFlow(0)
+}
+
 private sealed class TaskDrill {
     data object NONE : TaskDrill()
     data object PENDING : TaskDrill()
     data class DETAIL(val assignmentId: String, val back: TaskDrill = NONE) : TaskDrill()
     data class REVIEW(val submissionId: String, val back: TaskDrill = NONE) : TaskDrill()
+    /** 单个学生的作业详情（2026-10-26：老师按学生看作业）。 */
+    data class STUDENT(val assignmentId: String, val submissionId: String, val back: TaskDrill = NONE) : TaskDrill()
+    /** AI 分层补救（2026-10-26）。 */
+    data class REMEDIAL(val assignmentId: String, val back: TaskDrill = NONE) : TaskDrill()
     data class PUBLISH(val courseId: String) : TaskDrill()
 }
 
 private fun TaskDrill.parent(): TaskDrill = when (this) {
     is TaskDrill.DETAIL -> back
     is TaskDrill.REVIEW -> back
+    is TaskDrill.STUDENT -> back
+    is TaskDrill.REMEDIAL -> back
     else -> TaskDrill.NONE
 }
+
+/** 下钻层级：决定转场方向（更深 = 前进、从右推入；更浅 = 返回）。 */
+private fun TaskDrill.depth(): Int = if (this == TaskDrill.NONE) 0 else 1 + parent().depth()
 
 @Composable
 fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
@@ -126,6 +145,7 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
 
     var drill by remember { mutableStateOf<TaskDrill>(TaskDrill.NONE) }
     BackHandler(enabled = drill != TaskDrill.NONE) { drill = drill.parent() }
+    LockTabSwipe(drill != TaskDrill.NONE)
 
     var assignments by remember { mutableStateOf<List<AssignmentInfo>?>(null) }
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
@@ -136,13 +156,19 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
     var pending by remember { mutableStateOf<PendingReview?>(null) }
     var pendingLocal by remember { mutableStateOf(false) }
 
+    var listFailed by remember { mutableStateOf(false) }
+    var reloadJob by remember { mutableStateOf<Job?>(null) }
     fun reload() {
-        scope.launch {
+        // ★ 2026-10-26：切课程筛选时取消上一轮（旧版旧请求晚回来会覆盖新结果，列表与选中 chip 对不上）
+        reloadJob?.cancel()
+        reloadJob = scope.launch {
+            listFailed = false
             if (KewuApi.currentUser == null) KewuApi.me()
-            val cl = KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+            val cl = KewuApi.myCourses()
             courses = cl
             val list = KewuApi.getAssignments(courseFilter)
             assignments = list
+            listFailed = list == null
             val pr = KewuApi.getPendingReview()
             if (pr != null) {
                 pending = pr
@@ -153,7 +179,10 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
             }
         }
     }
-    LaunchedEffect(courseFilter) { reload() }
+    LaunchedEffect(courseFilter) {
+        assignments = null // 切筛选先回 loading，避免短暂显示上一个筛选的结果
+        reload()
+    }
 
     LaunchedEffect(scrollState) {
         var last = 0
@@ -174,14 +203,15 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        AnimatedContent(
+        // ★ 2026-10-26 Telegram 式推入 / 返回：旧版返回也是「从右推入」，方向反了；现在按层级判断方向。
+        //   右滑返回只开在只读页（待批阅总览 / 作业详情），批阅与发布页不开（一滑丢进度）。
+        KewuSlideHost(
             targetState = drill,
-            transitionSpec = {
-                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-            },
             modifier = Modifier.fillMaxSize(),
-            label = "teacherTaskNav",
+            isForward = { a, b -> b.depth() >= a.depth() },
+            swipeEnabled = drill == TaskDrill.PENDING || drill is TaskDrill.DETAIL,
+            swipeNeighbor = { from, d -> if (d < 0 && from != TaskDrill.NONE) from.parent() else null },
+            onSwipeCommit = { drill = it },
         ) { d ->
             when (d) {
                 TaskDrill.NONE -> TeacherAssignmentList(
@@ -190,6 +220,8 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                     assignments = assignments,
                     courses = courses,
                     courseFilter = courseFilter,
+                    failed = listFailed,
+                    onRetry = { reload() },
                     pending = pending,
                     pendingLocal = pendingLocal,
                     onFilter = { courseFilter = it },
@@ -208,9 +240,20 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                     assignmentId = d.assignmentId,
                     onBack = { drill = d.back },
                     onReview = { sid -> drill = TaskDrill.REVIEW(sid, back = d) },
+                    onOpenStudent = { sid -> drill = TaskDrill.STUDENT(d.assignmentId, sid, back = d) },
+                    onRemedial = { drill = TaskDrill.REMEDIAL(d.assignmentId, back = d) },
+                )
+                is TaskDrill.REMEDIAL -> RemedialScreen(d.assignmentId, onBack = { drill = d.back })
+                is TaskDrill.STUDENT -> StudentWorkScreen(
+                    assignmentId = d.assignmentId,
+                    submissionId = d.submissionId,
+                    onBack = { drill = d.back },
+                    onReview = { sid -> drill = TaskDrill.REVIEW(sid, back = d) },
                 )
                 is TaskDrill.REVIEW -> ReviewSubmissionScreen(
                     submissionId = d.submissionId,
+                    outerScope = scope,
+                    onSaved = { ReviewEvents.saved.value++; reload() },
                     // 批阅完回上一层时刷新一次待批阅（刚批掉的那份应从总览/顶部卡消失）
                     onBack = { drill = d.back; reload() },
                 )
@@ -298,6 +341,8 @@ private fun TeacherAssignmentList(
     assignments: List<AssignmentInfo>?,
     courses: List<CourseInfo>?,
     courseFilter: String?,
+    failed: Boolean,
+    onRetry: () -> Unit,
     pending: PendingReview?,
     pendingLocal: Boolean,
     onFilter: (String?) -> Unit,
@@ -363,16 +408,18 @@ private fun TeacherAssignmentList(
         // 课程过滤 chips
         if (!courses.isNullOrEmpty()) {
             val p1 = rememberEnterProgress(1)
+            // 全部课程都可筛（旧版只显示前 3 门），横向滚动
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp)
                     .padding(bottom = 10.dp)
                     .riseEnter(p1),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Chip(selected = courseFilter == null, onClick = { haptic(HapticKind.Tick); onFilter(null) }, label = "全部")
-                courses.take(3).forEach { c ->
+                courses.forEach { c ->
                     Chip(selected = courseFilter == c.id, onClick = { haptic(HapticKind.Tick); onFilter(c.id) },
                         label = c.name.take(6))
                 }
@@ -380,12 +427,17 @@ private fun TeacherAssignmentList(
         }
 
         KewuSectionTitle("作业列表", Modifier.riseEnter(rememberEnterProgress(2)))
+        val courseNames = courses.orEmpty().associate { it.id to it.name }
         when {
+            assignments == null && failed -> {
+                KewuEmpty("作业加载失败，请检查网络")
+                KewuSecondaryButton("重新加载", onRetry, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            }
             assignments == null -> KewuLoading()
             assignments.isEmpty() -> KewuEmpty("暂无作业，点上方「发布新作业」开始")
-            else -> assignments.forEachIndexed { i, a ->
+            else -> assignments.sortedForDisplay { it }.forEachIndexed { i, a ->
                 val p = rememberEnterProgress(3 + i, stepMs = 50L)
-                TeacherAssignmentRow(a, p) { onOpen(a.id) }
+                TeacherAssignmentRow(a, courseNames[a.courseId] ?: a.courseId, p) { onOpen(a.id) }
             }
         }
         Spacer(Modifier.height(20.dp))
@@ -438,7 +490,7 @@ private fun PendingSummaryCard(pd: PendingReview, local: Boolean, onOpen: () -> 
 }
 
 @Composable
-private fun TeacherAssignmentRow(a: AssignmentInfo, enterP: Float, onClick: () -> Unit) {
+private fun TeacherAssignmentRow(a: AssignmentInfo, courseName: String, enterP: Float, onClick: () -> Unit) {
     val cs = COUITheme.colorScheme
     Box(Modifier.riseEnter(enterP, 24f)) {
         Card(
@@ -453,7 +505,7 @@ private fun TeacherAssignmentRow(a: AssignmentInfo, enterP: Float, onClick: () -
                     Text(a.title, color = cs.onSurface, fontSize = 14.5.sp, fontWeight = FontWeight.Medium, maxLines = 1)
                     Spacer(Modifier.height(2.dp))
                     Text(
-                        "课程 ${a.courseId} · 截止 ${a.deadline.ifBlank { "未设置" }} · 总分 ${a.totalScore}",
+                        "$courseName · 截止 ${a.deadline.ifBlank { "未设置" }} · 总分 ${a.totalScore}",
                         color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1,
                     )
                 }
@@ -631,11 +683,14 @@ private fun TeacherAssignmentDetail(
     assignmentId: String,
     onBack: () -> Unit,
     onReview: (String) -> Unit,
+    onOpenStudent: (String) -> Unit,
+    onRemedial: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
     val pageBackdrop = rememberGlassBackdrop()
 
+    var submissions by remember { mutableStateOf<List<SubmissionInfo>?>(null) }
     var assignment by remember { mutableStateOf<AssignmentInfo?>(null) }
     var stats by remember { mutableStateOf<AssignmentStats?>(null) }
     var queue by remember { mutableStateOf<List<ReviewQueueItem>?>(null) }
@@ -644,14 +699,22 @@ private fun TeacherAssignmentDetail(
 
     fun reload() {
         scope.launch {
-            assignment = KewuApi.getAssignment(assignmentId)
-            stats = KewuApi.getAssignmentStats(assignmentId)
-            queue = KewuApi.getReviewQueue(assignmentId)
-            similarity = KewuApi.getSimilarity(assignmentId)
+            // 2026-10-26：4 个请求并行（旧版串行，详情页要等 4 个来回）
+            val aD = async { KewuApi.getAssignment(assignmentId) }
+            val sD = async { KewuApi.getAssignmentStats(assignmentId) }
+            val qD = async { KewuApi.getReviewQueue(assignmentId) }
+            val simD = async { KewuApi.getSimilarity(assignmentId) }
+            val subD = async { KewuApi.getSubmissions(assignmentId) }
+            assignment = aD.await()
+            submissions = subD.await() ?: emptyList()
+            stats = sD.await()
+            queue = qD.await()
+            similarity = simD.await()
             loading = false
         }
     }
-    LaunchedEffect(assignmentId) { reload() }
+    val reviewSaved by ReviewEvents.saved.collectAsState()
+    LaunchedEffect(assignmentId, reviewSaved) { reload() }
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
@@ -691,6 +754,31 @@ private fun TeacherAssignmentDetail(
                     }
                     Spacer(Modifier.height(6.dp))
 
+                    // 2026-10-26：按学生看作业（每人一行，点进看用时 / 正确率 / 逐题 / AI 总结）
+                    KewuSectionTitle("学生作业（${submissions?.size ?: 0} 人已交）")
+                    StudentWorkList(submissions, a.totalScore) { onOpenStudent(it.id) }
+                    if (!submissions.isNullOrEmpty() && a.questions.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        // 2026-10-26 AI 分层补救：按掌握程度分层，给每层出针对性练习、只发给该层
+                        KewuPrimaryButton(
+                            "AI 分层补救 · 按掌握程度给每层同学出针对性练习",
+                            onRemedial,
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+
+                    // 2026-10-26：老师也能看到自己布置的题（只读，选择 / 判断题高亮正确答案；填空 / 简答显示参考答案）
+                    if (a.questions.isNotEmpty()) {
+                        KewuSectionTitle("题目（共 ${a.questions.size} 题 · 已标出正确答案）")
+                        a.questions.forEachIndexed { qi, q ->
+                            QuestionAnswerCard(
+                                q = q, index = qi + 1, value = q.answer, onValue = {},
+                                readOnly = true, result = null,
+                            )
+                            Spacer(Modifier.height(10.dp))
+                        }
+                    }
                     // 批阅统计
                     KewuSectionTitle("批阅统计")
                     TeacherStatsCard(pageBackdrop, stats)
@@ -876,15 +964,18 @@ private fun composeReviewComment(a: AiSuggestion, totalScore: Int): String = bui
     }
     if (a.missedKnowledgePoints.isNotEmpty()) {
         append("建议重点复习「${a.missedKnowledgePoints.first()}」，做错的题先自己重做一遍再对照答案。")
-        appendLine()
     }
-    append("（本评语由 AI 初评生成，老师可修改后提交）")
-}
+    // 2026-10-26 用户要求：评语末尾不再追加「本评语由 AI 初评生成」——发给学生的是老师的评语
+}.trimEnd()
 
 @Composable
 private fun ReviewSubmissionScreen(
     submissionId: String,
     onBack: () -> Unit,
+    /** 页面级协程作用域：批阅请求在这里跑，本页立刻退出也不会被取消。 */
+    outerScope: kotlinx.coroutines.CoroutineScope,
+    /** 批阅请求结束后（成功或失败）刷新列表 / 待批阅。 */
+    onSaved: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -900,6 +991,9 @@ private fun ReviewSubmissionScreen(
     var submitting by remember { mutableStateOf(false) }
     /** v17 逐题给分：questionId -> 本题得分文本（初始化自服务端逐题判定）。 */
     var qScoreText by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    var assignmentTotal by remember { mutableStateOf(0) }
+    var confirmReturn by remember { mutableStateOf(false) }
+    var returnConfirmed by remember { mutableStateOf(false) }
 
     /**
      * 把 AI 初评结果落到表单上（2026-10-25）：分数空着就填建议分，评语空着就填 AI 生成的评语草稿。
@@ -918,52 +1012,60 @@ private fun ReviewSubmissionScreen(
         if (s != null) {
             qScoreText = s.questionResults.associate { it.questionId to fmtScore(it.finalScore ?: it.autoScore) }
         }
+        // 作业总分：无题目作业的分数校验要用
+        if (s != null) assignmentTotal = KewuApi.getAssignment(s.assignmentId)?.totalScore ?: 0
         // 服务端已带 AI 初评（或上次批过）→ 进页就填好，老师直接核对
         val cached = s?.ai
-        if (cached != null) {
-            val ts = KewuApi.getAssignment(s.assignmentId ?: "")?.totalScore ?: 0
-            applyAi(cached, ts)
-        }
+        if (cached != null) applyAi(cached, assignmentTotal)
         loading = false
     }
 
-    val reviewer = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师"
+    val reviewer = KewuApi.displayName(KewuApi.username ?: "老师")
     val results = sub?.questionResults ?: emptyList()
     val hasQuestions = results.isNotEmpty()
 
     /** 组装按题给分（文档 3.12 ④）：每题取当前得分文本，空则回退 autoScore。 */
     fun questionScoresToSend(): List<Pair<String, Int>> {
         if (!hasQuestions) return emptyList()
+        // 2026-10-26：小数文本（如预填的 "2.5"）旧版 toIntOrNull 失败会静默回退自动分；且无上限（5 分题能填 99）。
+        // 后端逐题分为整数：这里取整并夹在 0..本题满分
         return results.map { r ->
-            val sc = qScoreText[r.questionId]?.toIntOrNull() ?: (r.finalScore ?: r.autoScore).toInt()
-            r.questionId to sc
+            val full = r.fullScore.toInt()
+            val sc = qScoreText[r.questionId]?.toDoubleOrNull()?.toInt() ?: (r.finalScore ?: r.autoScore).toInt()
+            r.questionId to sc.coerceIn(0, if (full > 0) full else Int.MAX_VALUE)
         }
     }
 
     fun submit(action: String) {
-        val qs = questionScoresToSend()
-        // 传了按题给分，服务端自动按题求和当总分（文档：可不传 score）；这里仍带上求和值，兼容性更稳
-        val score = if (qs.isNotEmpty()) qs.sumOf { it.second }.toDouble()
-        else (scoreText.toDoubleOrNull() ?: ai?.suggestedScore ?: 0.0)
         if (submitting) return
-        submitting = true
-        scope.launch {
-            val err = KewuApi.reviewSubmission(
-                submissionId, score, comment.trim(), reviewer, action,
-                questionScores = qs.ifEmpty { null },
-            )
-            submitting = false
-            if (err == null) {
-                // 结果走全局 coui Snackbar（原内联结果文字行）
-                snackbar.toast(if (action == "return") "已打回" else "批阅完成")
-                // 2026-10-25：批完自动返回上一层（作业详情 / 待批阅 / 作业列表），
-                // onBack 内部会 reload() 刷新待批阅，刚批掉的那份从队列里消失。
-                // 失败则留在当前页，方便老师改完重试。
-                onBack()
-            } else {
-                snackbar.toast(err)
+        val qs = questionScoresToSend()
+        // 无题目作业：分数必须填且在 0..总分（旧版留空 / 乱填会静默按 AI 建议分或 0 分提交）
+        val manual = scoreText.trim().toDoubleOrNull()
+        if (qs.isEmpty() && action == "approve") {
+            if (manual == null) { scope.launch { snackbar.toast("请先填写分数") }; return }
+            if (manual < 0 || (assignmentTotal > 0 && manual > assignmentTotal)) {
+                scope.launch { snackbar.toast("分数应在 0–$assignmentTotal 之间") }; return
             }
         }
+        // 传了按题给分，服务端自动按题求和当总分（文档：可不传 score）；这里仍带上求和值，兼容性更稳
+        val score = if (qs.isNotEmpty()) qs.sumOf { it.second }.toDouble() else (manual ?: 0.0)
+        submitting = true
+        // ★ 2026-10-26 用户要求「点完立刻退出、及时反馈」：校验通过就立即返回上一层并提示，
+        //   请求放到页面级作用域里跑（本页离开组合也不会被取消）；万一失败再提示老师重新批阅。
+        haptic(HapticKind.Light)
+        val c = comment.trim()
+        outerScope.launch {
+            snackbar.toast(if (action == "return") "已打回，学生将收到修改意见" else "批阅完成")
+        }
+        outerScope.launch {
+            val err = KewuApi.reviewSubmission(
+                submissionId, score, c, reviewer, action,
+                questionScores = qs.ifEmpty { null },
+            )
+            if (err != null) snackbar.toast("批阅保存失败：$err，请重新批阅")
+            onSaved()
+        }
+        onBack()
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -1001,6 +1103,11 @@ private fun ReviewSubmissionScreen(
                         ) {
                             Text(s.content.ifBlank { "（无文字内容）" }, color = cs.onSurface,
                                 fontSize = 13.5.sp, lineHeight = 20.sp, modifier = Modifier.padding(12.dp))
+                        }
+                        // 学生提交的附件（图片 / 文件 / 录音，2026-10-26）：图片内置查看器，录音直接播放
+                        if (s.attachments.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            AttachmentList(s.attachments)
                         }
                         if (s.history.size > 1) {
                             Spacer(Modifier.height(8.dp))
@@ -1042,6 +1149,7 @@ private fun ReviewSubmissionScreen(
                                         val suggestion = result ?: KewuApi.aiPrereview(submissionId)
                                         // 2026-10-25：AI 出完结果直接把分数 + 评语都填满
                                         if (suggestion != null) applyAi(suggestion, assignment?.totalScore ?: 0)
+                                        else snackbar.toast("AI 建议暂不可用，请稍后再试或直接批阅")
                                         aiLoading = false
                                     }
                                 },
@@ -1105,7 +1213,7 @@ private fun ReviewSubmissionScreen(
                                 )
                             }
                             Spacer(Modifier.height(10.dp))
-                            val sum = results.sumOf { qScoreText[it.questionId]?.toIntOrNull() ?: (it.finalScore ?: it.autoScore).toInt() }
+                            val sum = questionScoresToSend().sumOf { it.second }
                             val full = results.sumOf { it.fullScore.toInt() }
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("按题合计", color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
@@ -1124,9 +1232,15 @@ private fun ReviewSubmissionScreen(
                 }
                 ReviewField("评语", comment, { comment = it }, singleLine = false, placeholder = "给学生的评语…")
                 Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    // 打回：必须写修改意见 + 二次确认（旧版点一下就打回、也不要求评语，学生不知道该改哪）
                     TextButton(
                         text = "打回",
-                        onClick = { haptic(HapticKind.Tick); submit("return") },
+                        onClick = {
+                            haptic(HapticKind.Tick)
+                            if (comment.isBlank()) scope.launch { snackbar.toast("打回前请在评语里写明修改意见") }
+                            else confirmReturn = true
+                        },
+                        enabled = !submitting,
                         colors = ButtonDefaults.textButtonColorsPrimary(
                             color = cs.errorContainer, textColor = cs.onErrorContainer),
                         modifier = Modifier.weight(1f),
@@ -1141,6 +1255,21 @@ private fun ReviewSubmissionScreen(
                 Spacer(Modifier.height(24.dp))
             }
         }
+        KewuConfirmDialog(
+            show = confirmReturn,
+            title = "打回这份作业？",
+            summary = "学生会收到打回通知和你的修改意见，修改后可重新提交。",
+            confirmText = "打回",
+            onConfirm = { returnConfirmed = true; confirmReturn = false },
+            onDismiss = { confirmReturn = false },
+            // 弹窗完全退场后再提交（提交成功会 onBack 移除本页，不能与退场动画撞车）
+            onDismissFinished = {
+                if (returnConfirmed) {
+                    returnConfirmed = false
+                    submit("return")
+                }
+            },
+        )
     }
 }
 
@@ -1233,6 +1362,24 @@ private fun QuestionResultRow(
 
 // ───────────────────────── 发布作业 ─────────────────────────
 
+/** 发布作业草稿（进程级，见 PublishAssignmentScreen 注释；退出登录时由 App 清空）。 */
+internal object PublishDraft {
+    val courseId = mutableStateOf("")
+    val title = mutableStateOf("")
+    val desc = mutableStateOf("")
+    val deadline = mutableStateOf("")
+    val totalScore = mutableStateOf("100")
+    val kps = mutableStateOf("")
+    val questions = mutableStateOf<List<Question>>(emptyList())
+
+    fun isEmpty() = title.value.isBlank() && desc.value.isBlank() && kps.value.isBlank() && questions.value.isEmpty()
+
+    fun clear() {
+        courseId.value = ""; title.value = ""; desc.value = ""; deadline.value = ""
+        totalScore.value = "100"; kps.value = ""; questions.value = emptyList()
+    }
+}
+
 @Composable
 private fun PublishAssignmentScreen(
     presetCourseId: String,
@@ -1245,14 +1392,25 @@ private fun PublishAssignmentScreen(
     val snackbar = LocalKewuSnackbar.current
     val pageBackdrop = rememberGlassBackdrop()
 
-    var courseId by remember { mutableStateOf(presetCourseId) }
-    var title by remember { mutableStateOf("") }
-    var desc by remember { mutableStateOf("") }
-    var deadline by remember { mutableStateOf("") }
-    var totalScore by remember { mutableStateOf("100") }
-    var kps by remember { mutableStateOf("") }
-    var questions by remember { mutableStateOf<List<Question>>(emptyList()) }
+    // ★ 2026-10-26：表单存进程级草稿 PublishDraft（旧版 remember：切 tab / 误按返回 / 横滑一下就整份丢失，
+    //   AI 等了 30s 出的题也没了）。下次进来自动恢复，发布成功才清空。
+    var courseId by PublishDraft.courseId
+    remember { if (courseId.isBlank() || (presetCourseId.isNotBlank() && PublishDraft.isEmpty())) courseId = presetCourseId }
+    var title by PublishDraft.title
+    var desc by PublishDraft.desc
+    var deadline by PublishDraft.deadline
+    var totalScore by PublishDraft.totalScore
+    var kps by PublishDraft.kps
+    var questions by PublishDraft.questions
     var publishing by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!PublishDraft.isEmpty()) snackbar.toast("已恢复上次未发布的草稿")
+    }
+    // 有题目时总分自动 = 各题分值之和（旧版默认 100 与题目合计 40 对不上，批阅页「按题合计 x/40」与总分 100 矛盾）
+    val questionTotal = questions.sumOf { it.score }
+    LaunchedEffect(questionTotal, questions.size) {
+        if (questions.isNotEmpty() && questionTotal > 0) totalScore = questionTotal.toString()
+    }
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
@@ -1276,8 +1434,12 @@ private fun PublishAssignmentScreen(
             }
             ReviewField("作业标题", title, { title = it }, placeholder = "如 第 5 章习题")
             ReviewField("作业描述", desc, { desc = it }, singleLine = false, placeholder = "题目要求、提交方式…")
-            ReviewField("截止时间", deadline, { deadline = it }, placeholder = "如 2026-10-25 23:59")
-            ReviewField("总分", totalScore, { totalScore = it.filter { ch -> ch.isDigit() } }, placeholder = "100")
+            // 2026-10-26：截止时间改 coui 年月日 + 时分滚轮选择（不再手输）
+            DeadlinePickerField(deadline, { deadline = it }, Modifier.padding(top = 8.dp))
+            ReviewField(
+                if (questions.isNotEmpty() && questionTotal > 0) "总分（按各题分值自动合计）" else "总分",
+                totalScore, { totalScore = it.filter { ch -> ch.isDigit() } }, placeholder = "100",
+            )
             ReviewField("知识点（逗号分隔）", kps, { kps = it }, placeholder = "如 泰勒公式, 洛必达法则")
             QuestionEditorCard(
                 questions = questions, onChange = { questions = it },
@@ -1287,9 +1449,10 @@ private fun PublishAssignmentScreen(
                 text = if (publishing) "发布中…" else "发布作业",
                 onClick = {
                     if (courseId.isBlank() || title.isBlank() || publishing) return@KewuPrimaryButton
+                    validateQuestions(questions)?.let { scope.launch { snackbar.toast(it) }; return@KewuPrimaryButton }
                     publishing = true
                     scope.launch {
-                        val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
+                        val publisher = KewuApi.nameForServer()
                         // v17：题目走原生 questions 字段（服务端自动判分），description 不再塞透传块
                         val info = KewuApi.publishAssignment(
                             courseId = courseId, title = title.trim(), description = desc.trim(),
@@ -1300,6 +1463,8 @@ private fun PublishAssignmentScreen(
                         publishing = false
                         if (info != null) {
                             haptic(HapticKind.Light)
+                            PublishDraft.clear()
+                            snackbar.toast("作业已发布")
                             onPublished()
                         } else {
                             snackbar.toast("发布失败，请检查网络后重试")

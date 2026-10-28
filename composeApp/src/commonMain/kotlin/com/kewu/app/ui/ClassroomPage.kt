@@ -1,5 +1,12 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.SizeTransform
+import com.kewu.app.LockTabSwipe
+import androidx.compose.runtime.rememberCoroutineScope
+import com.kewu.app.ROLE_TEACHER
+import com.kewu.app.AssignmentRepo
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -77,6 +84,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kewu.app.AttendanceSession
 import com.kewu.app.CourseInfo
+import com.kewu.app.CourseRepo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
@@ -436,7 +444,7 @@ internal fun ExclaimMark(
 }
 
 // 课堂主页下钻目标（5 态）；attendanceId 单独存值
-private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE }
+private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE, COURSES, MISTAKES, PLAN }
 
 // ───────────────────────── 课堂主页 ─────────────────────────
 
@@ -457,33 +465,64 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     // ★ 动画修复（2026-10-18）：初始必须是**空列表**而不是 mock —— 旧版先显示 mock 课程、
     //   接口返回后又整体换成真数据，等于「先出现一遍、再出现一遍」。现在先空着（内容区从
     //   零开始），加载成功才带凝结入场动画出现；只有断网失败才降级 mock。
-    var realCourses by remember { mutableStateOf(emptyList<Course>()) }
-    var coursesLoaded by remember { mutableStateOf(false) }
+    // ★ 2026-10-26：课程改读进程级缓存 CourseRepo（首页 / 我的 / 课程列表页共用，带超时与退避重试），
+    //   修「首页偶发加载不出课程显示无课，要去『我的』转一圈才出现」——旧版这里只请求一次，
+    //   还要先等 /user/me 返回，任一请求慢/失败首页就一直空着。
+    val repoCourses by CourseRepo.courses.collectAsState()
+    val repoLoaded by CourseRepo.loaded.collectAsState()
+    val courseInfos: List<CourseInfo>? = repoCourses
+    // 2026-10-26：课程卡带上课表里的时间 / 地点 / 任课老师（今天有课优先显示今天那节，否则显示下一次上课）
+    var schedule by remember { mutableStateOf<List<com.kewu.app.ScheduleEntry>>(emptyList()) }
+    LaunchedEffect(Unit) { schedule = KewuApi.getMySchedule().orEmpty() }
+    val realCourses = remember(repoCourses, repoLoaded, schedule) {
+        val nowMs = kotlin.time.Clock.System.now().toEpochMilliseconds() + 8 * 3_600_000L
+        val todayWd = ((nowMs / 86_400_000L + 3) % 7).toInt() + 1
+        val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        when {
+            repoCourses != null -> repoCourses.orEmpty().map { c ->
+                val mine = schedule.filter { it.courseId == c.id || it.courseName == c.name }
+                // 今天的那节 → 本周之后最近的一节 → 任意一节
+                val next = mine.firstOrNull { it.weekday == todayWd }
+                    ?: mine.minByOrNull { (it.weekday - todayWd + 7) % 7 }
+                Course(
+                    name = c.name,
+                    teacher = next?.teacherName?.ifBlank { null } ?: c.teacher,
+                    room = next?.location?.ifBlank { null } ?: "待定",
+                    time = next?.let { e ->
+                        (if (e.weekday == todayWd) "" else names[e.weekday - 1] + " ") + e.startTime
+                    } ?: "—",
+                    status = CourseStatus.PENDING, summary = c.description,
+                )
+            }
+            // 2026-10-26：断网不再降级 mock 课程（假课程点进去必然失败，还误导用户），状态卡给「点此重试」
+            else -> emptyList()
+        }
+    }
+    val coursesLoaded = repoCourses != null || repoLoaded
+    val coursesFailed = repoCourses == null && repoLoaded
+    val homeScope = rememberCoroutineScope()
+    // 作业待交：与任务页共用 AssignmentRepo（旧版首页写死 "3"）；首页进来静默刷新一次（1 分钟内复用）
+    val assignmentItems by AssignmentRepo.items.collectAsState()
+    val pendingHomework = assignmentItems?.count { it.pending }
+    LaunchedEffect(Unit) { AssignmentRepo.refresh(maxAgeMs = 60_000) }
     val today = realCourses
     val history = emptyList<Course>()
     val courses = if (showAll) today + history else today
 
     // 问候栏/头像用真实姓名（来自 /user/me 或登录账号）
-    var displayName by remember { mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "同学") }
-    // 真实课程列表（带 id），供首页录音/上传挑选绑定课程；无 id 时禁用录音
-    var courseInfos by remember { mutableStateOf<List<CourseInfo>?>(null) }
+    var displayName by remember { mutableStateOf(KewuApi.displayName("同学")) }
     LaunchedEffect(Unit) {
-        if (KewuApi.currentUser == null) KewuApi.me()
-        displayName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: displayName
-        val list = KewuApi.getCourses()
-        if (list != null) {
-            realCourses = list.map { c ->
-                Course(
-                    name = c.name, teacher = c.teacher, room = "待定", time = "—",
-                    status = CourseStatus.PENDING, summary = c.description,
-                )
-            }
-            courseInfos = list
-        } else {
-            // 断网兜底：此时才降级 mock（用户看到的是「加载失败后的备用数据」，不是闪烁）
-            realCourses = mockToday()
+        // 课程与 /user/me 并行，互不阻塞；每次回到首页都静默刷新一次（有缓存先显示缓存）
+        launch { CourseRepo.refresh(force = true) }
+        // me 失败（后端不可达）时隔几秒重试，拿到真实昵称为止；期间显示缓存昵称
+        var delayMs = 3_000L
+        while (KewuApi.currentUser == null) {
+            KewuApi.me()
+            if (KewuApi.currentUser != null) break
+            kotlinx.coroutines.delay(delayMs)
+            delayMs = (delayMs * 2).coerceAtMost(30_000L)
         }
-        coursesLoaded = true
+        displayName = KewuApi.displayName(displayName)
     }
 
     // ★ coui 玻璃的硬约束：采样者必须在被采样层**之外**，否则首帧 RenderThread SIGSEGV。
@@ -507,13 +546,25 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     // （课表是「查看排课」的一次性入口，签到详情也是临时查看，均不需跨 tab 保留）。
     var drill by remember { mutableStateOf(ClassroomDrill.NONE) }
     var attendanceId by remember { mutableStateOf<String?>(null) }
+    var pendingCode by remember { mutableStateOf("") }
+    LockTabSwipe(drill != ClassroomDrill.NONE)
 
     // 通知中心：铃铛未读数 + 弹窗显隐（首页右上角系统通知，与助教 AI 红点无关）
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
+    val notifSnackbar = LocalKewuSnackbar.current
     LaunchedEffect(Unit) {
-        Notifications.seedIfEmpty(currentRole())
+        // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
         notifUnread = Notifications.unreadCount()
+        // 2026-10-27：课堂纪要生成后写通知（首页在前台时每分钟查一次）
+        while (true) {
+            runCatching { Notifications.pollClassNotes() }.getOrNull()?.firstOrNull()?.let {
+                haptic(HapticKind.Light)
+                notifSnackbar.toast(it + "，点右上角铃铛查看")
+            }
+            notifUnread = Notifications.unreadCount()
+            kotlinx.coroutines.delay(60_000)
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -539,35 +590,43 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             drill == ClassroomDrill.SCAN -> 3
             drill == ClassroomDrill.CODE && attId != null -> 4
             drill == ClassroomDrill.TIMETABLE -> 1
+            drill == ClassroomDrill.COURSES -> 5
+            drill == ClassroomDrill.MISTAKES -> 6
+            drill == ClassroomDrill.PLAN -> 7
             else -> 0
         }
-        AnimatedContent(
+        // 返回时 attendanceId 先被置空、旧页还在滑出：记住最后一次的 id，滑出途中签到页内容不消失
+        val lastAttId = remember { arrayOfNulls<String>(1) }
+        attId?.let { lastAttId[0] = it }
+        // ★ 2026-10-26 Telegram 式推入 / 返回（KewuSlideHost Push：新页整屏推入、底页 1/4 视差压暗，弹簧驱动）。
+        //   仍然只有 placement 位移 + 纯绘制（下钻页含玻璃采样者与相机预览，alpha/离屏层会踩 coui 首帧
+        //   SIGSEGV，且 AndroidView 在离屏层下会黑屏）。右滑跟手返回首页；暗号签到页有输入，不开。
+        KewuSlideHost(
             targetState = drillKey,
-            transitionSpec = {
-                // ★ 2026-10-19 加强切页力度：旧页整屏推出（-/3 屏），新页从屏外完整推进来，
-                //   380ms —— 原先 -w/5 / 320ms 幅度太小，点「签到」跳扫码时几乎看不出在切页。
-                //   仍然 **slide-only**（不加 fade/scale）：下钻页含玻璃采样者与相机预览，
-                //   alpha/离屏层会踩 coui 首帧 SIGSEGV，且 AndroidView 在离屏层下会黑屏。
-                if (targetState > initialState) {
-                    slideInHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                        slideOutHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> -w / 3 }
-                } else {
-                    slideInHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> -w / 3 } togetherWith
-                        slideOutHorizontally(tween(380, easing = FastOutSlowInEasing)) { w -> w }
-                }
-            },
-            label = "classroomDrill",
+            modifier = Modifier.fillMaxSize(),
+            isForward = { a, b -> b > a },
+            swipeEnabled = drillKey != 0 && drillKey != 4,
+            swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
+            onSwipeCommit = { drill = ClassroomDrill.NONE; attendanceId = null },
         ) { key ->
             when (key) {
+                6 -> {
+                    BackHandler { drill = ClassroomDrill.NONE }
+                    MistakeBookScreen(onBack = { drill = ClassroomDrill.NONE })
+                }
+                7 -> {
+                    BackHandler { drill = ClassroomDrill.NONE }
+                    StudyPlanScreen(onBack = { drill = ClassroomDrill.NONE })
+                }
                 2 -> {
                     // 拦截系统返回手势，回到课堂主页，而不是让 Activity 直接 finish 退出 app。
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
                     // 转场期间 attendanceId 可能已被置空（如按返回），先绑定非空本地值，避免 attId!! NPE 闪退
-                    val aid = attId ?: return@AnimatedContent
+                    val aid = attId ?: lastAttId[0] ?: return@KewuSlideHost
                     AttendanceDetailScreen(
                         attendanceId = aid,
                         studentId = KewuApi.username ?: "",
-                        studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
+                        studentName = KewuApi.nameForServer(),
                         onBack = { drill = ClassroomDrill.NONE; attendanceId = null },
                     )
                 }
@@ -580,6 +639,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                         // 签到成功 → 返回首页；失败（如需答随堂问题）→ 带暗号跳暗号签到页继续
                         onDone = { drill = ClassroomDrill.NONE; attendanceId = null },
                         onOpenCodeCheckIn = { sid, code ->
+                            // 扫码拿到的暗号一起带过去（旧版丢掉了，学生要在 30s 有效期内重新手输）
+                            pendingCode = code
                             attendanceId = sid
                             drill = ClassroomDrill.CODE
                         },
@@ -589,16 +650,22 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                     // 暗号签到独立页（学生）：扫码失败的兜底 / 相机不可用
                     BackHandler { drill = ClassroomDrill.NONE; attendanceId = null }
                     // 转场期间 attendanceId 可能已被置空，先绑定非空本地值，避免 attId!! NPE 闪退
-                    val aid = attId ?: return@AnimatedContent
+                    val aid = attId ?: lastAttId[0] ?: return@KewuSlideHost
                     CodeCheckInPage(
                         sessionId = aid,
-                        onBack = { drill = ClassroomDrill.NONE; attendanceId = null },
-                        onDone = { drill = ClassroomDrill.NONE; attendanceId = null },
+                        initialCode = pendingCode,
+                        onBack = { drill = ClassroomDrill.NONE; attendanceId = null; pendingCode = "" },
+                        onDone = { drill = ClassroomDrill.NONE; attendanceId = null; pendingCode = "" },
                     )
                 }
                 1 -> {
                     BackHandler { drill = ClassroomDrill.NONE }
                     TimetablePage(onBack = { drill = ClassroomDrill.NONE }, onNavHide = onNavHide)
+                }
+                5 -> {
+                    // 「我的课程」全部列表（点首页左侧大状态卡进入，coui 列表页，2026-10-26）
+                    BackHandler { drill = ClassroomDrill.NONE }
+                    AllCoursesPage(onBack = { drill = ClassroomDrill.NONE }, onNavHide = onNavHide)
                 }
                 else -> {
                     // 首次进场（开 app / 切回课堂 tab）：分块 Mac 式入场。
@@ -617,8 +684,7 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 name = displayName,
                                 unread = notifUnread,
                                 onOpenNotifications = {
-                                    notifUnread = 0
-                                    Notifications.markAllRead()
+                                    // 先打开再标记已读（旧版先 markAllRead 再打开，列表里的未读点永远看不到）
                                     showNotif = true
                                 },
                             ) { onGoToTab(3) }
@@ -630,24 +696,54 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 // 与课表页今天的 3 节对齐
                                 todayCount = today.count { it.time.length == 5 && it.time[2] == ':' },
                                 loading = !coursesLoaded,
+                                failed = coursesFailed,
+                                pendingHomework = pendingHomework,
+                                onRetry = { homeScope.launch { CourseRepo.refresh(force = true) } },
+                                onAllCourses = { drill = ClassroomDrill.COURSES },
                                 onTodayCourses = { drill = ClassroomDrill.TIMETABLE },
                                 onHomework = { onGoToTab(2) },
                             )
                         }
+                        // 2026-10-26 AI 学习中心：课前预习卡 + 错题本 / 学习规划入口
+                        AiPreviewCard(pageBackdrop, Modifier.padding(bottom = 12.dp))
+                        AiStudyEntryRow(
+                            onMistakes = { drill = ClassroomDrill.MISTAKES },
+                            onPlan = { drill = ClassroomDrill.PLAN },
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
                         // 签到卡片（当有进行中的签到时显示）
                         // 身份分流：该签到的发布者（教师）→ 签到详情展示二维码；学生 → 扫码页
                         CheckInCardIfActive(pageBackdrop) { session ->
                             attendanceId = session.id
-                            val me = KewuApi.currentUser?.user?.nickname ?: KewuApi.username
-                            drill = if (me != null && session.publisher.isNotBlank() && session.publisher == me) {
-                                ClassroomDrill.ATTENDANCE
-                            } else {
-                                ClassroomDrill.SCAN
-                            }
+                            // 2026-10-26：按登录角色分流（旧版比「发布者 == 我的昵称」，同名学生会进教师视图）
+                            drill = if (currentRole() == ROLE_TEACHER) ClassroomDrill.ATTENDANCE else ClassroomDrill.SCAN
                         }
                         RecordingOverlay(backdrop = pageBackdrop, courseInfos = courseInfos)
-                        courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
-                        MoreBar(showAll, Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 220L), 24f)) { showAll = !showAll }
+                        // 2026-10-26：课堂录音中 → 课程卡区域换成「课堂录音雷达」（同堂正在录音的设备分布在圆心四周）。
+                        // 切换只用 slide（placement 位移）+ 不裁剪的尺寸过渡：玻璃采样者祖先不加 alpha / clip 层。
+                        val recSt by RecordingManager.status.collectAsState()
+                        val recSid = if (recSt is RecordingStatus.Recording) RecordingManager.currentSessionId() else null
+                        AnimatedContent(
+                            targetState = recSid,
+                            transitionSpec = {
+                                (slideInVertically(spring(dampingRatio = 0.82f, stiffness = 360f)) { it / 5 } togetherWith
+                                    slideOutVertically(tween(160)) { it / 8 })
+                                    .using(SizeTransform(clip = false) { _, _ -> spring(dampingRatio = 0.86f, stiffness = 360f) })
+                            },
+                            label = "radarSwap",
+                        ) { sid ->
+                            Column(Modifier.fillMaxWidth()) {
+                                if (sid != null) {
+                                    RecordingRadar(pageBackdrop, sid, Modifier.padding(bottom = 12.dp))
+                                } else {
+                                    courses.forEachIndexed { i, c -> CourseCard(c, pageBackdrop, i) }
+                                }
+                            }
+                        }
+                        // 「查看全部课程」直接进课程列表（旧版只切换一个永远为空的历史列表，点了没效果）
+                        MoreBar(showAll, Modifier.riseEnter(rememberEnterProgress(0, baseDelayMs = 220L), 24f)) {
+                            drill = ClassroomDrill.COURSES
+                        }
                         Spacer(Modifier.height(24.dp))
                     }
                 }
@@ -655,7 +751,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
         }
         NotificationSheet(show = showNotif, onDismiss = {
             showNotif = false
-            notifUnread = Notifications.unreadCount()
+            Notifications.markAllRead()
+            notifUnread = 0
         })
     }
 }
@@ -737,6 +834,10 @@ private fun StatusSection(
     courses: List<Course>,
     todayCount: Int,
     loading: Boolean = false,
+    failed: Boolean = false,
+    pendingHomework: Int? = null,
+    onRetry: () -> Unit = {},
+    onAllCourses: () -> Unit,
     onTodayCourses: () -> Unit,
     onHomework: () -> Unit,
 ) {
@@ -759,11 +860,13 @@ private fun StatusSection(
     ) {
         // 左侧大状态卡：coui Card（squircleSurface 本身就按卡片轮廓遮罩子内容）。
         // insideMargin 置 0，16dp 内边距挪到文字列上——水印要贴着卡片原点布局、越界部分被卡片裁掉。
+        // 2026-10-26：整卡可点 → 「我的课程」全部列表（coui 按压 Tint，与右侧小卡同一交互）
         Card(
             modifier = Modifier.weight(1f).fillMaxHeight(),
             cornerRadius = 22.dp,
             insideMargin = PaddingValues(0.dp),
             colors = kewuCardColors(),
+            onClick = { haptic(HapticKind.Tick); if (failed) onRetry() else onAllCourses() },
         ) {
             // 内容裁剪层（双保险：coui 遮罩之外再挂一层矩形 clipToBounds）。
             // ★ 裁剪节点必须留在卡片原点：水印子节点带 offset，若把 clip 挂到
@@ -793,17 +896,26 @@ private fun StatusSection(
                         color = statusTint, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
                     )
                     Spacer(Modifier.height(2.dp))
+                    // 2026-10-26：后端课程还没有上课时间 / 教室，旧版这里同时出现「无课 / 下节课：X · 待定 /
+                    // 今天没有排课」三句互相矛盾的话；排课数据接入前只陈述能确定的事实
                     Text(
-                        if (live != null) "${live.name} · ${live.room}"
-                        else (next?.let { "下节课：${it.name} · ${it.room}" } ?: "今日课程已全部结束"),
-                        color = cs.onSurfaceSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                        when {
+                            live != null -> "${live.name} · ${live.room}"
+                            loading -> "正在同步课程…"
+                            failed -> "课程加载失败"
+                            courses.isEmpty() -> "还没有加入课程"
+                            else -> "共 ${courses.size} 门课程"
+                        },
+                        color = if (failed) cs.error else cs.onSurfaceSecondary,
+                        fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                     )
                     Text(
                         when {
-                            loading -> "正在同步课程…"
                             live != null -> "已总结 $done / ${courses.size} 节"
-                            todayCount == 0 -> "今天没有排课"
-                            else -> "今天共 $todayCount 节课"
+                            failed -> "点此重试"
+                            loading -> ""
+                            todayCount > 0 -> "今天共 $todayCount 节课"
+                            else -> "点击查看全部课程"
                         },
                         color = cs.onSurfaceSecondary, fontSize = 14.sp, fontWeight = FontWeight.Medium, maxLines = 1,
                     )
@@ -822,7 +934,7 @@ private fun StatusSection(
             Spacer(Modifier.height(12.dp))
             MiniStatCard(
                 label = "作业待交",
-                value = "3", // mock：与任务页「本周待交」对齐
+                value = pendingHomework?.toString() ?: "—", // 真实待交数（未交 + 被打回），加载中显示 —
                 modifier = Modifier.fillMaxWidth().weight(1f),
                 onClick = onHomework,
             )
@@ -885,12 +997,34 @@ private fun MiniStatCard(
 private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseInfo>?) {
     val cs = COUITheme.colorScheme
 
-    val activeCourse = courseInfos?.firstOrNull()
-    val classId = activeCourse?.id
-    val courseName = activeCourse?.name ?: "课堂"
-
     // 录音状态单源：单例 StateFlow（旋屏 / 切 tab / 页面销毁均不影响录音进程）
     val st = RecordingManager.status.collectAsState().value
+
+    // ★ 2026-10-26 用户口径：只有「老师发起了签到（正在上课）+ 我已经签到」的那门课才出现课堂录音按钮，
+    //   录音也绑定到这门课（旧版无条件显示、固定绑第一门课）。每 20 秒复查一次；录音 / 上传进行中不受影响。
+    var liveCourse by remember { mutableStateOf<CourseInfo?>(null) }
+    LaunchedEffect(courseInfos) {
+        val me = KewuApi.username.orEmpty()
+        while (true) {
+            liveCourse = courseInfos.orEmpty().firstOrNull { c ->
+                val on = KewuApi.getClassState(c.id)?.state == "ON"
+                val todays = KewuApi.getAttendances(c.id).orEmpty().filter { it.createdAt.startsWith(todayCn()) }
+                (on || todays.any { it.state.equals("OPEN", true) }) && me.isNotBlank() &&
+                    todays.any { s -> KewuApi.getMyAttendance(s.id, me) != null }
+            }
+            kotlinx.coroutines.delay(if (liveCourse != null) 10_000 else 6_000)
+        }
+    }
+    // 下课后（不再「上课中 + 已签到」）按钮消失；只有录音中 / 上传中 / 上传失败待重试时保留
+    val busy = st is RecordingStatus.Recording || st is RecordingStatus.Uploading || st is RecordingStatus.Error
+    val snackbar = LocalKewuSnackbar.current
+    val evt = RecordingManager.events.collectAsState().value
+    LaunchedEffect(evt) { evt?.let { snackbar.toast(it); RecordingManager.consumeEvent() } }
+    if (liveCourse == null && !busy) return
+
+    val activeCourse = liveCourse ?: courseInfos?.firstOrNull()
+    val classId = activeCourse?.id
+    val courseName = activeCourse?.name ?: "课堂"
 
     // 课堂协同会话：RecordingManager 上传时带 sessionId = classSessionId(课程, 今天)，
     // 同课同日的教师端 / 学生端落到同一会话由 8081 择优融合。这里只查一下会话是否存在，
@@ -1027,11 +1161,30 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
 
 @Composable
 private fun Waveform(active: Boolean = false) {
-    val t by rememberInfiniteTransition().animateFloat(
+    // 2026-10-26：只在录音时创建无限动画（旧版空闲也一直在跑，且位于玻璃卡内，每帧都要重绘）；
+    // 动画值只在 Canvas 的 draw 阶段读，不触发重组
+    val color = COUITheme.colorScheme.primary
+    if (!active) {
+        Canvas(Modifier.size(36.dp, 26.dp)) {
+            val n = 5
+            val bw = size.width / (n * 2f)
+            for (i in 0 until n) {
+                val h = 0.12f * size.height
+                drawRoundRect(
+                    color = color,
+                    topLeft = Offset(i * 2f * bw + bw * 0.25f, (size.height - h) / 2f),
+                    size = Size(bw * 0.5f, h),
+                    cornerRadius = CornerRadius(bw * 0.25f),
+                )
+            }
+        }
+        return
+    }
+    val tState = rememberInfiniteTransition().animateFloat(
         0f, 1f, infiniteRepeatable(tween(700, easing = FastOutSlowInEasing), RepeatMode.Reverse),
     )
-    val color = COUITheme.colorScheme.primary
     Canvas(Modifier.size(36.dp, 26.dp)) {
+        val t = tState.value
         val n = 5
         val bw = size.width / (n * 2f)
         val pi = 3.1415927f
@@ -1355,16 +1508,35 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
     val cs = COUITheme.colorScheme
     var currentSession by remember { mutableStateOf<AttendanceSession?>(null) }
 
-    // 获取当前进行中的签到会话（取第一门课的 OPEN 会话）
+    // 获取当前进行中的签到会话：「我的课程」里任一门 state=OPEN 且我还没签的。
+    // ★ 2026-10-27 修「老师开课了学生首页一直不出签到卡」：旧版只在进首页时查一次，之后不再刷新。
+    //   现在首页在前台时每 5 秒轮询一次（切走 tab 本 Composable 离开组合，循环随之停止，不耗电），
+    //   一出现就震动 + 提示；已签到的会话不再显示卡片。
+    val snackbar = LocalKewuSnackbar.current
     LaunchedEffect(Unit) {
-        try {
-            val courses = KewuApi.getCourses()
-            if (!courses.isNullOrEmpty()) {
-                val sessions = KewuApi.getAttendances(courses[0].id)
-                currentSession = sessions?.firstOrNull { it.state == "OPEN" }
+        var lastNotified: String? = null
+        var tick = 0
+        while (true) {
+            try {
+                val courses = (if (tick % 12 == 0) CourseRepo.refresh(force = true) else null) ?: CourseRepo.courses.value ?: CourseRepo.refresh()
+                val me = KewuApi.username.orEmpty()
+                currentSession = courses.orEmpty().firstNotNullOfOrNull { c ->
+                    KewuApi.getAttendances(c.id)?.firstOrNull { it.state.equals("OPEN", true) }
+                }?.takeIf { s -> me.isBlank() || KewuApi.getMyAttendance(s.id, me) == null }
+                currentSession?.let { s ->
+                    if (s.id != lastNotified) {
+                        lastNotified = s.id
+                        haptic(HapticKind.Medium)
+                        snackbar.toast("老师已开始签到，点首页签到卡扫码")
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // 网络异常时卡片维持上一次结果，不阻塞首页
             }
-        } catch (e: Exception) {
-            // 网络异常时卡片静默不显示，不阻塞首页
+            tick++
+            kotlinx.coroutines.delay(5_000)
         }
     }
 

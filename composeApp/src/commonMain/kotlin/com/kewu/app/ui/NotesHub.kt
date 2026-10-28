@@ -153,7 +153,8 @@ fun CourseDetailScreen(
                             NoteRow(
                                 note = note,
                                 expanded = expandedNoteId == note.id,
-                                expandedContent = if (expandedNoteId == note.id) expandedContent else null,
+                                // 只认 id 对得上的内容：快速先展开 A 再展开 B 时，A 晚到的结果不会显示在 B 下面
+                                expandedContent = if (expandedNoteId == note.id) expandedContent?.takeIf { it.id == note.id } else null,
                                 onToggle = {
                                     if (expandedNoteId == note.id) {
                                         expandedNoteId = null

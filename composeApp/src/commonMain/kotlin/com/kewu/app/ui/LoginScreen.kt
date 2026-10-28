@@ -1,5 +1,7 @@
 package com.kewu.app.ui
 
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.runtime.State
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -50,6 +52,9 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -128,7 +133,10 @@ import io.github.suqi8.coui.kmp.preference.ArrowPreference
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kewu.composeapp.generated.resources.Res
 import kewu.composeapp.generated.resources.student_logo
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import kotlinx.coroutines.launch
 import org.jetbrains.compose.resources.painterResource
 import kotlin.math.sin
@@ -180,10 +188,17 @@ fun LoginScreen(onLogin: () -> Unit) {
     var pwd2 by remember { mutableStateOf("") }
     // 学校选择器：底部弹层开关（MIUI 风选项 + 模糊搜索）
     var schoolSheetOpen by remember { mutableStateOf(false) }
+    // ★ 2026-10-26：注册页一出现就在后台线程预热高校数据（ALL_UNIVERSITIES 是 lazy），
+    //   点「选择学校」时不再在主线程做首次初始化（vivo 闪退兼容修复，见 Universities.kt 头注释）。
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.Default) { runCatching { ALL_UNIVERSITIES.size } }
+    }
     // 登录/注册失败文案（网络异常 / 账号密码错误），成功后清空
     var loginError by remember { mutableStateOf("") }
 
     val pageBackdrop = rememberLayerBackdrop()
+    // 2026-10-26：呼吸相位以 State 传递、只在 drawBehind 里读 .value —— 旧版在组合阶段读 Float，
+    // 无限动画让整个登录页每帧重组（键盘输入、玻璃卡都跟着重组）
     val breath = rememberBreathPhase()
 
     // 首次组合 → 触发整页进场
@@ -212,7 +227,7 @@ fun LoginScreen(onLogin: () -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface)
                 .drawBehind {
-                    val t = breath
+                    val t = breath.value
                     val w = size.width
                     val h = size.height
                     val minD = if (w < h) w else h
@@ -236,7 +251,13 @@ fun LoginScreen(onLogin: () -> Unit) {
         )
 
         // 居中玻璃卡（官方 drawBackdrop 同款组合 + 凝结出场）
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        // ★ 2026-10-26 输入法避让：外层随键盘收缩 + 可滚动；内层最小高度 = 可视高度，键盘未弹时仍居中，
+        //   键盘弹起后聚焦的输入框（注册页学号 / 密码等）会被滚动容器自动带到键盘上方。
+        // 2026-10-26 edge-to-edge：safeDrawing = 状态栏 + 导航栏 + 刘海 + 输入法，玻璃卡不再顶进状态栏 / 被键盘盖住
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+        val viewportH = maxHeight
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        Box(Modifier.fillMaxWidth().heightIn(min = viewportH), contentAlignment = Alignment.Center) {
             Box(
                 Modifier
                     .fillMaxWidth()
@@ -414,6 +435,8 @@ fun LoginScreen(onLogin: () -> Unit) {
                 }
             }
         }
+        }
+        }
 
         // ★ 一级界面返回键（2026-10-19 用户需求）：登录/注册首屏也按「双击退出」处理 ——
         //   第一次按系统返回键弹出 coui Snackbar「再次按下返回键退出应用」，2s 内再按一次退出。
@@ -430,7 +453,8 @@ fun LoginScreen(onLogin: () -> Unit) {
             SchoolPickerSheet(
                 selected = school,
                 onDismiss = { schoolSheetOpen = false },
-                onSelect = { school = it; schoolSheetOpen = false },
+                // 选的学校先暂存，注册成功后写进本地资料（后端注册接口暂不收学校字段）
+                onSelect = { school = it; schoolSheetOpen = false; kvSet("kewu_pending_school", it) },
             )
         }
     }
@@ -438,15 +462,14 @@ fun LoginScreen(onLogin: () -> Unit) {
 
 /** 背景光斑的呼吸相位（0..1 循环，~9s 周期）——drawBehind 里每帧读取。 */
 @Composable
-private fun rememberBreathPhase(): Float {
+private fun rememberBreathPhase(): State<Float> {
     val transition = rememberInfiniteTransition(label = "breath")
-    val phase by transition.animateFloat(
+    return transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(9000, easing = LinearEasing), RepeatMode.Restart),
         label = "breathPhase",
     )
-    return phase
 }
 
 /**
@@ -548,7 +571,14 @@ private fun LoginButton(
                 val msg = if (mode == 0) {
                     KewuApi.login(acc, pwd)
                 } else {
-                    val r = KewuApi.register(acc, pwd, name.trim(), if (role == 1) "TEACHER" else "STUDENT")
+                    val r = KewuApi.register(
+                        acc, pwd, name.trim(), if (role == 1) "TEACHER" else "STUDENT",
+                        school = kvGet("kewu_pending_school").orEmpty(),
+                    )
+                    if (r == null) {
+                        kvGet("kewu_pending_school")?.let { ProfileStore.setSchool(acc, it) }
+                        kvSet("kewu_pending_school", null)
+                    }
                     if (r == null) KewuApi.login(acc, pwd) else r
                 }
                 if (msg == null) {
@@ -709,7 +739,7 @@ private fun SchoolSelectorField(value: String, onClick: () -> Unit) {
  * 再回调，退场动画能完整播放。
  */
 @Composable
-private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
+internal fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
 
@@ -737,11 +767,19 @@ private fun SchoolPickerSheet(selected: String, onDismiss: () -> Unit, onSelect:
         Spacer(Modifier.height(10.dp))
 
         // 结果列表（模糊搜索：名称 / 全拼 / 简写；全量 2900+ 所）
-        val results = remember(query) { searchUniversities(query) }
+        // ★ 2026-10-26 兼容性：搜索放后台线程（Dispatchers.Default），主线程只渲染结果；
+        //   searched = 「已算完的那个查询串」，没算完前不显示「使用『xxx』」兜底项，避免一闪而过。
+        val searchState by produceState<Pair<String, List<University>>?>(null, query) {
+            value = query to withContext(Dispatchers.Default) {
+                try { searchUniversities(query) } catch (_: Throwable) { emptyList() }
+            }
+        }
+        val results = searchState?.second.orEmpty()
+        val searched = searchState?.first == query
         Box(Modifier.fillMaxWidth().height(340.dp)) {
             LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                 // 未命中时给「自由输入」兜底项（后端 register 接受任意 nickname/school 字符串）
-                if (results.isEmpty() && query.isNotBlank()) {
+                if (searched && results.isEmpty() && query.isNotBlank()) {
                     item {
                         SchoolOptionRow(
                             name = "使用「${query.trim()}」",

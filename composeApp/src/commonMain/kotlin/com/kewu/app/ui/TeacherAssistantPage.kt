@@ -13,10 +13,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.text.style.TextOverflow
+import com.kewu.app.shareText
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -26,7 +32,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import com.kewu.app.AiAgent
 import com.kewu.app.AiClient
 import com.kewu.app.ChatHistory
+import com.kewu.app.AssistantHub
 import com.kewu.app.Analytics
 import com.kewu.app.AssignmentInfo
 import com.kewu.app.AssignmentStats
@@ -88,13 +100,13 @@ import kotlinx.coroutines.launch
 // 学情上下文随 system prompt 注入；AI 不可用时回退本地规则 answer() 兜底。
 //
 // 组件语言与学生端小悟一致：AI coui 毛玻璃气泡（标签行+内容块）/ 用户 coui Surface 品牌色气泡 /
-// 液态玻璃输入框常驻导航栏上方（bottom 118dp 兜底 + 根 imePadding 随键盘上移）。
+// 液态玻璃输入框常驻导航栏上方（bottom 118dp；键盘弹起时 8dp，避让由主界面内容区 imePadding 统一处理）。
 
 /**
  * 教学简报播报日期标记（kv，存「当天 00:00」的时间戳）。
  * 2026-10-25：教师端助教页每天只在第一次进入时播报一次简报，当天再进入不重复发。
  */
-private const val KEY_TA_BRIEF_DAY = "kewu_ta_brief_day"
+private const val KEY_TA_BRIEF_DAY = AssistantHub.KEY_TA_BRIEF_DAY
 
 private data class WatchStudent(val name: String, val reason: String, val kind: Int) // 0=退步 1=风险 2=关注
 
@@ -113,7 +125,18 @@ private data class TaMsg(
     val ts: Long = 0L,
     /** true = 属于真实对话，需要写进聊天记录（入场简报每次进页现生成，不落盘） */
     val keep: Boolean = false,
+    /** 被引用的原文（与学生端 ChatMsg.quote 同口径）：用户气泡顶部渲染引用小条；null = 无引用。 */
+    val quote: String? = null,
 )
+
+/** 复制 / 引用 / 分享用的纯文本（Students / Chips 块转可读行，与落盘口径一致）。 */
+private fun TaMsg.plainText(): String = blocks.joinToString("\n") { b ->
+    when (b) {
+        is TaBlock.Text -> b.s
+        is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
+        is TaBlock.Chips -> b.list.joinToString("、")
+    }
+}
 
 @Composable
 fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
@@ -124,6 +147,16 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
     var input by remember { mutableStateOf("") }
     var dataReady by remember { mutableStateOf(false) }
+
+    // ── 长按气泡操作菜单（复制 / 引用 / 分享），与学生端 TaPage 同一套交互（2026-10-26） ──
+    // 引用：输入框上方单独一条引用小条，发送时随消息带上（TaMsg.quote），× 可取消
+    var quotePreview by remember { mutableStateOf<String?>(null) }
+    var menuMsg by remember { mutableStateOf<TaMsg?>(null) }
+    // 菜单贴气泡定位：被长按的气泡持续上报窗口坐标，减去根盒原点得相对坐标（滚动时菜单跟着走）
+    var menuAnchor by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    var rootOrigin by remember { mutableStateOf(Offset.Zero) }
+    val snackbar = LocalKewuSnackbar.current
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
 
     // ── 学情数据（全部带兜底；问答与主动简报共用） ──
     var teacherName by remember { mutableStateOf("老师") }
@@ -166,9 +199,11 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 role = if (m.isUser) "user" else "assistant",
                 text = blocksToText(m.blocks),
                 ts = m.ts,
+                quote = m.quote,
             )
         }
-        ChatHistory.saveAll(ChatHistory.KEY_TEACHER, entries)
+        // 按 id 合并写入（不覆盖更早几天的记录 / 页面不在时 AssistantHub 追加的回复）
+        ChatHistory.upsert(ChatHistory.KEY_TEACHER, entries)
         hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
     }
 
@@ -201,6 +236,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         id = if (e.id != 0L) e.id else ChatHistory.nextId(),
         ts = e.ts,
         keep = true, // 来自历史，后续整体落盘时要保留
+        quote = e.quote,
     )
 
     // 顶部下拉加载更早一天
@@ -224,11 +260,20 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             msgVersion++
         }
         if (KewuApi.currentUser == null) KewuApi.me()
-        teacherName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师"
+        teacherName = KewuApi.displayName("老师")
+        // 教师课程：/me 绑定课 → 控制台今日课程 → 教学班所属课程 → 全量（教师账号通常不在 /me 里绑课，
+        // 旧版简报一直显示「课程 0 门」，小悟据此回答「暂无课程」）
         val courses: List<CourseInfo>? =
-            KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() } ?: KewuApi.getCourses()
+            KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.getTeacherConsole()?.todayCourses?.map { CourseInfo(it.courseId, it.courseName, "", "") }
+                    ?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.getTeacherClasses()?.classes?.map { CourseInfo(it.courseId, it.courseName, "", "") }
+                    ?.distinctBy { it.id }?.takeIf { it.isNotEmpty() }
+                ?: KewuApi.myCourses()
         courseCount = courses?.size ?: 0
-        val assignments: List<AssignmentInfo>? = KewuApi.getAssignments(courses?.firstOrNull()?.id)
+        // 全部课程的作业（旧版只取第一门课）
+        val myIds = courses.orEmpty().map { it.id }.toSet()
+        val assignments: List<AssignmentInfo>? = KewuApi.getAssignments(null)?.filter { myIds.isEmpty() || it.courseId in myIds }
         assignmentCount = assignments?.size ?: 0
         // 控制台聚合：待批阅红点数（2026-10-21 接入，简报用）
         pendingReview = KewuApi.getTeacherConsole()?.pendingReview
@@ -258,14 +303,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 }
             }
         }
-        if (watch.isEmpty()) {
-            watch += listOf(
-                WatchStudent("张明", "近两次作业得分下滑 18 分", 0),
-                WatchStudent("李婷", "连续两次签到风险分偏高", 1),
-                WatchStudent("王浩", "作业提交质量波动大，建议面谈", 2),
-            )
-            watchFromMock = true
-        }
+        // 2026-10-26：不再用「张明 / 李婷 / 王浩」示例名单兜底——旧版示例学生会写进聊天记录、还会作为
+        // 学情上下文发给大模型，老师以为是真实学生。没有数据就如实说没有。
         watchList = watch.distinctBy { it.name }.take(5)
         dataReady = true
 
@@ -276,7 +315,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         if (kvGet(KEY_TA_BRIEF_DAY)?.toLongOrNull() == visibleCutoff) {
             return@LaunchedEffect
         }
-        kvSet(KEY_TA_BRIEF_DAY, visibleCutoff.toString())
+        // ★ 2026-10-26：「今日已播报」标记挪到三条都发完之后再写（旧版先写标记，播报途中切走 tab
+        //   剩下的简报当天就再也不发了）
 
         delay(500)
         push(TaMsg(false, buildList {
@@ -301,9 +341,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }), persist = true)
         delay(650)
         push(TaMsg(false, buildList {
-            add(TaBlock.Text(if (watchFromMock) "以下学生近期需要关注（示例数据）：" else "以下学生近期需要关注：",
-                emphasis = true))
-            add(TaBlock.Students(watchList))
+            if (watchList.isEmpty()) {
+                add(TaBlock.Text("近期没有发现需要特别关注的学生（签到风险与作业预批阅均正常）。"))
+            } else {
+                add(TaBlock.Text("以下学生近期需要关注：", emphasis = true))
+                add(TaBlock.Students(watchList))
+            }
         }), persist = true)
         delay(650)
         push(TaMsg(false, buildList {
@@ -316,16 +359,15 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             }
             add(TaBlock.Text("有问题随时问我，比如「谁退步了」「作业质量怎么样」「谁没签到」。"))
         }), persist = true)
+        kvSet(KEY_TA_BRIEF_DAY, visibleCutoff.toString())
     }
 
-    // 新消息自动滚到底
-    // 新消息（自己发的 / AI 回的）进入后平滑滑到最底部：先让一帧给气泡完成布局，
-    // 再 animateScrollToItem —— 否则会「瞬间跳到底部」而不是滑动（2026-10-24 用户反馈）
-    LaunchedEffect(msgVersion) {
-        if (messages.isEmpty()) return@LaunchedEffect
-        kotlinx.coroutines.yield()
-        listState.animateScrollToItem(messages.size - 1)
-    }
+    // 新消息平滑滑到底；键盘弹起 / 收起等视口变化时保持贴底（2026-10-26 改用 ChatAutoScroll，
+    // 原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳到上面的对话）。
+    // messages 是普通 list，靠读 msgVersion 触发重组；key 只取最后一条 id —— 顶部加载更早历史不触发滚底
+    val lastMsgId = msgVersion.let { messages.lastOrNull()?.id ?: 0L }
+    val streamText = AssistantHub.streaming.collectAsState().value[ChatHistory.KEY_TEACHER]
+    ChatAutoScroll(listState, lastMsgId to (streamText?.length?.div(40) ?: -1))
 
     // ── 真实 AI 问答（2026-10-24 接入）：AiClient 大模型 + 本页已聚合的学情上下文 ──
 
@@ -363,9 +405,14 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             "不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），也不要复述问题。\n\n当前班级学情数据：\n"
 
     /** 真实 AI 回答：成功返回文本块列表；失败返回 null（调用方回退本地规则）。 */
-    suspend fun aiAnswer(q: String): List<TaBlock>? {
-        val reply = AiClient.chat(
-            aiSystemPrompt + buildAiContext() + "\n\n" + AiAgent.teacherCapability(), q,
+    suspend fun aiAnswer(q: String, emit: (String) -> Unit = {}): List<TaBlock>? {
+        // 2026-10-26：流式——边生成边上屏
+        val reply = AiClient.chatStream(
+            listOf(
+                AiClient.Msg("system", aiSystemPrompt + buildAiContext() + "\n【课悟 App 里此刻能看到的全部信息（以此为准，作业截止、提交、批阅、签到等直接引用）】\n" + com.kewu.app.AiContext.teacher() + "\n\n" + AiAgent.teacherCapability()),
+                AiClient.Msg("user", q),
+            ),
+            onDelta = emit,
         ) ?: return null
         val parsed = AiAgent.parse(reply)
         val blocks = parsed.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }.toMutableList()
@@ -381,8 +428,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     /** 本地规则兜底：AI 不可用（断网/超时/鉴权失败）时保证问答可用。 */
     fun answer(q: String): List<TaBlock> = when {
         q.contains("关注") || q.contains("退步") || q.contains("学生") -> buildList {
-            add(TaBlock.Text(if (watchFromMock) "重点关注名单（示例数据）：" else "重点关注名单：", emphasis = true))
-            add(TaBlock.Students(watchList))
+            if (watchList.isEmpty()) {
+                add(TaBlock.Text("当前没有需要特别关注的学生。", emphasis = true))
+            } else {
+                add(TaBlock.Text("重点关注名单：", emphasis = true))
+                add(TaBlock.Students(watchList))
+            }
             add(TaBlock.Text("建议：退步学生优先一对一沟通，风险学生核实签到设备与代签可能。"))
         }
         q.contains("作业") || q.contains("批阅") || q.contains("提交") -> buildList {
@@ -415,27 +466,49 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         else -> listOf(TaBlock.Text("这个问题我还在学习（本地规则暂不支持）。可以试试问我：谁需要关注、作业质量、签到情况、薄弱知识点。"))
     }
 
-    var aiThinking by remember { mutableStateOf(false) }
-
-    fun send() {
-        val q = input.trim()
-        if (q.isEmpty() || aiThinking) return
-        push(TaMsg(true, listOf(TaBlock.Text(q))), persist = true)
-        input = ""
-        haptic(HapticKind.Light)
-        scope.launch {
-            aiThinking = true
-            // 优先真实大模型；失败回退本地规则（学情数据仍有价值），并明确告知用户
-            val aiBlocks = aiAnswer(q)
-            aiThinking = false
-            push(TaMsg(false, aiBlocks ?: buildList {
-                add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
-                addAll(answer(q))
-            }), persist = true)
+    // 2026-10-26：AI 请求改由进程级 AssistantHub 发起——切走页面不取消，回答到达时若不在本页
+    // 就点亮底部「助教」红点；回到本页 pending 仍在则继续显示「正在输入中」。
+    val pendingKeys by AssistantHub.pending.collectAsState()
+    val aiThinking = ChatHistory.KEY_TEACHER in pendingKeys
+    LaunchedEffect(Unit) {
+        AssistantHub.incoming.collect { inc ->
+            if (inc.key != ChatHistory.KEY_TEACHER || messages.any { it.id == inc.entry.id }) return@collect
+            @Suppress("UNCHECKED_CAST")
+            val blocks = (inc.payload as? List<TaBlock>)
+                ?: inc.entry.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it) }
+            // 已由 AssistantHub 落盘，这里只上屏（keep=true：之后整体落盘时保留）
+            messages += TaMsg(false, blocks, id = inc.entry.id, ts = inc.entry.ts, keep = true)
+            msgVersion++
         }
     }
 
-    Box(Modifier.fillMaxSize().background(cs.surface)) {
+    fun send() {
+        val text = input.trim()
+        val quoted = quotePreview
+        // 允许「只发引用 + 正文为空」（与学生端一致）；两者都空则不动
+        if ((text.isEmpty() && quoted == null) || aiThinking) return
+        push(TaMsg(true, if (text.isEmpty()) emptyList() else listOf(TaBlock.Text(text)), quote = quoted), persist = true)
+        input = ""
+        quotePreview = null
+        haptic(HapticKind.Light)
+        // 引用拼进问题正文交给大模型 / 本地规则（学生端同口径）
+        val q = if (quoted != null) "（引用：$quoted）${text.ifEmpty { "请解释一下这段内容" }}" else text
+        AssistantHub.askStream(ChatHistory.KEY_TEACHER) { emit ->
+            // 优先真实大模型（流式）；失败回退本地规则（学情数据仍有价值），并明确告知用户
+            val blocks = aiAnswer(q, emit) ?: buildList {
+                add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
+                addAll(answer(q))
+            }
+            AssistantHub.Reply(blocksToText(blocks), payload = blocks)
+        }
+    }
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(cs.surface)
+            .onGloballyPositioned { rootOrigin = it.positionInWindow() },
+    ) {
         // 背景采样层（玻璃气泡的采样源，与气泡平级；底色 = coui 页面灰底 surface）
         Box(
             Modifier
@@ -443,7 +516,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        Column(Modifier.fillMaxSize().imePadding()) {
+        // 2026-10-26：输入法避让由主界面内容区统一 imePadding，这里不再重复加
+        Column(Modifier.fillMaxSize()) {
             // ── AI 人格区（与学生端小悟同款语言） ──
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 16.dp, bottom = 8.dp),
@@ -496,7 +570,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     }
                 }
             }
-            val snapshot = messages.toList()
+            // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃）
+            val snapshot = messages.distinctBy { it.id }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxWidth().weight(1f).nestedScroll(pullConnection),
@@ -516,10 +591,31 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     )
                 }
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
-                    Box(Modifier.animateItem()) {
-                        TaBubble(pageBackdrop, msg)
+                    Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
+                        TaBubble(
+                            pageBackdrop, msg,
+                            // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
+                            reportBounds = msg == menuMsg,
+                            onBounds = { menuAnchor = it },
+                        ) {
+                            menuMsg = msg
+                            haptic(HapticKind.Medium)
+                        }
                     }
                     Spacer(Modifier.height(10.dp))
+                }
+                // 流式回答草稿（思考中占位 → 逐段增长；结束后由正式消息替换）
+                if (streamText != null) {
+                    item(key = "ai-streaming") {
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
+                            TaBubble(
+                                pageBackdrop,
+                                TaMsg(false, streamText.ifEmpty { "小悟正在思考…" }.lines()
+                                    .filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }),
+                            )
+                        }
+                        Spacer(Modifier.height(10.dp))
+                    }
                 }
                 if (!dataReady && snapshot.isEmpty()) {
                     item {
@@ -535,6 +631,34 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 onInput = { input = it },
                 onSend = { send() },
                 enabled = !aiThinking,
+                quote = quotePreview,
+                onCancelQuote = { quotePreview = null },
+            )
+        }
+
+        // ── 长按气泡的操作菜单（液态玻璃 + coui 选项，与学生端同款）：必须是根盒最后一个子节点（盖在最上层） ──
+        val activeMenuMsg = menuMsg
+        if (activeMenuMsg != null) {
+            val relRect = menuAnchor?.let { r ->
+                androidx.compose.ui.geometry.Rect(
+                    r.left - rootOrigin.x, r.top - rootOrigin.y,
+                    r.right - rootOrigin.x, r.bottom - rootOrigin.y,
+                )
+            }
+            val text = activeMenuMsg.plainText().ifBlank { activeMenuMsg.quote.orEmpty() }
+            LiquidGlassActionMenu(
+                visible = true,
+                anchor = if (activeMenuMsg.isUser) GlassMenuAnchor.TopEnd else GlassMenuAnchor.TopStart,
+                anchorRect = relRect,
+                actions = listOf(
+                    GlassMenuAction("复制", MenuGlyphKind.Copy) {
+                        clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                        scope.launch { snackbar.toast("已复制") }
+                    },
+                    GlassMenuAction("引用", MenuGlyphKind.Quote) { quotePreview = text },
+                    GlassMenuAction("分享", MenuGlyphKind.Share) { shareText(text) },
+                ),
+                onDismiss = { menuMsg = null },
             )
         }
     }
@@ -542,14 +666,51 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
 // ───────────────────────── 气泡 ─────────────────────────
 
+/**
+ * 对话气泡。长按 → 复制 / 引用 / 分享菜单（[onLongPress] 为 null 时不响应，如流式草稿）。
+ * 按压 Q 弹只作用在气泡**内部内容**上（AI 气泡是玻璃采样者，外壳禁 scale）。
+ */
 @Composable
-private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
+private fun TaBubble(
+    backdrop: LayerBackdrop,
+    msg: TaMsg,
+    /** 被长按选中：持续上报气泡矩形（窗口坐标）供菜单贴脸定位 */
+    reportBounds: Boolean = false,
+    onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
+    onLongPress: (() -> Unit)? = null,
+) {
     val cs = COUITheme.colorScheme
+    val press = if (onLongPress != null) Modifier.bubblePress(onLongPress) else Modifier
+    val bounds = Modifier.onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
     if (msg.isUser) {
         // 用户：coui Surface 品牌蓝气泡（右对齐，与学生端同款）
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
-                Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Surface(modifier = bounds.widthIn(max = 300.dp), shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
+                Column(press.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    // 引用小条（与学生端 UserBubble 同款：半透明底 + 左侧竖条）
+                    msg.quote?.let { quoted ->
+                        Row(
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White.copy(alpha = 0.16f))
+                                .padding(horizontal = 9.dp, vertical = 6.dp),
+                        ) {
+                            Box(
+                                Modifier
+                                    .width(2.5.dp)
+                                    .heightIn(min = 22.dp)
+                                    .clip(RoundedCornerShape(2.dp))
+                                    .background(Color.White.copy(alpha = 0.5f)),
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                quoted, color = Color.White.copy(alpha = 0.72f),
+                                fontSize = 11.sp, lineHeight = 15.sp,
+                                maxLines = 3, overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        if (msg.blocks.isNotEmpty()) Spacer(Modifier.height(7.dp))
+                    }
                     msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
                         Text(t.s, color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp)
                     }
@@ -566,9 +727,10 @@ private fun TaBubble(backdrop: LayerBackdrop, msg: TaMsg) {
                 tintAlpha = 0.30f,
                 modifier = Modifier
                     .fillMaxWidth(0.88f)
-                    .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp)),
+                    .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp))
+                    .then(bounds),
             ) {
-                Column(Modifier.padding(14.dp)) {
+                Column(press.padding(14.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("小悟", color = KewuGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(6.dp))
@@ -659,13 +821,37 @@ private fun TaInputBar(
     onInput: (String) -> Unit,
     onSend: () -> Unit,
     enabled: Boolean = true,
+    /** 待发送的引用（长按气泡 →「引用」）：输入框上方显示引用小条，× 取消 */
+    quote: String? = null,
+    onCancelQuote: () -> Unit = {},
 ) {
     val cs = COUITheme.colorScheme
+    Column(Modifier.fillMaxWidth()) {
+    // 引用预览条（学生端 QuotePreviewBar 同款；不是玻璃件，可以用带淡入的 AnimatedVisibility）
+    androidx.compose.animation.AnimatedVisibility(
+        visible = quote != null,
+        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
+            androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(180)) { it / 2 },
+        exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(110)) +
+            androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(140)) { it / 2 },
+    ) {
+        // 记住最后一条引用：退场动画期间 quote 已被置空，仍显示原文
+        var last by remember { mutableStateOf("") }
+        if (quote != null) last = quote
+        Box(Modifier.padding(start = 14.dp, end = 70.dp, bottom = 6.dp)) {
+            QuotePreviewBar(text = last) { onCancelQuote() }
+        }
+    }
+    // ★ 2026-10-26：底部 118dp 是给底部导航让位的；键盘弹起时导航在键盘下面，这段留白就成了
+    //   「输入框离输入法很远」——键盘弹起时只留 8dp，收起再弹回 118dp
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    val bottomPad by animateDpAsState(if (imeVisible) 8.dp else 118.dp, spring(dampingRatio = 0.8f, stiffness = 420f),
+        label = "taDockPad")
     Row(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 14.dp)
-            .padding(bottom = 118.dp, top = 6.dp),
+            .padding(bottom = bottomPad.coerceAtLeast(0.dp), top = 6.dp), // 弹簧可能轻微过冲，padding 不能为负（2026-10-26 小米闪退）
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // 玻璃输入框
@@ -703,7 +889,8 @@ private fun TaInputBar(
             }
         }
         Spacer(Modifier.width(10.dp))
-        TaSendBtn(backdrop = backdrop, enabled = enabled && input.isNotBlank(), onClick = onSend)
+        TaSendBtn(backdrop = backdrop, enabled = enabled && (input.isNotBlank() || quote != null), onClick = onSend)
+    }
     }
 }
 
@@ -711,18 +898,11 @@ private fun TaInputBar(
 @Composable
 private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> Unit) {
     val cs = COUITheme.colorScheme
-    var pressed by remember { mutableStateOf(false) }
     val onClickState = rememberUpdatedState(onClick)
-    val scaleV by androidx.compose.animation.core.animateFloatAsState(
-        targetValue = if (pressed) 0.88f else 1f,
-        animationSpec = androidx.compose.animation.core.spring(
-            dampingRatio = 0.34f, stiffness = 320f, visibilityThreshold = 0.0005f),
-        label = "taSendPress",
-    )
+    // 2026-10-26：删掉包住玻璃钮的 .scale（违反「采样者祖先禁 scale」，且 pressed 从未置 true，本就无效果）
     Box(
         Modifier
             .size(46.dp)
-            .scale(scaleV)
             .pointerInput(enabled) {
                 detectTapGestures(
                     onTap = { if (enabled) onClickState.value() },

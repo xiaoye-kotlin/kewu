@@ -1,28 +1,23 @@
 import SwiftUI
+import UIKit
 import KewuApp
 
 @main
 struct KewuIosApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ComposeView()
+                // Compose 自己处理状态栏 / 键盘避让（statusBarsPadding / imePadding），这里铺满全屏
+                .ignoresSafeArea(.all)
         }
     }
 }
 
-struct ContentView: View {
-    var body: some View {
-        // Compose Multiplatform iOS 支持接入点（正式 UI 后续接入 ComposeUIViewController）
-        VStack {
-            KewuPlaceholder()
-        }
-    }
-}
-
-struct KewuPlaceholder: UIViewControllerRepresentable {
+/// 承载 Compose Multiplatform 界面（App() 由 MainViewController.kt 提供）
+struct ComposeView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
-        // 后续替换为 MainViewControllerKt.MainViewController()
-        UIViewController()
+        MainViewControllerKt.MainViewController()
     }
+
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
 }

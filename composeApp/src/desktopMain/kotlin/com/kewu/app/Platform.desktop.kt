@@ -1,5 +1,7 @@
 package com.kewu.app
 
+import io.ktor.util.cio.readChannel
+
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import java.io.File
@@ -13,10 +15,33 @@ actual fun platformDeviceId(): String = "desktop-${System.getProperty("user.name
 private val preferences: Preferences
     get() = Preferences.userRoot().node("com.kewu.app")
 
-actual fun kvGet(key: String): String? = preferences.get(key, null)
+// ★ 2026-10-26：java.util.prefs 单值上限 8KB（Windows 注册表），聊天记录 / 录音记录一长就写不进去
+//   （旧版要么抛异常、要么把整份历史写成 []）。超过 6000 字符的值改存 ~/.kewu/kv/<key>.json，prefs 里只放标记。
+private const val FILE_MARK = "@file"
+private fun kvFile(key: String) = File(System.getProperty("user.home"), ".kewu/kv/${key.replace(Regex("[^A-Za-z0-9_.-]"), "_")}.json")
+
+actual fun kvGet(key: String): String? {
+    val v = preferences.get(key, null) ?: return null
+    if (v != FILE_MARK) return v
+    return try { kvFile(key).readText() } catch (_: Exception) { null }
+}
 
 actual fun kvSet(key: String, value: String?) {
-    if (value == null) preferences.remove(key) else preferences.put(key, value)
+    when {
+        value == null -> {
+            preferences.remove(key)
+            runCatching { kvFile(key).delete() }
+        }
+        value.length > 6000 -> {
+            val f = kvFile(key).apply { parentFile?.mkdirs() }
+            f.writeText(value)
+            preferences.put(key, FILE_MARK)
+        }
+        else -> {
+            preferences.put(key, value)
+            runCatching { kvFile(key).delete() }
+        }
+    }
 }
 
 actual fun platformAppContext(): Any = Any()
@@ -44,3 +69,16 @@ actual fun isCameraPermissionGranted(): Boolean = true
 actual fun openAppSettings() = Unit
 actual fun shareText(text: String) = Unit
 actual fun platformExitApp() { exitProcess(0) }
+
+actual fun platformFileSize(path: String): Long = try {
+    java.io.File(path).let { if (it.exists()) it.length() else -1L }
+} catch (_: Exception) {
+    -1L
+}
+
+actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
+    java.io.File(path).readChannel()
+
+actual fun platformDeleteFile(path: String) {
+    runCatching { java.io.File(path).delete() }
+}

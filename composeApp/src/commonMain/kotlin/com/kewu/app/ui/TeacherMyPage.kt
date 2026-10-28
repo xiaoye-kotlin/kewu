@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -59,8 +60,9 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 
 @Composable
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
-    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们（编号与学生端对齐）
+    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们 8=内存管理（编号与学生端对齐）
     var screen by remember { mutableStateOf(0) }
+    LockTabSwipe(screen != 0)
 
     // 2026-10-24：AI 助教代操作 —— 小悟可经 AiNav 直接打开教师「我的」的子页（发起签到/发布笔记/班级管理等）
     LaunchedEffect(AiNav.teacherMyScreen.value) {
@@ -73,11 +75,11 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
 
-    var name by remember { mutableStateOf(KewuApi.currentUser?.user?.nickname ?: "") }
+    var name by remember { mutableStateOf(KewuApi.displayName("")) }
     var account by remember { mutableStateOf(KewuApi.username ?: "") }
     LaunchedEffect(Unit) {
         if (KewuApi.currentUser == null) KewuApi.me()
-        name = KewuApi.currentUser?.user?.nickname ?: name
+        name = KewuApi.displayName(name)
         account = KewuApi.username ?: account
     }
 
@@ -102,19 +104,15 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 .layerBackdrop(pageBackdrop)
                 .background(COUITheme.colorScheme.surface),
         )
-        AnimatedContent(
+        // ★ 2026-10-26 Telegram 式推入 / 返回（同学生端「我的」）；右滑返回只开在非表单页
+        //   （发起签到 / 发布笔记 / 新建课程是表单，一滑会丢输入）
+        KewuSlideHost(
             targetState = screen,
-            transitionSpec = {
-                if (targetState > initialState) {
-                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-                } else {
-                    slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 } togetherWith
-                        slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w }
-                }
-            },
             modifier = Modifier.fillMaxSize(),
-            label = "teacherMyNav",
+            isForward = { a, b -> b > a },
+            swipeEnabled = screen == 1 || screen >= 5,
+            swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
+            onSwipeCommit = { screen = it },
         ) { s ->
             when (s) {
                 0 -> TeacherMyHome(
@@ -126,6 +124,8 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                     onClasses = { screen = 5 },
                     onNotification = { screen = 6 },
                     onAbout = { screen = 7 },
+                    onStorage = { screen = 8 },
+                    onDirectory = { screen = 9 },
                     onLogout = onLogout,
                 )
                 1 -> BindCourseScreen(pageBackdrop, onBack = { screen = 0 })
@@ -135,6 +135,8 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 5 -> TeacherClassesScreen(pageBackdrop, onBack = { screen = 0 })
                 6 -> NotificationSettingsPage(pageBackdrop, onBack = { screen = 0 })
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
+                8 -> StorageManagePage(onBack = { screen = 0 })
+                9 -> StudentDirectoryScreen(onBack = { screen = 0 })
             }
         }
     }
@@ -153,6 +155,8 @@ private fun TeacherMyHome(
     onClasses: () -> Unit,
     onNotification: () -> Unit,
     onAbout: () -> Unit,
+    onStorage: () -> Unit,
+    onDirectory: () -> Unit,
     onLogout: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
@@ -214,6 +218,7 @@ private fun TeacherMyHome(
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(2))) {
             FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop, onClick = onCreateCourse)
             FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop, onClick = onClasses)
+            FuncRow(5, "同学管理", "查看同学信息，管理班级成员", backdrop, onClick = onDirectory)
             FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop, onClick = onBindCourse)
             FuncRow(7, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop, onClick = onCreateAttendance)
             FuncRow(8, "发布笔记", "记录课堂要点，学生端即时可见", backdrop, onClick = onPostNote)
@@ -222,6 +227,7 @@ private fun TeacherMyHome(
         GroupLabel("通用", Modifier.riseEnter(rememberEnterProgress(5)))
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(6))) {
             FuncRow(2, "通知设置", "签到提醒、作业提醒与权限管理", backdrop, onClick = onNotification)
+            FuncRow(9, "内存管理", "清理聊天记录、图片与缓存文件", backdrop, onClick = onStorage)
             FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout)
         }
 

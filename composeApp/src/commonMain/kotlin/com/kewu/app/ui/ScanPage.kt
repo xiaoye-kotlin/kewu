@@ -175,7 +175,7 @@ fun ScanPage(
             val err = KewuApi.attendanceCheckIn(
                 id = sid,
                 studentId = KewuApi.username ?: "",
-                studentName = KewuApi.currentUser?.user?.nickname ?: (KewuApi.username ?: ""),
+                studentName = KewuApi.nameForServer(),
                 code = code.ifBlank { null },
                 latitude = 0.0, longitude = 0.0,
                 courseId = courseId,
@@ -299,7 +299,7 @@ fun ScanPage(
                 Spacer(Modifier.height(12.dp))
                 Text("签到成功", color = KewuGreen, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(4.dp))
-                Text("即将打开签到详情", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                Text("即将返回首页", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             }
             is ScanState.Error -> ScanStatusCard(pageBackdrop) {
                 Text("签到失败", color = cs.error, fontSize = 18.sp, fontWeight = FontWeight.Bold)

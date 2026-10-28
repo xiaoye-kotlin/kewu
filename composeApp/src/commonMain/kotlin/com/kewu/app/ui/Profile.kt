@@ -34,15 +34,43 @@ data class UserProfile(
     val email: String,
 )
 
-/** 演示默认资料：学号、学校、班级齐全，符合文档「我的页顶部：头像 + 名字 + 学校/班级」。 */
+/**
+ * 空资料（2026-10-26：旧版默认是一份真实感很强的演示资料「刘宇豪 / 手机 / 邮箱」，
+ * 后端没有的字段会一直把这份假资料展示给所有用户）。
+ */
 internal val defaultProfile = UserProfile(
-    name = "刘宇豪",
-    studentId = "20260551073",
-    school = "重庆对外经贸学院",
-    className = "计算机科学与技术 5 班",
-    phone = "178****2370",
-    email = "1640432@qq.com",
+    name = "", studentId = "", school = "", className = "", phone = "", email = "",
 )
+
+/**
+ * 本地资料存储（按账号）：后端 /user/me 只有 id / username / nickname，学校 / 班级 / 手机 / 邮箱
+ * 由用户在「编辑资料」里填、注册时选的学校也存这里。旧版编辑资料只存在内存里，切个 tab 就没了。
+ */
+internal object ProfileStore {
+    private const val SEP = "\u0001"
+    private fun key(user: String) = "kewu_profile_$user"
+
+    fun load(user: String): UserProfile? {
+        if (user.isBlank()) return null
+        val raw = com.kewu.app.kvGet(key(user)) ?: return null
+        val f = raw.split(SEP)
+        if (f.size < 6) return null
+        return UserProfile(f[0], f[1], f[2], f[3], f[4], f[5])
+    }
+
+    fun save(user: String, p: UserProfile) {
+        if (user.isBlank()) return
+        com.kewu.app.kvSet(key(user), listOf(p.name, p.studentId, p.school, p.className, p.phone, p.email)
+            .joinToString(SEP) { it.replace(SEP, "") })
+    }
+
+    /** 注册成功时写入所选学校（其它字段留空）。 */
+    fun setSchool(user: String, school: String) {
+        if (school.isBlank()) return
+        val cur = load(user) ?: defaultProfile.copy(studentId = user)
+        save(user, cur.copy(school = school))
+    }
+}
 
 // ───────────────────────── 通用图标字形（coui-icons） ─────────────────────────
 

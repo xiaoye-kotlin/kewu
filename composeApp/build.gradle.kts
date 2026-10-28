@@ -130,8 +130,12 @@ android {
     }
 }
 
-// 缺签名配置时 assembleRelease/packageRelease 直接失败并提示补齐，避免静默产出未签名包
-tasks.matching { it.name.startsWith("assembleRelease") || it.name.startsWith("packageRelease") }.configureEach {
+// 缺签名配置时 assembleRelease/packageRelease 直接失败并提示补齐，避免静默产出未签名包。
+// 2026-10-27：CI（GitHub Actions 出 iOS IPA）不做这项检查——Xcode Release 构建会连带触发名字以 packageRelease 开头的任务，
+// CI 上没有 Android 签名文件，旧版会在编完 18 分钟后报「缺少 Release 签名配置」失败
+tasks.matching {
+    System.getenv("CI") == null && (it.name.startsWith("assembleRelease") || it.name.startsWith("packageRelease"))
+}.configureEach {
     doFirst {
         if (!hasReleaseSigning) throw GradleException(
             "缺少 Release 签名配置：请在根目录 local.properties 补 RELEASE_STORE_FILE / " +

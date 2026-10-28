@@ -1,5 +1,7 @@
 package com.kewu.app
 
+import io.ktor.util.cio.readChannel
+
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -103,4 +105,17 @@ actual fun platformExitApp() {
     // 一级界面双击返回键的第二下：finish 当前 Activity（回到桌面 = 退出）。
     // 兜底：appActivity 为 null（理论上不会）时不崩。
     appActivity?.finish()
+}
+
+actual fun platformFileSize(path: String): Long = try {
+    java.io.File(path).let { if (it.exists()) it.length() else -1L }
+} catch (_: Exception) {
+    -1L
+}
+
+actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
+    java.io.File(path).readChannel()
+
+actual fun platformDeleteFile(path: String) {
+    runCatching { java.io.File(path).delete() }
 }

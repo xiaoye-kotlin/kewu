@@ -66,7 +66,7 @@ private fun rsComputeRemainder(data: ByteArray, divisor: IntArray): IntArray {
     val result = IntArray(divisor.size)
     for (b in data) {
         val factor = (b.toInt() and 0xFF) xor result[0]
-        System.arraycopy(result, 1, result, 0, result.size - 1)
+        result.copyInto(result, destinationOffset = 0, startIndex = 1, endIndex = result.size)
         result[result.size - 1] = 0
         for (i in result.indices) result[i] = result[i] xor rsMultiply(divisor[i], factor)
     }

@@ -1,5 +1,9 @@
 package com.kewu.app.ui
 
+import com.kewu.app.currentRole
+import com.kewu.app.ROLE_TEACHER
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.async
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -112,10 +116,8 @@ fun AttendanceDetailScreen(
 
     // 身份区分：后端暂无角色字段（接口文档：现阶段用参数区分身份），
     // 用「签到发布者 == 当前用户」判定教师视角（UI 门控与录音端人数拉取共用这一判据）。
-    fun teacherOf(s: AttendanceSession?): Boolean {
-        val meName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username
-        return s != null && s.publisher.isNotBlank() && meName != null && s.publisher == meName
-    }
+    // 2026-10-26：按登录角色判定（旧版比「发布者 == 我的昵称」，同名学生会进教师视图）
+    fun teacherOf(s: AttendanceSession?): Boolean = s != null && currentRole() == ROLE_TEACHER
 
     // 录音端到场人数：只教师视角拉（学生用不到），课程 id 缺失或接口失败 → null 不显示
     suspend fun refreshSynced() {
@@ -123,17 +125,29 @@ fun AttendanceDetailScreen(
         syncedCount = if (teacherOf(s) && s!!.courseId.isNotBlank()) KewuApi.getCheckins(s.courseId)?.size else null
     }
 
-    fun reload() {
-        loading = true
+    /**
+     * 拉取签到详情。2026-10-26：7 个请求改并行；学生端不再拉只有老师用得到的
+     * 动态码 / 全部记录 / 风控 / 实时看板；[silent] = 签到成功后的静默刷新，不回整页 loading（旧版整页闪一下、滚动位置归零）。
+     */
+    fun reload(silent: Boolean = false) {
+        if (!silent) loading = true
         scope.launch {
-            session = KewuApi.getAttendance(attendanceId)
-            code = KewuApi.getAttendanceCode(attendanceId)
+            val teacher = currentRole() == ROLE_TEACHER
+            val sessionD = async { KewuApi.getAttendance(attendanceId) }
+            val codeD = async { if (teacher) KewuApi.getAttendanceCode(attendanceId) else null }
+            val mineD = async { if (studentId.isNotEmpty()) KewuApi.getMyAttendance(attendanceId, studentId) else null }
+            val recordsD = async { if (teacher) KewuApi.getAttendanceRecords(attendanceId) else null }
+            val statsD = async { KewuApi.getAttendanceStats(attendanceId) }
+            val riskD = async { if (teacher) KewuApi.getAttendanceRisk(attendanceId) else null }
+            val realtimeD = async { if (teacher) KewuApi.getAttendanceRealtime(attendanceId) else null }
+            session = sessionD.await()
+            code = codeD.await()
             remaining = code?.remainingSeconds ?: 0
-            myRecord = if (studentId.isNotEmpty()) KewuApi.getMyAttendance(attendanceId, studentId) else null
-            records = KewuApi.getAttendanceRecords(attendanceId)
-            stats = KewuApi.getAttendanceStats(attendanceId)
-            risk = KewuApi.getAttendanceRisk(attendanceId)
-            realtime = KewuApi.getAttendanceRealtime(attendanceId)
+            myRecord = mineD.await()
+            records = recordsD.await()
+            stats = statsD.await()
+            risk = riskD.await()
+            realtime = realtimeD.await()
             refreshSynced()
             loading = false
         }
@@ -141,14 +155,21 @@ fun AttendanceDetailScreen(
     LaunchedEffect(attendanceId) { reload() }
 
     // 动态码倒计时（本地 tick；归零后自动刷新一次，录音端到场人数随这一轮一起刷新）
+    // ★ 2026-10-26：旧版倒计时归零后 launch 一次刷新、循环随即退出；新码 sessionId 不变 → effect 不重启，
+    //   倒计时停在 0、二维码不再刷新。改成常驻循环：归零就就地刷新（失败 3s 后再试）。
     LaunchedEffect(code?.sessionId) {
-        while (remaining > 0) {
+        if (code == null) return@LaunchedEffect
+        while (isActive) {
             delay(1000)
-            remaining -= 1
+            if (remaining > 0) remaining -= 1
             if (remaining <= 0) {
-                scope.launch {
-                    code = KewuApi.getAttendanceCode(attendanceId)?.also { remaining = it.remainingSeconds }
+                val next = KewuApi.getAttendanceCode(attendanceId)
+                if (next != null) {
+                    code = next
+                    remaining = next.remainingSeconds
                     refreshSynced()
+                } else {
+                    delay(3000)
                 }
             }
         }
@@ -170,7 +191,7 @@ fun AttendanceDetailScreen(
             )
             checking = false
             checkMsg = if (err == null) "签到成功" else err
-            if (err == null) reload()
+            if (err == null) reload(silent = true)
         }
     }
 
@@ -203,8 +224,12 @@ fun AttendanceDetailScreen(
                         Column(Modifier.padding(18.dp)) {
                             Text(s.title, color = cs.onSurface, fontSize = 19.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.height(6.dp))
-                            MetaLine("方式", s.mode)
-                            MetaLine("状态", s.state)
+                            MetaLine("方式", when (s.mode.uppercase()) {
+                                "QR" -> "扫码签到"; "CODE" -> "暗号签到"; "QUIZ" -> "随堂问答签到"; else -> s.mode
+                            })
+                            MetaLine("状态", when (s.state.uppercase()) {
+                                "OPEN" -> "进行中"; "CLOSED" -> "已结束"; else -> s.state
+                            })
                             MetaLine("发布人", s.publisher.ifBlank { "—" })
                             MetaLine("截止", s.expireAt.ifBlank { "—" })
                             MetaLine("迟到阈值", "${s.lateAfterSeconds}s")

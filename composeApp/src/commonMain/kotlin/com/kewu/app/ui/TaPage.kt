@@ -1,9 +1,14 @@
 package com.kewu.app.ui
 
+import com.kewu.app.CourseRepo
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.expandVertically
+import com.kewu.app.AssignmentRepo
 import com.kewu.app.BackHandler
 import com.kewu.app.AiAgent
 import com.kewu.app.AiClient
 import com.kewu.app.ChatHistory
+import com.kewu.app.AssistantHub
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.RepeatMode
@@ -36,7 +41,6 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -51,6 +55,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -177,12 +182,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 text = m.text, ts = if (m.ts != 0L) m.ts else nowMs(), quote = m.quote,
             )
         }
-        ChatHistory.saveAll(ChatHistory.KEY_STUDENT, entries)
+        // 按 id 合并写入（不覆盖页面没加载的更早消息 / 页面不在时 AssistantHub 追加的回复）
+        ChatHistory.upsert(ChatHistory.KEY_STUDENT, entries)
         // 是否还有更早历史：以全量存档为准（内存里可能只有今天的消息）
         hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
     }
     // 今天的聊天记录：有历史就不重复显示欢迎语（2026-10-24 用户反馈：每天第一条消息才需要问候）
-    val todayEntries = chatStore.filter { it.ts >= visibleCutoff }
+    val todayEntries = remember(chatStore) { chatStore.filter { it.ts >= visibleCutoff } } // 旧版每敲一个字都全量过滤
     var messages by remember {
         mutableStateOf(
             buildList {
@@ -212,8 +218,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     // ★ 引用预览（第三轮 12.8）：引用不再塞进输入框，而是在输入框**上方**单独显示一条灰色小条，
     //   发送时随消息带上（ChatMsg.quote），× 可一键取消。
     var quotePreview by remember { mutableStateOf<String?>(null) }
-    var courseCount by remember { mutableIntStateOf(2) }
-    var pendingCount by remember { mutableIntStateOf(2) }
+    // 初值 0（旧版初值 2，接口失败时这个假数会进 AI 的 system prompt）
+    var courseCount by remember { mutableIntStateOf(0) }
+    var pendingCount by remember { mutableIntStateOf(0) }
     var assignmentTitles by remember { mutableStateOf<List<String>>(emptyList()) }
     var suggestions by remember {
         mutableStateOf(listOf("这节课的笔记", "作业什么时候交？", "帮我规划一下复习"))
@@ -241,13 +248,14 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     // 上下文 chip + 建议提问：真实接口（/api/courses、/api/assignments），失败保留 mock
     LaunchedEffect(Unit) {
-        KewuApi.getCourses()?.let { courseCount = it.size }
-        KewuApi.getAssignments()?.let { list ->
-            // AssignmentInfo 无 done 字段，待交数先用作业总数近似（提交状态接口细化后再改）
-            pendingCount = list.size
-            assignmentTitles = list.map { it.title }
-            list.firstOrNull()?.let { first ->
-                suggestions = listOf("「${first.title}」怎么做？") + suggestions
+        CourseRepo.refresh()?.let { courseCount = it.size }
+        // 待交数用 AssignmentRepo 的真实口径（未交 + 被打回；旧版是作业总数）
+        AssignmentRepo.refresh(maxAgeMs = 60_000)?.let { items ->
+            val pending = items.filter { it.pending }
+            pendingCount = pending.size
+            assignmentTitles = items.map { it.assignment.title }
+            (pending.firstOrNull() ?: items.firstOrNull())?.let { first ->
+                suggestions = listOf("「${first.assignment.title}」怎么做？") + suggestions
             }
         }
     }
@@ -256,14 +264,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
 
-    // 新消息自动滑到底（自己发的 / AI 回的都走这里）；键盘弹起也滑到底。
-    // ★ 先让一帧给气泡完成布局再 animateScrollToItem，否则是「瞬间跳到底」而不是滑动
-    //   （2026-10-24 用户反馈：要动画，不要直接显示最底部）
-    LaunchedEffect(messages.size, imeVisible) {
-        if (messages.isEmpty()) return@LaunchedEffect
-        kotlinx.coroutines.yield()
-        listState.animateScrollToItem(messages.lastIndex)
-    }
+    // 新消息平滑滑到底；键盘弹起 / 收起、人格区展开等视口变化时保持贴底（不再跳到上面的对话）。
+    // 2026-10-26 改用 ChatAutoScroll（原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳）
+    // 流式回答每多出一截就跟随到底（按 40 字分桶，避免每个字都触发一次滚动动画）
+    val streamText = AssistantHub.streaming.collectAsState().value[ChatHistory.KEY_STUDENT]
+    ChatAutoScroll(listState, (messages.lastOrNull()?.id ?: 0L) to (streamText?.length?.div(40) ?: -1))
 
     // 录音计时（后端接入前 UI 演示用）
     LaunchedEffect(isRecording) {
@@ -288,7 +293,22 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     // 发送：用户消息立即上屏并落盘；2026-10-24 起走真实大模型（AiClient），
     // 回答里可能带 KEWU_ACTION 指令 —— 由 AiAgent 真执行导航/代办；失败回退占位文案
-    var aiThinking by remember { mutableStateOf(false) }
+    // 2026-10-26：AI 请求改由进程级 AssistantHub 发起——切到别的 tab 请求不会被取消，回答到达时
+    // 若不在本页则点亮底部「助教」红点；回到本页时 pending 仍在就继续显示「正在输入中」。
+    val pendingKeys by AssistantHub.pending.collectAsState()
+    val aiThinking = ChatHistory.KEY_STUDENT in pendingKeys
+    LaunchedEffect(Unit) {
+        // 先补齐「本页组合之后、开始监听之前」已落盘的回复（极短窗口，防漏显示）
+        val known = messages.map { it.id }.toSet()
+        val missed = ChatHistory.loadAll(ChatHistory.KEY_STUDENT)
+            .filter { it.ts >= visibleCutoff && it.id !in known && it.id != 0L }
+        if (missed.isNotEmpty()) messages = messages + entriesToMsgs(missed)
+        AssistantHub.incoming.collect { inc ->
+            if (inc.key == ChatHistory.KEY_STUDENT && messages.none { it.id == inc.entry.id }) {
+                messages = messages + ChatMsg(inc.entry.text, isUser = false, id = inc.entry.id, ts = inc.entry.ts)
+            }
+        }
+    }
     val doSend: (String) -> Unit = { raw ->
         val text = raw.trim()
         // 允许「只发引用 + 正文为空」的情况（QQ 同款）；两者都空则不动
@@ -301,50 +321,41 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             input = ""
             quotePreview = null // 发出后清掉引用预览
             haptic(HapticKind.Light)
-            scope.launch {
-                aiThinking = true
-                // 多轮上下文：取最近 8 条纯文字消息（引用拼进正文）
-                val history = messages.filter { !it.isVoice }.takeLast(8).map { m ->
-                    val body = if (m.quote != null) "（引用：${m.quote}）${m.text}" else m.text
-                    AiClient.Msg(if (m.isUser) "user" else "assistant", body.ifBlank { "…" })
+            // 多轮上下文：取最近 8 条纯文字消息（引用拼进正文）
+            val history = messages.filter { !it.isVoice }.takeLast(8).map { m ->
+                val body = if (m.quote != null) "（引用：${m.quote}）${m.text}" else m.text
+                AiClient.Msg(if (m.isUser) "user" else "assistant", body.ifBlank { "…" })
+            }
+            val system = buildString {
+                append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和一名学生对话。")
+                append("回答课堂疑问、作业思路、复习规划等问题；")
+                append("讲解清晰、语气亲切，可适当分步；用中文；不要用 markdown 格式符号；")
+                append("单次回答控制在 250 字以内，题目讲解可稍长。")
+                append("不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），")
+                append("也不要每次回复都重复问候或复述用户的问题，直接回答内容本身。\n")
+                append("学生当前情况：共 $courseCount 门课程 · $pendingCount 份作业")
+                if (assignmentTitles.isNotEmpty()) {
+                    append("，作业包括：")
+                    append(assignmentTitles.take(6).joinToString("、"))
                 }
-                val system = buildString {
-                    append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和一名学生对话。")
-                    append("回答课堂疑问、作业思路、复习规划等问题；")
-                    append("讲解清晰、语气亲切，可适当分步；用中文；不要用 markdown 格式符号；")
-                    append("单次回答控制在 250 字以内，题目讲解可稍长。")
-                    append("不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），")
-                    append("也不要每次回复都重复问候或复述用户的问题，直接回答内容本身。\n")
-                    append("学生当前情况：共 $courseCount 门课程 · $pendingCount 份作业")
-                    if (assignmentTitles.isNotEmpty()) {
-                        append("，作业包括：")
-                        append(assignmentTitles.take(6).joinToString("、"))
-                    }
-                    append("\n\n")
-                    append(AiAgent.studentCapability())
+                append("\n\n")
+                append(AiAgent.studentCapability())
+            }
+            // 2026-10-26：流式输出——回答边生成边上屏（打字机效果），不再干等整段
+            AssistantHub.askStream(ChatHistory.KEY_STUDENT) { emit ->
+                // 2026-10-26：把软件里看得到的全部信息（作业截止 / 状态 / 成绩、课程、签到、录音…）给小悟
+                val fullSystem = system + "\n\n以下是该学生在课悟 App 里此刻能看到的全部信息，回答时以此为准" +
+                    "（问到截止时间、成绩、要交哪些作业等直接引用；没有的信息如实说明）：\n" + com.kewu.app.AiContext.student()
+                val reply = AiClient.chatStream(listOf(AiClient.Msg("system", fullSystem)) + history, onDelta = emit)
+                if (reply == null) {
+                    // 直连 / 代理 / 8081 中转全部失败：如实告知，不再用随机占位语冒充回答
+                    AssistantHub.Reply("小悟暂时连不上 AI 服务（网络不通或服务繁忙），请稍后再试～")
+                } else {
+                    val parsed = AiAgent.parse(reply)
+                    // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
+                    val note = parsed.action?.let { AiAgent.execute("student", it) }
+                    AssistantHub.Reply(listOfNotNull(parsed.text.ifEmpty { null }, note).joinToString("\n"))
                 }
-                val reply = AiClient.chat(listOf(AiClient.Msg("system", system)) + history)
-                aiThinking = false
-                when {
-                    reply == null -> {
-                        val fallback = ChatMsg(AI_REPLY_MOCKS.random(), isUser = false,
-                            id = ChatHistory.nextId(), ts = nowMs())
-                        messages = messages + fallback
-                    }
-                    else -> {
-                        val parsed = AiAgent.parse(reply)
-                        // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
-                        val note = parsed.action?.let { AiAgent.execute("student", it) }
-                        val body = listOfNotNull(
-                            parsed.text.ifEmpty { null },
-                            note,
-                        ).joinToString("\n")
-                        val aiMsg = ChatMsg(body, isUser = false,
-                            id = ChatHistory.nextId(), ts = nowMs())
-                        messages = messages + aiMsg
-                    }
-                }
-                persistHistory(messages.filter { !it.isVoice })
             }
         }
     }
@@ -394,8 +405,12 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
     val dockBottomPad by animateDpAsState(
         // 118 → 110：输入框整体下移 8dp（用户微调，仍安全避开底部导航托盘 ~90dp）
-        if (imeVisible) 14.dp else 110.dp,
-        spring(dampingRatio = 0.6f, stiffness = 380f),
+        // 2026-10-26：键盘弹起时 14 → 8dp（用户反馈输入框离输入法太远）
+        if (imeVisible) 8.dp else 110.dp,
+        // ★ 2026-10-26 修「点输入框弹键盘即闪退」（小米 Android 13 崩溃上报）：旧版弹簧 dampingRatio=0.6
+        //   从 110 收到 8 会过冲约 10dp → padding 变成负数 → IllegalArgumentException: Padding must be non-negative。
+        //   改临界阻尼（不过冲），使用处再兜底 coerceAtLeast(0.dp)。
+        spring(dampingRatio = 1f, stiffness = 420f),
         label = "dockBottomPad",
     )
 
@@ -403,11 +418,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .imePadding()
+            // 2026-10-26：输入法避让改由主界面内容区统一 imePadding（这里再加会与之叠加）
             .onGloballyPositioned { rootOrigin = it.positionInWindow() },
     ) {
         // 背景采样层：coui 页面底色（surface 灰底），与玻璃内容平级 ✓
-        // imePadding 加在页面根：窗口收缩时整页（含采样层）一起变小，weight 对话区自动让位。
+        // 主界面内容区 imePadding 让整页（含采样层）随键盘变小，weight 对话区自动让位。
         Box(
             Modifier
                 .matchParentSize()
@@ -416,10 +431,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         )
         Column(Modifier.fillMaxSize()) {
             // ── AI 人格区 + 上下文 chip：键盘弹出时自动收起，把空间让给对话列 ──
+            // ★ 2026-10-26 修「点输入框弹键盘即闪退」：上一版把这里的 fade 换成 shrinkVertically，
+            //   玻璃 chip 跟着被裁剪/压到 0 高度 → 采样层尺寸为 0，RenderThread 直接崩。
+            //   现在只让**非玻璃**的人格区做收起动画；玻璃 chip 在键盘弹起时直接移除、收起后直接出现，绝不参与尺寸动画。
             AnimatedVisibility(
                 visible = !imeVisible,
-                enter = fadeIn(tween(200)) + slideInVertically { -it / 3 },
-                exit = fadeOut(tween(150)) + slideOutVertically { -it / 3 },
+                enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + fadeIn(tween(200)),
+                exit = shrinkVertically(tween(150)) + fadeOut(tween(120)),
             ) {
                 Column(Modifier.fillMaxWidth()) {
                     Spacer(Modifier.height(14.dp))
@@ -467,8 +485,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         )
                     }
                     Spacer(Modifier.height(12.dp))
-
-                    // ── 上下文 chip（原概览卡元素的新呈现；placement 上浮入场） ──
+                }
+            }
+            if (!imeVisible) {
+                Column(Modifier.fillMaxWidth()) {
+                    // ── 上下文 chip（玻璃采样者：不放进任何 alpha / 尺寸动画容器） ──
                     Row(
                         Modifier.fillMaxWidth().offset(y = chipsY),
                         horizontalArrangement = Arrangement.Center,
@@ -536,10 +557,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         textAlign = TextAlign.Center,
                     )
                 }
-                messages.forEach { msg ->
+                // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃，历史合并 / 回补时可能出现重复）
+                messages.distinctBy { it.id }.forEach { msg ->
                     // 2026-10-24：稳定 key + animateItem —— 新消息滑入，聊天更丝滑
                     item(key = msg.id, contentType = msg.isUser) {
-                        Box(Modifier.animateItem()) {
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                             if (msg.isUser) {
                                 UserBubble(
                                     msg,
@@ -566,6 +588,17 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         }
                     }
                 }
+                // 流式回答草稿：思考中显示占位，吐字后逐段增长；结束后由正式消息替换
+                if (streamText != null) {
+                    item(key = "ai-streaming") {
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
+                            AiBubble(
+                                ChatMsg(streamText.ifEmpty { "小悟正在思考…" }, isUser = false, id = -1L, ts = nowMs()),
+                                pageBackdrop, reportBounds = false, onBounds = {},
+                            ) {}
+                        }
+                    }
+                }
             }
 
             // ── 附件 / 录音面板（★ 2026-10-19 重做：单一互斥面板 + 稳定进退场） ──
@@ -581,14 +614,19 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 enter = slideInVertically(
                     animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
                     initialOffsetY = { it }, // 从自身高度下方升上来（不再从半高起跳）
-                ) + fadeIn(tween(150)),
+                ), // 2026-10-26：去掉 fade（面板是玻璃采样者，祖先禁 alpha），纯滑入滑出
                 exit = slideOutVertically(
                     animationSpec = tween(150),
                     targetOffsetY = { it },
-                ) + fadeOut(tween(110)),
+                ),
             ) {
                 when (shownPanel) {
-                    AssistantPanel.ATTACH -> AttachPanel(backdrop = pageBackdrop) {
+                    // 2026-10-26：图片 / 文件 / 语音提问需要多模态与语音转写，当前大模型只收文字；
+                    // 旧版点附件没反应、语音「发送」后落一条空语音气泡（AI 也不会回）。改为如实提示后收起。
+                    AssistantPanel.ATTACH -> AttachPanel(backdrop = pageBackdrop, onPick = { label ->
+                        panel = AssistantPanel.NONE
+                        scope.launch { snackbar.toast("「$label」提问即将上线，先用文字描述问题吧") }
+                    }) {
                         panel = AssistantPanel.NONE
                     }
                     AssistantPanel.VOICE -> VoiceRecordPanel(
@@ -596,9 +634,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         voiceSecs = voiceSecs,
                         onCancel = { panel = AssistantPanel.NONE },
                         onSend = {
-                            messages = messages + ChatMsg("", isUser = true, isVoice = true,
-                                voiceSecs = voiceSecs, id = ChatHistory.nextId(), ts = nowMs())
                             panel = AssistantPanel.NONE
+                            scope.launch { snackbar.toast("语音提问即将上线，先用文字问小悟吧") }
                         },
                     )
                     AssistantPanel.NONE -> Unit
@@ -643,7 +680,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     .offset(y = dockY) // placement 位移（采样者安全）
                     .padding(horizontal = 16.dp)
                     // 底部留白：无键盘时为导航栏兜底（≈114dp）；键盘弹起导航已被键盘盖住，只需小边距
-                    .padding(bottom = dockBottomPad),
+                    .padding(bottom = dockBottomPad.coerceAtLeast(0.dp)),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.weight(1f)) {
@@ -774,13 +811,6 @@ private data class ChatMsg(
         get() = if (isVoice) "语音消息 · ${fmtClock(voiceSecs)}" else text
 }
 
-/** AI 回答服务接入前的本地占位回复（后端后补：走对话接口替换这里即可）。 */
-private val AI_REPLY_MOCKS = listOf(
-    "收到！这个问题我记下了，回答服务接入后给你完整展开。",
-    "好问题～我先整理一下思路，稍后把步骤发你。",
-    "这部分我在同步课程资料，接通后第一时间回复你。",
-)
-
 /** 手写 mm:ss（commonMain 禁 String.format）。 */
 private fun two(n: Int) = if (n < 10) "0$n" else "$n"
 
@@ -825,7 +855,7 @@ private fun Modifier.pressBounce(onClick: () -> Unit): Modifier {
  * 单一 detectTapGestures 同时承载 onTap/onLongPress，避免 pressBounce 与 combinedClickable 抢手势。
  */
 @Composable
-private fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
+internal fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
     val pressed = remember { mutableStateOf(false) }
     // ★ 稳定手势：onLongPress 内联 lambda 每次重组身份都变，用 pointerInput(Unit) + rememberUpdatedState
     //   避免快速交互时手势监听被反复重建（第三轮 12.5 修复①）。
@@ -1065,7 +1095,7 @@ private fun UserBubble(
  * （旧版是把原文包「」塞进输入框，效果差且污染输入内容。）
  */
 @Composable
-private fun QuotePreviewBar(text: String, onCancel: () -> Unit) {
+internal fun QuotePreviewBar(text: String, onCancel: () -> Unit) {
     val cs = COUITheme.colorScheme
     // coui Surface 承载底色 + 描边；× 换 coui IconButton + Close 图标
     Surface(
@@ -1298,7 +1328,7 @@ private fun SendBtn(
 
 /** QQ 式附件面板：相册 / 拍照 / 文件（后端接入前点击仅反馈 + 收起）。 */
 @Composable
-private fun AttachPanel(backdrop: LayerBackdrop, onClose: () -> Unit) {
+private fun AttachPanel(backdrop: LayerBackdrop, onPick: (String) -> Unit, onClose: () -> Unit) {
     val cs = COUITheme.colorScheme
     Box(
         Modifier
@@ -1319,20 +1349,20 @@ private fun AttachPanel(backdrop: LayerBackdrop, onClose: () -> Unit) {
                 horizontalArrangement = Arrangement.SpaceEvenly,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                AttachOption("相册", COUIIcons.Photos)
-                AttachOption("拍照", COUIIcons.Scan)
-                AttachOption("文件", COUIIcons.File)
+                AttachOption("相册", COUIIcons.Photos) { onPick("图片") }
+                AttachOption("拍照", COUIIcons.Scan) { onPick("拍照") }
+                AttachOption("文件", COUIIcons.File) { onPick("文件") }
             }
         }
     }
 }
 
 @Composable
-private fun AttachOption(label: String, icon: ImageVector) {
+private fun AttachOption(label: String, icon: ImageVector, onClick: () -> Unit) {
     val cs = COUITheme.colorScheme
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier.pressBounce { /* 相册/拍照/文件选择器：后端接入后补 */ },
+        modifier = Modifier.pressBounce { onClick() },
     ) {
         Surface(
             modifier = Modifier.size(56.dp),

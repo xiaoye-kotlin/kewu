@@ -1,6 +1,9 @@
 package com.kewu.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import com.kewu.app.ui.toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,13 +46,30 @@ fun App() {
         // 角色状态提升到这里：登录成功时从 kv 重读（登录页的角色选择已写入），
         // 决定进学生端还是教师端。
         var role by remember { mutableStateOf(currentRole()) }
-        val doLogout = {
-            // 退出登录：清空自动登录标记 + 记住的账号密码（下次启动回到登录页，需重新输入）。
+        val snackbar = com.kewu.app.ui.LocalKewuSnackbar.current
+        fun clearSession(keepAccount: Boolean) {
+            // 退出登录：清自动登录标记 + 密码（主动退出时连账号一起清）+ token + 各账号相关的内存缓存。
             // 角色 kewu_role 保留：登录页角色选择会以上次角色为默认值，方便同账号快速重登。
             kvSet("kewu_logged", "")
-            kvSet("kewu_account", "")
+            if (!keepAccount) kvSet("kewu_account", "")
             kvSet("kewu_pwd", "")
+            RecordingManager.cancelIfRecording()
+            AudioPlayback.stop()
+            KewuApi.logout()
+            CourseRepo.clear()        // 课程缓存属于上一个账号
+            AssignmentRepo.clear()
+            com.kewu.app.ui.PublishDraft.clear()
+            ChatHistory.clearCache()  // 聊天记录按账号存，换账号要重新读
             loggedIn = false
+        }
+        val doLogout = { clearSession(keepAccount = false) }
+        // 任一接口返回 401（token 过期 / 被后端吊销）→ 提示并回登录页，保留账号便于重登（2026-10-26）
+        val expired by KewuApi.sessionExpired.collectAsState()
+        LaunchedEffect(expired) {
+            if (expired > 0 && loggedIn) {
+                clearSession(keepAccount = true)
+                snackbar.toast("登录已过期，请重新登录")
+            }
         }
         if (loggedIn) {
             if (role == ROLE_TEACHER) {

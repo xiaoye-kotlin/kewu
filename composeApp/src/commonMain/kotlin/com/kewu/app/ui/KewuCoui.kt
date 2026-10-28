@@ -144,7 +144,13 @@ fun KewuTheme(content: @Composable () -> Unit) {
                         // 抬到底部导航托盘之上（托盘底 24 + 栏高 66 + 留白）
                         SnackbarHost(snackbar, modifier = Modifier.padding(bottom = 104.dp))
                     },
-                ) { _ -> content() }
+                ) { _ ->
+                    // 内置图片查看器盖在整个 App 之上（根层最后一个子节点，z 序最高）
+                    Box(Modifier.fillMaxSize()) {
+                        content()
+                        ImageViewerHost()
+                    }
+                }
             }
         }
     }
@@ -329,13 +335,19 @@ fun KewuBottomSheet(
     content: @Composable ColumnScope.(close: () -> Unit) -> Unit,
 ) {
     var visible by remember { mutableStateOf(false) }
-    LaunchedEffect(show) { visible = show }
+    // 只有真正弹出过才把「退场结束」回调给宿主：个别机型首帧 show=false 时也可能触发
+    // onDismissFinished，若此时回调会把还没弹出的弹层直接关掉（2026-10-26 兼容性加固）
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(show) {
+        visible = show
+        if (show) shown = true
+    }
     val close = { visible = false }
     OverlayBottomSheet(
         show = visible,
         title = title,
         onDismissRequest = close,
-        onDismissFinished = { if (!visible) onDismiss() },
+        onDismissFinished = { if (!visible && shown) onDismiss() },
     ) {
         Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) { content(close) }
     }

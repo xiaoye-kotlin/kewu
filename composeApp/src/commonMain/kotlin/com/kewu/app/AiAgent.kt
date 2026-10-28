@@ -73,6 +73,17 @@ object AiAgent {
 
     // ── 解析 ──
 
+    /** 流式输出过程中可直接上屏的部分：动作指令块（及其未写完的前缀）不显示。 */
+    fun visiblePart(raw: String): String {
+        val i = raw.indexOf(MARK_OPEN)
+        if (i >= 0) return raw.substring(0, i).trimEnd()
+        // 末尾可能是「[KEWU_AC」这种还没写完的标记前缀
+        for (k in MARK_OPEN.length - 1 downTo 1) {
+            if (raw.endsWith(MARK_OPEN.substring(0, k))) return raw.dropLast(k).trimEnd()
+        }
+        return raw
+    }
+
     fun parse(raw: String): Parsed {
         val s = raw.indexOf(MARK_OPEN)
         val e = raw.indexOf(MARK_CLOSE)
@@ -166,15 +177,19 @@ object AiAgent {
         val title = a.value.trim().ifBlank { a.args["title"]?.trim().orEmpty() }
         if (title.isEmpty()) return openPublishPage(role)
 
-        val courses: List<com.kewu.app.CourseInfo>? =
-            com.kewu.app.KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() }
-                ?: com.kewu.app.KewuApi.getCourses()
+        // ★ 2026-10-26：只用老师本人的课程（/user/me）。旧版本人课程为空时退回全站 getCourses() 再取 first()，
+        //   可能把作业发到别人的课上。
+        if (com.kewu.app.KewuApi.currentUser?.courses.isNullOrEmpty()) com.kewu.app.KewuApi.me(force = true)
+        val courses: List<com.kewu.app.CourseInfo>? = com.kewu.app.KewuApi.currentUser?.courses
         if (courses.isNullOrEmpty()) {
             return "没找到你的课程，暂时没法发布作业。先到「我的 → 新建课程」建一门课，再让我帮你发。"
         }
         val want = a.target.trim().ifBlank { a.args["course"]?.trim().orEmpty() }
         val course = when {
-            want.isEmpty() -> courses.first()
+            want.isEmpty() && courses.size == 1 -> courses.first()
+            // 多门课又没指明：不替老师猜，问清楚再发
+            want.isEmpty() -> return "你有 ${courses.size} 门课：${courses.joinToString("、") { it.name }}。" +
+                "要发到哪一门？告诉我课程名，我就帮你发「$title」。"
             else -> courses.firstOrNull { it.id.equals(want, ignoreCase = true) || it.name.contains(want) }
                 ?: return "没找到课程「$want」。你当前的课程有：${courses.joinToString("、") { it.name }}，" +
                     "告诉我其中一个，我就发到那门课。"

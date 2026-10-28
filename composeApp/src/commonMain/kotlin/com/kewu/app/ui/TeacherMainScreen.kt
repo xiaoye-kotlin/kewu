@@ -1,5 +1,11 @@
 package com.kewu.app.ui
 
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.WindowInsets
+import com.kewu.app.TabSwipeLock
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
@@ -20,6 +26,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.layout.imePadding
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.AiNav
 import com.kewu.app.ChatHistory
+import com.kewu.app.AssistantHub
 import com.kewu.app.HapticKind
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -75,14 +86,25 @@ fun TeacherMainScreen(
     var preview by remember { mutableStateOf(0) }
     var previewFloat by remember { mutableStateOf(0f) }
     var navHidden by remember { mutableStateOf(false) }
+    // 下钻子页上锁时暂停内容区横滑切 tab（见 TabSwipeLock）
+    val swipeLock by TabSwipeLock.count.collectAsState()
     var lastPreviewHaptic by remember { mutableStateOf(-1) }
     // 助教（index=1）tab 的 AI 未读红点：仅统计 ChatHistory 里晚于「已读游标」的 assistant 消息，
     // 与首页铃铛通知完全无关（小悟消息在助教页内读，不进铃铛）。进入助教页即清空。
-    var assistantUnread by remember { mutableStateOf(0) }
+    // 2026-10-26：未读数改由 AssistantHub 统一维护（在助教页里看着回答的不算未读；切走后才到的、
+    // 以及小悟主动发来的消息才算）。每分钟重算一次，跨天时教师端「今日简报未读」能自动出现。
+    val assistantUnread by AssistantHub.unread(ChatHistory.KEY_TEACHER).collectAsState()
     LaunchedEffect(Unit) {
         ChatHistory.seedWelcomeIfEmpty(ChatHistory.KEY_TEACHER)
-        assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_TEACHER)
+        AssistantHub.refreshUnread(ChatHistory.KEY_TEACHER)
+        launch {
+            while (true) {
+                delay(60_000)
+                AssistantHub.refreshUnread(ChatHistory.KEY_TEACHER)
+            }
+        }
     }
+    DisposableEffect(Unit) { onDispose { AssistantHub.setVisible(ChatHistory.KEY_TEACHER, false) } }
     val navScope = rememberCoroutineScope()
     val tabW = remember { mutableStateOf(0f) }
     val centerAnim = remember { Animatable(0f) }
@@ -93,15 +115,31 @@ fun TeacherMainScreen(
         if (tabW.value > 0f) {
             bubbleJob?.cancel()
             bubbleJob = navScope.launch {
-                centerAnim.animateTo(
+                // 与学生端 slideBubbleTo 完全一致：逐栏轻震 + 被打断停在半路时补滑到位
+                centerAnim.slidePassHaptic(
                     targetValue = targetPx,
+                    tabW = tabW.value,
                     animationSpec = spring(dampingRatio = 0.8f, stiffness = 260f),
                     initialVelocity = centerAnim.velocity.coerceIn(-1800f, 1800f),
-                )
+                ) { haptic(HapticKind.Tick) }
+                if (kotlin.math.abs(centerAnim.value - targetPx) > 1f) {
+                    centerAnim.animateTo(
+                        targetValue = targetPx,
+                        animationSpec = spring(dampingRatio = 0.85f, stiffness = 260f),
+                    )
+                }
             }
         }
     }
     val cancelBubble: () -> Unit = { bubbleJob?.cancel() }
+    // 内容区拖动切页时泡泡跟手（同学生端 MainScreen.swipeBubble）
+    val swipeBubble: (Int, Int?, Float) -> Unit = { from, to, p ->
+        if (tabW.value > 0f) {
+            val pos = if (to == null) from.toFloat() else from + (to - from) * p
+            bubbleJob?.cancel()
+            bubbleJob = navScope.launch { centerAnim.snapTo(pos * tabW.value + tabW.value / 2f) }
+        }
+    }
     val navVisible by animateFloatAsState(
         targetValue = if (navHidden) 0f else 1f,
         animationSpec = spring(dampingRatio = 0.42f, stiffness = 300f),
@@ -121,12 +159,7 @@ fun TeacherMainScreen(
             preview = idx
             navHidden = false
             // ★ 助教（index=1）进入即清空 AI 未读红点；切走则重新统计
-            if (idx == 1) {
-                ChatHistory.markAllAssistantRead(ChatHistory.KEY_TEACHER)
-                assistantUnread = 0
-            } else {
-                assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_TEACHER)
-            }
+            AssistantHub.setVisible(ChatHistory.KEY_TEACHER, idx == 1)
             slideBubbleTo(idx * tabW.value + tabW.value / 2f)
             tabSwitchJob?.cancel()
             tabSwitchJob = navScope.launch {
@@ -149,12 +182,16 @@ fun TeacherMainScreen(
         }
     }
 
+    val navExtra = rememberNavExtraInset()
     Box(
         Modifier
             .fillMaxSize()
             .background(COUITheme.colorScheme.surface),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
+        Column(
+            Modifier.fillMaxSize().statusBarsPadding()
+                .windowInsetsPadding(WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal)),
+        ) {
             // 内容区：只渲染当前选中页（coui 采样安全），横滑切页（横向主导手势）
             // 注：顶部「课悟 · Kewu」品牌横幅已按用户要求移除，内容从状态栏下直接开始，不挡视野。
             val n = TEACHER_NAV_ITEMS.size
@@ -162,22 +199,38 @@ fun TeacherMainScreen(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .layerBackdrop(backdrop)
-                    .pointerInput(selected) {
-                        var acc = 0f
-                        detectHorizontalDragGestures(
-                            onDragStart = { acc = 0f },
-                            onHorizontalDrag = { _, dragAmount -> acc += dragAmount },
-                            onDragEnd = {
-                                val threshold = 96f
-                                if (acc <= -threshold) goToTab((selected + 1).coerceAtMost(n - 1))
-                                else if (acc >= threshold) goToTab((selected - 1).coerceAtLeast(0))
-                            },
-                        )
-                    },
+                    // ★ 2026-10-26 全局输入法避让（同学生端 MainScreen）：内容区随键盘收缩，聚焦输入框自动进入可视区
+                    .imePadding()
+                    // ★ 2026-10-26 edge-to-edge：三键导航等较高的系统导航栏，整体把内容区与底栏一起抬高（手势条机型为 0）
+                    .padding(bottom = navExtra)
+                    .layerBackdrop(backdrop),
             ) {
-                Box(Modifier.fillMaxSize()) {
-                    when (selected) {
+                // ★ 2026-10-26 Telegram 式切页（同学生端 MainScreen）：tab 间整页跟手联动 + 两端橡皮筋回弹，
+                //   泡泡跟着手指走。下钻子页（发布 / 批阅 / 详情…）上锁时暂停，避免一次斜滑丢掉草稿与批阅进度。
+                KewuSlideHost(
+                    targetState = selected,
+                    modifier = Modifier.fillMaxSize(),
+                    style = SlideStyle.Pager,
+                    isForward = { a, b -> b > a },
+                    swipeEnabled = swipeLock == 0,
+                    swipeNeighbor = { from, d -> (from + d).takeIf { it in 0 until n } },
+                    onSwipeCommit = { goToTab(it) },
+                    onSwipeProgress = { from, to, p ->
+                        swipeBubble(from, to, p)
+                        val pv = (if (to == null) from.toFloat() else from + (to - from) * p).roundToInt()
+                        if (pv != preview) {
+                            haptic(HapticKind.Tick)
+                            preview = pv
+                        }
+                    },
+                    onSwipeEnd = { to ->
+                        if (to == null) {
+                            preview = selected
+                            slideBubbleTo(selected * tabW.value + tabW.value / 2f)
+                        }
+                    },
+                ) { idx ->
+                    when (idx) {
                         0 -> TeacherConsolePage(onGoToTab = { goToTab(it) }, onNavHide = { navHidden = it })
                         1 -> TeacherAssistantPage(onNavHide = { navHidden = it })
                         2 -> TeacherTaskPage(onNavHide = { navHidden = it })
@@ -190,7 +243,7 @@ fun TeacherMainScreen(
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(24.dp)
+                .height(24.dp + navExtra)
                 .align(Alignment.BottomCenter)
                 .background(COUITheme.colorScheme.surface),
         )
@@ -203,12 +256,7 @@ fun TeacherMainScreen(
                 preview = it
                 navHidden = false
                 // ★ 助教（index=1）进入即清空 AI 未读红点；切走则重新统计
-                if (it == 1) {
-                    ChatHistory.markAllAssistantRead(ChatHistory.KEY_TEACHER)
-                    assistantUnread = 0
-                } else {
-                    assistantUnread = ChatHistory.getUnreadAssistantCount(ChatHistory.KEY_TEACHER)
-                }
+                AssistantHub.setVisible(ChatHistory.KEY_TEACHER, it == 1)
                 tabSwitchJob?.cancel()
                 tabSwitchJob = navScope.launch {
                     val anim = Animatable(previewFloat)
@@ -240,6 +288,7 @@ fun TeacherMainScreen(
             onGestureStart = cancelBubble,
             modifier = Modifier
                 .align(Alignment.BottomCenter)
+                .padding(bottom = navExtra)
                 .scale((0.35f + 0.65f * navVisible).coerceAtLeast(0f))
                 .alpha(navVisible.coerceIn(0f, 1f))
                 .offset {
@@ -253,7 +302,7 @@ fun TeacherMainScreen(
         DoubleBackExitHint(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(bottom = (24 + 66 + 16).dp),
+                .padding(bottom = (24 + 66 + 16).dp + navExtra),
         )
     }
 }

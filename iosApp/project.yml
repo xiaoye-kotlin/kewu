@@ -1,0 +1,54 @@
+# XcodeGen 工程描述（2026-10-26）：仓库里不放 .xcodeproj，CI 上 `xcodegen generate` 现生成。
+# Kotlin 框架由 Run Script 阶段调 Gradle `embedAndSignAppleFrameworkForXcode` 现编（官方 KMP 接入方式），
+# 并同步 Compose 资源进 App 包。
+name: Kewu
+options:
+  bundleIdPrefix: com.kewu
+  deploymentTarget:
+    iOS: "15.0"
+settings:
+  base:
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    ENABLE_BITCODE: NO
+targets:
+  Kewu:
+    type: application
+    platform: iOS
+    sources:
+      - path: iosApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kewu.app
+        PRODUCT_NAME: Kewu
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: iosApp/Info.plist
+        FRAMEWORK_SEARCH_PATHS: "$(inherited) $(SRCROOT)/../composeApp/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)"
+        OTHER_LDFLAGS: "$(inherited) -framework KewuApp"
+        CODE_SIGN_STYLE: Manual
+    preBuildScripts:
+      - name: Compile Kotlin Framework
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$SRCROOT/.."
+          ./gradlew :composeApp:embedAndSignAppleFrameworkForXcode --no-daemon
+    info:
+      path: iosApp/Info.plist
+      properties:
+        CFBundleDisplayName: 课悟
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        CADisableMinimumFrameDurationOnPhone: true
+        UIRequiresFullScreen: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+        NSMicrophoneUsageDescription: 课悟需要使用麦克风录制课堂音频，用于课后 AI 生成课堂纪要
+        NSCameraUsageDescription: 课悟需要使用相机扫描老师展示的签到二维码
+        NSPhotoLibraryUsageDescription: 课悟需要访问相册，用于在作业中附上图片
+        # 业务后端是 http://47.99.42.168:8080（尚未上 HTTPS），需要放行明文请求
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoads: true

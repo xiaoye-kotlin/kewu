@@ -24,6 +24,15 @@ expect fun platformCacheDir(): String
 /** 读取本地文件字节（录音 WAV 读出后上传用）。不存在 / 读取失败返回 null。 */
 expect fun platformReadFile(path: String): ByteArray?
 
+/** 文件大小（字节），不存在返回 -1（2026-10-26：大文件上传前判断大小，不整读）。 */
+expect fun platformFileSize(path: String): Long
+
+/** 以流读取文件：录音 / 附件上传用，避免把上百 MB 的文件整个读进内存。 */
+expect fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel
+
+/** 删除本地文件（上传成功后清理缓存副本），失败静默。 */
+expect fun platformDeleteFile(path: String)
+
 /** 相机权限申请（扫码签到用）。Android 弹系统授权框；其它平台直接回调 false。 */
 expect fun requestCameraPermission(activity: Any, onResult: (Boolean) -> Unit)
 

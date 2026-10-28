@@ -25,8 +25,36 @@ fun University.matches(query: String): Boolean {
     return name.contains(q, ignoreCase = true) || (py.isNotEmpty() && py.contains(q)) || (abbr.isNotEmpty() && abbr.contains(q))
 }
 
-/** 全国高校列表（按所在地分组，组内按教育部名单原序）。 */
-val ALL_UNIVERSITIES: List<University> = listOf(
+/**
+ * 全国高校列表（按所在地分组，组内按教育部名单原序）。
+ *
+ * ★ 2026-10-26 兼容性修复（队友 vivo 点「选择学校」即闪退，小米正常）：原来 2900+ 条数据全写在
+ * 一个 `listOf(...)` 里，编译成单个 5 万码元的静态初始化方法，首次点开选择器时在主线程整段执行；
+ * 超大方法在不同厂商 ART（编译/校验/解释器）上的行为不一致。现拆成每段 200 条的小函数，
+ * 首次访问才拼装（by lazy，线程安全），并由注册页在后台线程预热、搜索也放后台算。
+ * 重新生成数据时请保持「分段函数」结构，勿再合并成一个大 listOf。
+ */
+val ALL_UNIVERSITIES: List<University> by lazy {
+    ArrayList<University>(2942).apply {
+        addAll(uniPart0())
+        addAll(uniPart1())
+        addAll(uniPart2())
+        addAll(uniPart3())
+        addAll(uniPart4())
+        addAll(uniPart5())
+        addAll(uniPart6())
+        addAll(uniPart7())
+        addAll(uniPart8())
+        addAll(uniPart9())
+        addAll(uniPart10())
+        addAll(uniPart11())
+        addAll(uniPart12())
+        addAll(uniPart13())
+        addAll(uniPart14())
+    }
+}
+
+private fun uniPart0(): List<University> = listOf(
     // ── 七台河市 ──
     u("七台河职业学院", "qitaihezhiyexueyuan", "qthzyxy", "七台河市"),
     // ── 三亚市 ──
@@ -258,6 +286,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("保定职业技术学院", "baodingzhiyejishuxueyuan", "bdzyjsxy", "保定市"),
     u("保定电力职业技术学院", "baodingdianlizhiyejishuxueyuan", "bddlzyjsxy", "保定市"),
     u("冀中职业学院", "jizhongzhiyexueyuan", "jzzyxy", "保定市"),
+)
+
+private fun uniPart1(): List<University> = listOf(
     u("保定幼儿师范高等专科学校", "baodingyouershifangaodengzhuankexuexiao", "bdyesfgdzkxx", "保定市"),
     u("河北工艺美术职业学院", "hebeigongyimeishuzhiyexueyuan", "hbgymszyxy", "保定市"),
     // ── 保山市 ──
@@ -474,6 +505,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("南京理工大学紫金学院", "nanjingligongdaxuezijinxueyuan", "njlgdxzjxy", "南京市"),
     u("南京航空航天大学金城学院", "nanjinghangkonghangtiandaxuejinchengxueyuan", "njhkhtdxjcxy", "南京市"),
     u("南京传媒学院", "nanjingchuanmeixueyuan", "njcmxy", "南京市"),
+)
+
+private fun uniPart2(): List<University> = listOf(
     u("南京工业大学浦江学院", "nanjinggongyedaxuepujiangxueyuan", "njgydxpjxy", "南京市"),
     u("苏州科技大学天平学院", "suzhoukejidaxuetianpingxueyuan", "szkjdxtpxy", "南京市"),
     u("南京财经大学红山学院", "nanjingcaijingdaxuehongshanxueyuan", "njcjdxhsxy", "南京市"),
@@ -687,6 +721,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("安徽交通职业技术学院", "anhuijiaotongzhiyejishuxueyuan", "ahjtzyjsxy", "合肥市"),
     u("安徽体育运动职业技术学院", "anhuitiyuyundongzhiyejishuxueyuan", "ahtyydzyjsxy", "合肥市"),
     u("合肥职业技术学院", "hefeizhiyejishuxueyuan", "hfzyjsxy", "合肥市"),
+)
+
+private fun uniPart3(): List<University> = listOf(
     u("安徽广播影视职业技术学院", "anhuiguangboyingshizhiyejishuxueyuan", "ahgbyszyjsxy", "合肥市"),
     u("民办合肥滨湖职业技术学院", "minbanhefeibinhuzhiyejishuxueyuan", "mbhfbhzyjsxy", "合肥市"),
     u("安徽电气工程职业技术学院", "anhuidianqigongchengzhiyejishuxueyuan", "ahdqgczyjsxy", "合肥市"),
@@ -915,6 +952,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("黑龙江八一农垦大学", "heilongjiangbayinongkendaxue", "hljbynkdx", "大庆市"),
     u("大庆师范学院", "daqingshifanxueyuan", "dqsfxy", "大庆市"),
     u("大庆职业学院", "daqingzhiyexueyuan", "dqzyxy", "大庆市"),
+)
+
+private fun uniPart4(): List<University> = listOf(
     u("大庆医学高等专科学校", "daqingyixuegaodengzhuankexuexiao", "dqyxgdzkxx", "大庆市"),
     // ── 大理白族自治州 ──
     u("大理大学", "dalidaxue", "dldx", "大理白族自治州"),
@@ -1137,6 +1177,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("江西樟树中医药职业学院", "jiangxizhangshuzhongyiyaozhiyexueyuan", "jxzszyyzyxy", "宜春市"),
     // ── 宝鸡市 ──
     u("宝鸡文理学院", "baojiwenlixueyuan", "bjwlxy", "宝鸡市"),
+)
+
+private fun uniPart5(): List<University> = listOf(
     u("宝鸡职业技术学院", "baojizhiyejishuxueyuan", "bjzyjsxy", "宝鸡市"),
     u("宝鸡三和职业学院", "baojisanhezhiyexueyuan", "bjshzyxy", "宝鸡市"),
     u("宝鸡中北职业学院", "baojizhongbeizhiyexueyuan", "bjzbzyxy", "宝鸡市"),
@@ -1364,6 +1407,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("中国矿业大学徐海学院", "zhongguokuangyedaxuexuhaixueyuan", "zgkydxxhxy", "徐州市"),
     u("江苏师范大学科文学院", "jiangsushifandaxuekewenxueyuan", "jssfdxkwxy", "徐州市"),
     u("江苏建筑职业技术学院", "jiangsujianzhuzhiyejishuxueyuan", "jsjzzyjsxy", "徐州市"),
+)
+
+private fun uniPart6(): List<University> = listOf(
     u("九州职业技术学院", "jiuzhouzhiyejishuxueyuan", "jzzyjsxy", "徐州市"),
     u("徐州工业职业技术学院", "xuzhougongyezhiyejishuxueyuan", "xzgyzyjsxy", "徐州市"),
     u("徐州幼儿师范高等专科学校", "xuzhouyouershifangaodengzhuankexuexiao", "xzyesfgdzkxx", "徐州市"),
@@ -1591,6 +1637,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("云南工商学院", "yunnangongshangxueyuan", "yngsxy", "昆明市"),
     u("昆明冶金高等专科学校", "kunmingyejingaodengzhuankexuexiao", "kmyjgdzkxx", "昆明市"),
     u("云南国土资源职业学院", "yunnanguotuziyuanzhiyexueyuan", "yngtzyzyxy", "昆明市"),
+)
+
+private fun uniPart7(): List<University> = listOf(
     u("云南交通职业技术学院", "yunnanjiaotongzhiyejishuxueyuan", "ynjtzyjsxy", "昆明市"),
     u("昆明工业职业技术学院", "kunminggongyezhiyejishuxueyuan", "kmgyzyjsxy", "昆明市"),
     u("云南农业职业技术学院", "yunnannongyezhiyejishuxueyuan", "ynnyzyjsxy", "昆明市"),
@@ -1816,6 +1865,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("湖北大学知行学院", "hubeidaxuezhixingxueyuan", "hbdxzxxy", "武汉市"),
     u("武汉城市学院", "wuhanchengshixueyuan", "whcsxy", "武汉市"),
     u("武汉文理学院", "wuhanwenlixueyuan", "whwlxy", "武汉市"),
+)
+
+private fun uniPart8(): List<University> = listOf(
     u("湖北工业大学工程技术学院", "hubeigongyedaxuegongchengjishuxueyuan", "hbgydxgcjsxy", "武汉市"),
     u("武汉工程大学邮电与信息工程学院", "wuhangongchengdaxueyoudianyuxinxigongchengxueyuan", "whgcdxydyxxgcxy", "武汉市"),
     u("武汉纺织大学外经贸学院", "wuhanfangzhidaxuewaijingmaoxueyuan", "whfzdxwjmxy", "武汉市"),
@@ -2036,6 +2088,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("山东工艺美术学院", "shandonggongyimeishuxueyuan", "sdgymsxy", "济南市"),
     u("山东警察学院", "shandongjingchaxueyuan", "sdjcxy", "济南市"),
     u("山东交通学院", "shandongjiaotongxueyuan", "sdjtxy", "济南市"),
+)
+
+private fun uniPart9(): List<University> = listOf(
     u("山东女子学院", "shandongnvzixueyuan", "sdnzxy", "济南市"),
     u("山东英才学院", "shandongyingcaixueyuan", "sdycxy", "济南市"),
     u("山东现代学院", "shandongxiandaixueyuan", "sdxdxy", "济南市"),
@@ -2267,6 +2322,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     // ── 焦作市 ──
     u("河南理工大学", "henanligongdaxue", "hnlgdx", "焦作市"),
     u("黄河交通学院", "huanghejiaotongxueyuan", "hhjtxy", "焦作市"),
+)
+
+private fun uniPart10(): List<University> = listOf(
     u("焦作大学", "jiaozuodaxue", "jzdx", "焦作市"),
     u("河南工业和信息化职业学院", "henangongyehexinxihuazhiyexueyuan", "hngyhxxhzyxy", "焦作市"),
     u("焦作师范高等专科学校", "jiaozuoshifangaodengzhuankexuexiao", "jzsfgdzkxx", "焦作市"),
@@ -2497,6 +2555,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("安徽工程大学", "anhuigongchengdaxue", "ahgcdx", "芜湖市"),
     u("皖南医学院", "wannanyixueyuan", "wnyxy", "芜湖市"),
     u("安徽师范大学", "anhuishifandaxue", "ahsfdx", "芜湖市"),
+)
+
+private fun uniPart11(): List<University> = listOf(
     u("安徽信息工程学院", "anhuixinxigongchengxueyuan", "ahxxgcxy", "芜湖市"),
     u("芜湖学院", "wuhuxueyuan", "whxy", "芜湖市"),
     u("芜湖职业技术大学", "wuhuzhiyejishudaxue", "whzyjsdx", "芜湖市"),
@@ -2719,6 +2780,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("贵州工业职业技术学院", "guizhougongyezhiyejishuxueyuan", "gzgyzyjsxy", "贵阳市"),
     u("贵州电力职业技术学院", "guizhoudianlizhiyejishuxueyuan", "gzdlzyjsxy", "贵阳市"),
     u("贵阳职业技术学院", "guiyangzhiyejishuxueyuan", "gyzyjsxy", "贵阳市"),
+)
+
+private fun uniPart12(): List<University> = listOf(
     u("贵州职业技术学院", "guizhouzhiyejishuxueyuan", "gzzyjsxy", "贵阳市"),
     u("贵州工商职业学院", "guizhougongshangzhiyexueyuan", "gzgszyxy", "贵阳市"),
     u("贵阳幼儿师范高等专科学校", "guiyangyouershifangaodengzhuankexuexiao", "gyyesfgdzkxx", "贵阳市"),
@@ -2943,6 +3007,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("重庆城市科技学院", "chongqingchengshikejixueyuan", "cqcskjxy", "重庆市"),
     u("重庆警察学院", "chongqingjingchaxueyuan", "cqjcxy", "重庆市"),
     u("重庆人文科技学院", "chongqingrenwenkejixueyuan", "cqrwkjxy", "重庆市"),
+)
+
+private fun uniPart13(): List<University> = listOf(
     u("重庆外语外事学院", "chongqingwaiyuwaishixueyuan", "cqwywsxy", "重庆市"),
     u("重庆对外经贸学院", "chongqingduiwaijingmaoxueyuan", "cqdwjmxy", "重庆市"),
     u("重庆财经学院", "chongqingcaijingxueyuan", "cqcjxy", "重庆市"),
@@ -3157,6 +3224,9 @@ val ALL_UNIVERSITIES: List<University> = listOf(
     u("湖南司法警官职业学院", "hunansifajingguanzhiyexueyuan", "hnsfjgzyxy", "长沙市"),
     u("长沙商贸旅游职业技术学院", "changshashangmaolvyouzhiyejishuxueyuan", "cssmlyzyjsxy", "长沙市"),
     u("湖南邮电职业技术学院", "hunanyoudianzhiyejishuxueyuan", "hnydzyjsxy", "长沙市"),
+)
+
+private fun uniPart14(): List<University> = listOf(
     u("长沙环境保护职业技术学院", "changshahuanjingbaohuzhiyejishuxueyuan", "cshjbhzyjsxy", "长沙市"),
     u("湖南艺术职业学院", "hunanyishuzhiyexueyuan", "hnyszyxy", "长沙市"),
     u("湖南机电职业技术学院", "hunanjidianzhiyejishuxueyuan", "hnjdzyjsxy", "长沙市"),

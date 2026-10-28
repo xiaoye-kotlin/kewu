@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import com.kewu.app.todayCn
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -19,6 +20,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -124,7 +126,8 @@ fun NotificationSheet(
     onDismiss: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    val list = Notifications.load()
+    // 只在打开时读一次（旧版每次重组都读 kv + 解析 JSON，弹窗没打开也在读）
+    val list = remember(show) { Notifications.load() } // 打开 / 关闭时各读一次，退场动画期间列表不清空
     OverlayDialog(
         show = show,
         title = "通知",
@@ -224,9 +227,8 @@ private fun formatNotifTime(ts: Long): String {
         diff < 86_400_000 && dayStartNow == dayStartTs -> "${diff / 3_600_000} 小时前"
         dayStartNow - dayStartTs == 1L -> "昨天"
         else -> {
-            val d = java.time.Instant.ofEpochMilli(ts)
-                .atZone(java.time.ZoneId.of("UTC+8"))
-            "${d.year}-${d.monthValue.toString().padStart(2, '0')}-${d.dayOfMonth.toString().padStart(2, '0')}"
+            // 2026-10-26：commonMain 不能用 java.time（iOS 编不过），用东八区日期工具
+            todayCn(ts)
         }
     }
 }

@@ -1,5 +1,11 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.SizeTransform
+import kotlinx.coroutines.isActive
+import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -112,8 +118,18 @@ import kotlinx.coroutines.launch
 private sealed class ConsoleDrill {
     data object NONE : ConsoleDrill()
     data class SESSIONS(val course: CourseInfo) : ConsoleDrill()
-    data class DETAIL(val attendanceId: String) : ConsoleDrill()
+    data class DETAIL(val attendanceId: String, val back: ConsoleDrill = NONE) : ConsoleDrill()
+    /** 今日签到详情（首页「今日签到率」卡进入，2026-10-26）。 */
+    data object TODAY : ConsoleDrill()
+    /** 课前准备：开课前询问是否上传本节资料（2026-10-26），之后才发起签到。 */
+    data class PRECLASS(val course: CourseInfo, val durationMinutes: Int) : ConsoleDrill()
 }
+
+/** 返回上一级（与 BackHandler 同口径）。 */
+private fun ConsoleDrill.parent(): ConsoleDrill = (this as? ConsoleDrill.DETAIL)?.back ?: ConsoleDrill.NONE
+
+/** 下钻层级：决定转场方向。 */
+private fun ConsoleDrill.depth(): Int = if (this == ConsoleDrill.NONE) 0 else 1 + parent().depth()
 
 @Composable
 fun TeacherConsolePage(
@@ -127,7 +143,10 @@ fun TeacherConsolePage(
     val scrollState = rememberScrollState()
 
     var drill by remember { mutableStateOf<ConsoleDrill>(ConsoleDrill.NONE) }
-    BackHandler(enabled = drill != ConsoleDrill.NONE) { drill = ConsoleDrill.NONE }
+    BackHandler(enabled = drill != ConsoleDrill.NONE) {
+        drill = (drill as? ConsoleDrill.DETAIL)?.back ?: ConsoleDrill.NONE
+    }
+    LockTabSwipe(drill != ConsoleDrill.NONE)
 
     // 数据
     var courses by remember { mutableStateOf<List<CourseInfo>?>(null) }
@@ -136,13 +155,13 @@ fun TeacherConsolePage(
     // ★ 控制台聚合（2026-10-20 后端第 5 节）：今日课程/待批阅红点/今日签到率一次拿全
     var console by remember { mutableStateOf<TeacherConsole?>(null) }
     var teacherName by remember {
-        mutableStateOf(KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: "老师")
+        mutableStateOf(KewuApi.displayName("老师"))
     }
 
     fun reload() {
         scope.launch {
             if (KewuApi.currentUser == null) KewuApi.me()
-            teacherName = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: teacherName
+            teacherName = KewuApi.displayName(teacherName)
             // ★ 控制台聚合优先：todayCourses 带班级名/学生数/上课状态/今日签到率
             val c = KewuApi.getTeacherConsole()
             console = c
@@ -151,12 +170,12 @@ fun TeacherConsolePage(
                 ?.map { CourseInfo(it.courseId, it.courseName, "", teacherName) }
                 ?.takeIf { it.isNotEmpty() }
                 ?: KewuApi.currentUser?.courses?.takeIf { it.isNotEmpty() }
-                ?: KewuApi.getCourses()
+                ?: KewuApi.myCourses()
             // 恢复进行中的签到（kv 持久化）；若后端已关闭则清掉
             val sid = kvGet("teacher_active_session")
             if (!sid.isNullOrBlank()) {
                 val s = KewuApi.getAttendance(sid)
-                if (s != null && s.state != "closed") activeSession = s
+                if (s != null && !s.state.equals("closed", ignoreCase = true)) activeSession = s
                 else kvSet("teacher_active_session", "")
             }
             // 无本地会话但后端课堂状态 ON（别处在上课/上次杀进程丢 kv）→ 提示仍在上课
@@ -168,7 +187,7 @@ fun TeacherConsolePage(
                 if (onCourseId != null) {
                     // 找到该课今天的 OPEN 签到会话，恢复上课中面板
                     KewuApi.getAttendances(onCourseId)
-                        ?.firstOrNull { it.state == "OPEN" || it.state == "open" }
+                        ?.firstOrNull { it.state.equals("OPEN", ignoreCase = true) }
                         ?.let { s ->
                             activeSession = s
                             kvSet("teacher_active_session", s.id)
@@ -183,9 +202,19 @@ fun TeacherConsolePage(
     // 通知中心：铃铛未读数 + 弹窗显隐（首页系统通知，与助教 AI 红点无关）
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
+    val notifSnackbar = LocalKewuSnackbar.current
     LaunchedEffect(Unit) {
-        Notifications.seedIfEmpty(currentRole())
+        // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
         notifUnread = Notifications.unreadCount()
+        // 2026-10-27：课堂纪要生成后写通知（首页在前台时每分钟查一次）
+        while (true) {
+            runCatching { Notifications.pollClassNotes() }.getOrNull()?.firstOrNull()?.let {
+                haptic(HapticKind.Light)
+                notifSnackbar.toast(it + "，点右上角铃铛查看")
+            }
+            notifUnread = Notifications.unreadCount()
+            kotlinx.coroutines.delay(60_000)
+        }
     }
 
     // 导航栏随滚动收起（与学生端同款增量判断）
@@ -201,6 +230,23 @@ fun TeacherConsolePage(
         }
     }
 
+    /** 签到发起成功后的统一后续（一键开课 / 课前准备两条路径共用）。 */
+    fun startedHandler(s: AttendanceSession) {
+        activeSession = s
+        kvSet("teacher_active_session", s.id)
+        // ★ 开课后的两件附带事放在页面级 scope 里做：QuickStartCard 会随 activeSession
+        //   非空立刻离开组合，它自己的 rememberCoroutineScope 跟着取消，请求可能被掐断。
+        scope.launch {
+            // 同步开课状态到后端（POST /api/teacher/class-state START）；
+            // 失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
+            KewuApi.setClassState(s.courseId, "START")
+            // ★ 建 8081 课堂协同录音会话（10.5）：同课同日的教师端 / 学生端录音归到同一会话，
+            //   下课后才能多端择优融合。失败（如 Redis 降级）只提示，不影响上课。
+            KewuApi.createSession(KewuApi.classSessionId(s.courseId, todayCn()), s.courseId)
+                ?.let { err -> snackbar.toast("课堂录音会话创建失败：$err（不影响签到）") }
+        }
+    }
+
     Box(Modifier.fillMaxSize()) {
         Box(
             Modifier
@@ -208,15 +254,15 @@ fun TeacherConsolePage(
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        AnimatedContent(
+        // ★ 2026-10-26 Telegram 式推入 / 返回（全 app 下钻统一用 KewuSlideHost）：旧版返回也是从右推入，
+        //   方向反了，现在按层级判断。右滑返回开在只读页（签到历史 / 今日签到 / 签到详情），课前准备不开。
+        KewuSlideHost(
             targetState = drill,
-            transitionSpec = {
-                // 与全 app 下钻同款：仅 slide 无 fade 共享轴（placement 位移对采样者安全）
-                slideInHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> w } togetherWith
-                    slideOutHorizontally(tween(320, easing = FastOutSlowInEasing)) { w -> -w / 5 }
-            },
             modifier = Modifier.fillMaxSize(),
-            label = "consoleNav",
+            isForward = { a, b -> b.depth() >= a.depth() },
+            swipeEnabled = drill != ConsoleDrill.NONE && drill !is ConsoleDrill.PRECLASS,
+            swipeNeighbor = { from, d -> if (d < 0 && from != ConsoleDrill.NONE) from.parent() else null },
+            onSwipeCommit = { drill = it },
         ) { d ->
             when (d) {
                 ConsoleDrill.NONE -> ConsoleHome(
@@ -234,21 +280,9 @@ fun TeacherConsolePage(
                         showNotif = true
                     },
                     onGoToTab = onGoToTab,
-                    onStarted = { s ->
-                        activeSession = s
-                        kvSet("teacher_active_session", s.id)
-                        // ★ 开课后的两件附带事放在页面级 scope 里做：QuickStartCard 会随 activeSession
-                        //   非空立刻离开组合，它自己的 rememberCoroutineScope 跟着取消，请求可能被掐断。
-                        scope.launch {
-                            // 同步开课状态到后端（POST /api/teacher/class-state START）；
-                            // 失败不阻塞签到主流程（状态查的是另一份存储，重进时会再同步）
-                            KewuApi.setClassState(s.courseId, "START")
-                            // ★ 建 8081 课堂协同录音会话（10.5）：同课同日的教师端 / 学生端录音归到同一会话，
-                            //   下课后才能多端择优融合。失败（如 Redis 降级）只提示，不影响上课。
-                            KewuApi.createSession(KewuApi.classSessionId(s.courseId, todayCn()), s.courseId)
-                                ?.let { err -> snackbar.toast("课堂录音会话创建失败：$err（不影响签到）") }
-                        }
-                    },
+                    onPrepare = { c, minutes -> drill = ConsoleDrill.PRECLASS(c, minutes) },
+                    onOpenToday = { drill = ConsoleDrill.TODAY },
+                    onStarted = { startedHandler(it) },
                     onClosed = {
                         activeSession = null
                         kvSet("teacher_active_session", "")
@@ -261,11 +295,26 @@ fun TeacherConsolePage(
                     onBack = { drill = ConsoleDrill.NONE },
                     onOpenSession = { drill = ConsoleDrill.DETAIL(it) },
                 )
+                ConsoleDrill.TODAY -> TodayCheckInScreen(
+                    courses = courses,
+                    onBack = { drill = ConsoleDrill.NONE },
+                    onOpenSession = { drill = ConsoleDrill.DETAIL(it, back = ConsoleDrill.TODAY) },
+                )
+                is ConsoleDrill.PRECLASS -> PreClassScreen(
+                    course = d.course,
+                    durationMinutes = d.durationMinutes,
+                    onBack = { drill = ConsoleDrill.NONE },
+                    onStarted = { s ->
+                        drill = ConsoleDrill.NONE
+                        startedHandler(s)
+                    },
+                    onToast = { scope.launch { snackbar.toast(it) } },
+                )
                 is ConsoleDrill.DETAIL -> AttendanceDetailScreen(
                     attendanceId = d.attendanceId,
                     studentId = KewuApi.username ?: "",
                     studentName = teacherName,
-                    onBack = { drill = ConsoleDrill.NONE },
+                    onBack = { drill = d.back },
                 )
             }
         }
@@ -290,6 +339,8 @@ private fun ConsoleHome(
     unread: Int,
     onOpenNotifications: () -> Unit,
     onGoToTab: (Int) -> Unit,
+    onPrepare: (CourseInfo, Int) -> Unit,
+    onOpenToday: () -> Unit,
     onStarted: (AttendanceSession) -> Unit,
     onClosed: () -> Unit,
     onOpenCourse: (CourseInfo) -> Unit,
@@ -327,20 +378,20 @@ private fun ConsoleHome(
                 live = activeSession,
                 loading = !activeLoaded,
                 console = console,
-                onAssistant = { onGoToTab(1) },
+                // 2026-10-26：今日签到率卡 → 今日签到详情（旧版误跳助教页）
+                onAssistant = onOpenToday,
                 onTask = { onGoToTab(2) },
             )
         }
 
         // ── 一键开课 / 上课中面板（coui 白卡，非玻璃） ──
-        // 作业模块视角拓展（后端联调）：跨课程待批阅聚合
-        PendingReviewTestBlock()
+        // （2026-10-26：原「跨课程待批阅」联调测试块已移除——正式入口在「作业」tab 顶部的待批阅卡）
         val p1 = rememberEnterProgress(1, baseDelayMs = 200L)
         Box(Modifier.riseEnter(p1, 30f)) {
             if (!activeLoaded) {
                 KewuLoading()
             } else if (activeSession == null) {
-                QuickStartCard(courses = courses, onStarted = onStarted)
+                QuickStartCard(courses = courses, onPrepare = onPrepare)
             } else {
                 LiveSessionCard(session = activeSession, onClosed = onClosed)
             }
@@ -470,8 +521,9 @@ private fun TeacherStatusSection(
         else -> {
             statusTint = KewuGreen
             title = "无课"
-            line2 = "今日课程已全部结束"
-            line3 = "好好休息，或提前准备教案"
+            // 课程数为 0 时旧版写「今日课程已全部结束」，与事实不符
+            line2 = "还没有创建课程"
+            line3 = "在「我的 → 新建课程」创建后即可开课"
         }
     }
 
@@ -612,7 +664,7 @@ private fun rememberGreeting(): String {
 @Composable
 private fun QuickStartCard(
     courses: List<CourseInfo>?,
-    onStarted: (AttendanceSession) -> Unit,
+    onPrepare: (CourseInfo, Int) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -633,7 +685,18 @@ private fun QuickStartCard(
             Text("发起签到即开课，学生扫码 / 暗号打卡", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(14.dp))
         }
-        if (!expanded) {
+        // 2026-10-26：「开始上课」→ 选课面板改为动画过渡（旧版瞬间跳变）：高度弹簧展开 + 内容淡入，
+        // 收起反向。coui Card 不是玻璃采样者，SizeTransform / fade 都安全。
+        AnimatedContent(
+            targetState = expanded,
+            transitionSpec = {
+                (fadeIn(tween(240, delayMillis = 80)) togetherWith fadeOut(tween(100)))
+                    .using(SizeTransform(clip = true) { _, _ -> spring(dampingRatio = 0.86f, stiffness = 360f) })
+            },
+            label = "quickStartExpand",
+        ) { open ->
+        Column(Modifier.fillMaxWidth()) {
+        if (!open) {
             KewuPrimaryButton(
                 text = "开始上课",
                 onClick = {
@@ -671,31 +734,13 @@ private fun QuickStartCard(
                     }
                 }
                 Spacer(Modifier.height(14.dp))
+                // 2026-10-26：先进「课前准备」询问是否上传本节资料，签到在那一页发起
                 TextButton(
-                    text = if (starting) "正在发起…" else "发起签到并开课",
+                    text = "下一步：课前准备",
                     onClick = {
-                        val cid = selectedId ?: return@TextButton
-                        val cname = courses?.firstOrNull { it.id == cid }?.name ?: "课堂"
+                        val c = courses?.firstOrNull { it.id == selectedId } ?: return@TextButton
                         haptic(HapticKind.Light)
-                        scope.launch {
-                            starting = true
-                            error = null
-                            val publisher = KewuApi.currentUser?.user?.nickname ?: KewuApi.username ?: ""
-                            val s = KewuApi.createAttendance(
-                                courseId = cid,
-                                title = "$cname 课堂签到",
-                                durationMinutes = duration.toIntOrNull() ?: 10,
-                                publisher = publisher,
-                            )
-                            starting = false
-                            if (s != null) {
-                                haptic(HapticKind.Light)
-                                // class-state START 与 8081 协同会话由页面级 onStarted 负责（见 TeacherConsolePage）
-                                onStarted(s)
-                            } else {
-                                error = "发起失败，请检查网络后重试"
-                            }
-                        }
+                        onPrepare(c, duration.toIntOrNull() ?: 10)
                     },
                     enabled = selectedId != null && !starting,
                     colors = ButtonDefaults.textButtonColorsPrimary(
@@ -707,6 +752,8 @@ private fun QuickStartCard(
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
+                }
+        }
         }
         Column(Modifier.padding(horizontal = 18.dp).padding(bottom = 18.dp)) {
             error?.let {
@@ -740,12 +787,19 @@ private fun LiveSessionCard(
     LaunchedEffect(session.id) {
         code = KewuApi.getAttendanceCode(session.id)?.also { remaining = it.remainingSeconds }
     }
-    LaunchedEffect(code?.sessionId) {
-        while (remaining > 0) {
+    // ★ 2026-10-26：常驻循环；旧版刷新失败时 remaining 停在 0、循环退出不再重试，页面挂着过期码显示「0s 后刷新」
+    LaunchedEffect(session.id) {
+        while (isActive) {
             delay(1000)
-            remaining -= 1
+            if (remaining > 0) remaining -= 1
             if (remaining <= 0) {
-                code = KewuApi.getAttendanceCode(session.id)?.also { remaining = it.remainingSeconds }
+                val next = KewuApi.getAttendanceCode(session.id)
+                if (next != null) {
+                    code = next
+                    remaining = next.remainingSeconds
+                } else {
+                    delay(3000)
+                }
             }
         }
     }
@@ -864,17 +918,22 @@ private fun LiveSessionCard(
             // 仅在确认结束（closing==true）时执行；点「再想想」取消时 closing 仍为 false，跳过。
             if (!closing) return@KewuConfirmDialog
             scope.launch {
-                try {
+                // ★ 2026-10-26：closeAttendance 失败是「返回错误文案」而不是抛异常，旧版忽略返回值 →
+                //   后端签到其实还开着，本地却清掉了上课状态。现在失败就提示并保留上课面板，老师可重试。
+                val err = try {
                     KewuApi.closeAttendance(session.id)
-                    // ★ 同步下课状态到后端（POST /api/teacher/class-state END）
-                    KewuApi.setClassState(session.courseId, "END")
                 } catch (e: Throwable) {
-                    // 关闭失败不应卡住下课流程；提示但不阻断
-                    e.message?.takeIf { it.isNotBlank() }?.let { snackbar.toast(it) }
-                } finally {
-                    closing = false
-                    onClosed()
+                    e.message ?: "网络异常"
                 }
+                if (err != null) {
+                    closing = false
+                    snackbar.toast("结束签到失败：$err，请重试")
+                    return@launch
+                }
+                // 同步下课状态到后端（POST /api/teacher/class-state END）；失败只提示，签到已关不影响下课
+                runCatching { KewuApi.setClassState(session.courseId, "END") }
+                closing = false
+                onClosed()
             }
         },
         onDismiss = { confirmClose = false },
@@ -996,6 +1055,19 @@ private fun TeacherRecordingPanel(courseId: String) {
                     }
                 }
                 RecordingStatus.Idle, is RecordingStatus.Recording -> {}
+            }
+            // 2026-10-26：老师录音时也显示课堂录音雷达（看得到哪些学生在同步录音；老师自己在圆心）。
+            // 面板本身是卡片 → 雷达用非玻璃外壳（backdrop = null），避免玻璃套玻璃
+            androidx.compose.animation.AnimatedVisibility(
+                visible = recording,
+                enter = androidx.compose.animation.expandVertically(androidx.compose.animation.core.spring(dampingRatio = 0.86f, stiffness = 360f)) +
+                    androidx.compose.animation.fadeIn(),
+                exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut(),
+            ) {
+                Column {
+                    Spacer(Modifier.height(12.dp))
+                    RecordingManager.currentSessionId()?.let { sid -> RecordingRadar(backdrop = null, sessionId = sid) }
+                }
             }
         }
     }

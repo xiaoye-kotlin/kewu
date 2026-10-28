@@ -2,10 +2,12 @@ package com.kewu.app
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 
@@ -15,6 +17,32 @@ class MainActivity : ComponentActivity() {
         private var audioPermissionCallback: ((Boolean) -> Unit)? = null
         private var cameraPermissionCallback: ((Boolean) -> Unit)? = null
         private var notificationPermissionCallback: ((Boolean) -> Unit)? = null
+        private var pickCallback: ((List<Uri>) -> Unit)? = null
+    }
+
+    // 作业附件：系统照片选择器（最多 9 张）/ 任意文件多选（2026-10-26）
+    private val pickImagesLauncher = registerForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(9)
+    ) { uris ->
+        pickCallback?.invoke(uris)
+        pickCallback = null
+    }
+
+    private val pickDocumentsLauncher = registerForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        pickCallback?.invoke(uris)
+        pickCallback = null
+    }
+
+    fun pickImages(callback: (List<Uri>) -> Unit) {
+        pickCallback = callback
+        pickImagesLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
+    fun pickDocuments(callback: (List<Uri>) -> Unit) {
+        pickCallback = callback
+        pickDocumentsLauncher.launch(arrayOf("*/*"))
     }
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -85,6 +113,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         appContext = applicationContext // 供 haptic() 取 Vibrator
+        CrashLog.install(applicationContext)
         appActivity = this // 供录音权限请求等需要 Activity 的运行时调用
         // 只开 edge-to-edge：系统导航小白条（手势条）默认显示，底部区域透明，
         // 内容直接延伸到屏幕底边（托盘底已留 24dp 空隙，小白条悬在背景上不挡标签）。
@@ -99,5 +128,15 @@ class MainActivity : ComponentActivity() {
         setContent {
             App()
         }
+    }
+
+    // 2026-10-26：释放静态引用（旧版 appActivity / 各回调从不置空，Activity 销毁后仍被持有）
+    override fun onDestroy() {
+        if (appActivity === this) appActivity = null
+        audioPermissionCallback = null
+        cameraPermissionCallback = null
+        notificationPermissionCallback = null
+        pickCallback = null
+        super.onDestroy()
     }
 }
