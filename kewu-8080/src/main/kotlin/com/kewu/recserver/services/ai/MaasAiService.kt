@@ -1,0 +1,199 @@
+package com.kewu.recserver.services.ai
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+import java.time.Duration
+
+// 真实 AI 实现：对接华为云 ModelArts MaaS 的 V2 标准 chat/completions 接口。
+// 配置全部走环境变量（密钥不进代码、不进仓库）：
+//   MAAS_API_KEY  必填，MaaS 控制台拿到的 API Key
+//   MAAS_API_URL  可选，默认 https://api.modelarts-maas.com/v2/chat/completions
+//   MAAS_MODEL    可选，默认 openpangu-2.0-flash
+// 鉴权：Authorization: Bearer <MAAS_API_KEY>，请求体 OpenAI 兼容（model + messages[]）
+class MaasAiService : AiService {
+
+    private val apiKey: String = System.getenv("MAAS_API_KEY")?.takeIf { it.isNotBlank() } ?: System.getenv("API_KEY") ?: ""
+    private val apiUrl: String =
+        System.getenv("MAAS_API_URL").takeIf { !it.isNullOrBlank() }
+            ?: System.getenv("API_URL").takeIf { !it.isNullOrBlank() }
+            ?: "https://api.modelarts-maas.com/v2/chat/completions"
+    private val model: String =
+        System.getenv("MAAS_MODEL").takeIf { !it.isNullOrBlank() }
+            ?: System.getenv("MODEL_NAME").takeIf { !it.isNullOrBlank() } ?: "openpangu-2.0-flash"
+
+    private val client: HttpClient = HttpClient.newBuilder()
+        .connectTimeout(Duration.ofSeconds(20))
+        // 强制直连：不继承系统/环境里的代理设置。否则一旦 JAVA_TOOL_OPTIONS 之类残留了
+        // 代理地址（FlClash 就干过这事），AI 调用会全部以 connect timed out 静默失败
+        .proxy(java.net.ProxySelector.of(null))
+        .build()
+
+    override suspend fun summarize(transcript: String): String {
+        if (transcript.isBlank()) return "（转写内容为空，无法总结）"
+        return chat(
+            system = "你是一个课堂纪要助手。请把下面的课堂转写文本提炼成简洁的中文要点，" +
+                "按条理分点列出，不要编造原文未提及的内容。",
+            user = transcript,
+            maxTokens = 1024
+        )
+    }
+
+    /**
+     * 课堂纪要（2026-10-26，SIS 转写之后调用）：给小悟辅导学生用的结构化纪要。
+     * 转写稿可能很长（45 分钟约 1 万字），截取前 12000 字。
+     */
+    suspend fun classNotes(courseName: String, transcript: String): String {
+        if (transcript.isBlank()) return ""
+        return chat(
+            system = "你是课悟的课堂纪要助手。下面是一节「$courseName」课的语音转写稿（可能有识别错字，请按上下文纠正）。" +
+                "请输出结构化课堂纪要，用中文、不用 Markdown 符号，按以下小标题分段：" +
+                "【本节主题】一句话；【知识点】3-8 条，每条一句话讲清概念或结论；【例题与方法】老师讲过的例题、解题方法；" +
+                "【重点难点】老师强调的易错点；【课后安排】作业、预习、考试提醒（没有就写无）。不要编造转写稿里没有的内容。",
+            user = transcript.take(12000),
+            maxTokens = 2048
+        )
+    }
+
+    override suspend fun answer(question: String, context: String, maxTokens: Int): String {
+        if (question.isBlank()) return "（问题为空）"
+        return chat(
+            system = "你是课堂智能助手，只能基于下面提供的课堂内容来回答学生的问题；" +
+                "如果内容里没有相关信息，就如实说明无法回答，不要凭空编造。",
+            user = "【课堂内容】\n${context.ifBlank { "（无）" }}\n\n【学生问题】\n$question",
+            maxTokens = maxTokens
+        )
+    }
+
+    /**
+     * 流式对话（2026-10-26，App 打字机效果）：以 MaaS 的 `stream=true` SSE 拉取，只把最终回答的
+     * `delta.content` 逐段回调给 [onDelta]（思维链 reasoning_content 不外发）。成功结束返回 null，失败返回原因。
+     */
+    suspend fun stream(
+        messages: List<Pair<String, String>>,
+        maxTokens: Int,
+        thinking: Boolean,
+        onDelta: suspend (String) -> Unit,
+    ): String? {
+        if (apiKey.isBlank()) return "AI 未配置"
+        val body = kotlinx.serialization.json.buildJsonObject {
+            put("model", kotlinx.serialization.json.JsonPrimitive(model))
+            put("max_tokens", kotlinx.serialization.json.JsonPrimitive(maxTokens))
+            put("stream", kotlinx.serialization.json.JsonPrimitive(true))
+            // 关闭思维链：openpangu 默认先想 5–10 秒才出第一个字（2026-10-26 实测 thinking.type=disabled 首字 ~1s）
+            if (!thinking) put("thinking", kotlinx.serialization.json.buildJsonObject {
+                put("type", kotlinx.serialization.json.JsonPrimitive("disabled"))
+            })
+            put("messages", kotlinx.serialization.json.JsonArray(messages.map { (role, content) ->
+                kotlinx.serialization.json.buildJsonObject {
+                    put("role", kotlinx.serialization.json.JsonPrimitive(role))
+                    put("content", kotlinx.serialization.json.JsonPrimitive(content))
+                }
+            }))
+        }.toString()
+        return withContext(Dispatchers.IO) {
+            try {
+                val request = HttpRequest.newBuilder()
+                    .uri(URI.create(apiUrl))
+                    .timeout(Duration.ofSeconds(180))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .header("Authorization", "Bearer $apiKey")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build()
+                val resp = client.send(request, HttpResponse.BodyHandlers.ofLines())
+                if (resp.statusCode() !in 200..299) {
+                    return@withContext "HTTP ${resp.statusCode()}"
+                }
+                val it = resp.body().iterator()
+                while (it.hasNext()) {
+                    val line = it.next().trim()
+                    if (!line.startsWith("data:")) continue
+                    val data = line.removePrefix("data:").trim()
+                    if (data == "[DONE]") break
+                    val delta = try {
+                        Json.parseToJsonElement(data).jsonObject["choices"]?.jsonArray?.firstOrNull()
+                            ?.jsonObject?.get("delta")?.jsonObject?.get("content")
+                            ?.let { c -> if (c is kotlinx.serialization.json.JsonNull) null else c.jsonPrimitive.content }
+                    } catch (_: Throwable) { null }
+                    if (!delta.isNullOrEmpty()) onDelta(delta)
+                }
+                null
+            } catch (t: Throwable) {
+                t.message ?: t.javaClass.simpleName
+            }
+        }
+    }
+
+    private suspend fun chat(system: String, user: String, maxTokens: Int): String {
+        if (apiKey.isBlank()) return "（AI 未配置：缺少环境变量 MAAS_API_KEY）"
+        val body = Json.encodeToString(
+            MaasRequest.serializer(),
+            MaasRequest(
+                model = model,
+                messages = listOf(
+                    MaasMessage("system", system),
+                    MaasMessage("user", user)
+                ),
+                max_tokens = maxTokens
+            )
+        )
+        return withContext(Dispatchers.IO) {
+            var lastErr: String? = null
+            // 最多试两次：华为云 MaaS 偶有 connect timed out 的瞬时抖动（实测过一次，
+            // 1 分钟后同样请求又全部成功），重试一次就能救回来，比直接报错体面得多
+            repeat(2) { attempt ->
+                try {
+                    val request = HttpRequest.newBuilder()
+                        .uri(URI.create(apiUrl))
+                        .timeout(Duration.ofSeconds(if (maxTokens > 1024) 150 else 60))
+                        .header("Content-Type", "application/json")
+                        .header("Authorization", "Bearer $apiKey")
+                        .POST(HttpRequest.BodyPublishers.ofString(body))
+                        .build()
+                    val response = client.send(request, HttpResponse.BodyHandlers.ofString())
+                    if (response.statusCode() !in 200..299) {
+                        return@withContext "（AI 调用失败：HTTP ${response.statusCode()} ${response.body().take(300)}）"
+                    }
+                    return@withContext extractContent(response.body())
+                } catch (t: Throwable) {
+                    lastErr = t.message ?: t.javaClass.simpleName
+                    if (attempt == 0) delay(1000)
+                }
+            }
+            "（AI 调用异常：$lastErr）"
+        }
+    }
+
+    // 从 V2 响应里取 choices[0].message.content（reasoning_content 那部分是思考链，不要）
+    private fun extractContent(body: String): String {
+        return try {
+            val root = Json.parseToJsonElement(body).jsonObject
+            val choices = root["choices"]?.jsonArray
+            val message = choices?.firstOrNull()?.jsonObject?.get("message")?.jsonObject
+            val content = message?.get("content")?.jsonPrimitive?.content
+            if (!content.isNullOrBlank()) content else "（AI 返回内容为空）"
+        } catch (t: Throwable) {
+            "（AI 返回解析失败：${t.message ?: t.javaClass.simpleName}）"
+        }
+    }
+}
+
+@Serializable
+private data class MaasMessage(val role: String, val content: String)
+
+@Serializable
+private data class MaasRequest(
+    val model: String,
+    val messages: List<MaasMessage>,
+    val max_tokens: Int
+)

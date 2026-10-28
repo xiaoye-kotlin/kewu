@@ -25,7 +25,16 @@ import com.kewu.modules.aistatus.routes.aiStatusRoutes
 import com.kewu.modules.aistatus.service.AiStatusService
 import com.kewu.modules.questions.routes.questionRoutes
 import com.kewu.modules.questions.service.QuestionService
+import com.kewu.recserver.recordingModule
+import com.kewu.modules.schedule.scheduleRoutes
+import com.kewu.modules.roster.rosterRoutes
+import com.kewu.modules.upload.routes.uploadRoutes
+import com.kewu.modules.admin.routes.adminRoutes
+import com.kewu.modules.admin.service.AdminService
+import com.kewu.recserver.config.loadRecConfig
 import io.ktor.server.application.*
+import io.ktor.server.response.respond
+import kotlinx.coroutines.launch
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.*
 
@@ -41,8 +50,17 @@ fun Application.configureRouting() {
     val attendanceRepository = AttendanceRepository()
     // 班级仓储也只建一个: 作业模块要按老师查他教的课, 教师端也要用它, 两边必须同一份数据
     val teacherRepository = TeacherRepository()
+    // 总控端（管理后台，2026-10-28 移植 admin）：复用同一套仓储 + OBS/Redis 配置，零新增部署物
+    val recConfig = loadRecConfig()
+    val adminService = AdminService(
+        userRepository, recConfig.obs, courseRepository,
+        assignmentRepository, attendanceRepository, teacherRepository,
+        recConfig.redis
+    )
+    // 附件上传记录：作业提交按 id 回查附件，和上传接口共用一份
+    val uploadRepository = com.kewu.modules.upload.repository.UploadRepository()
     val assignmentService = AssignmentService(
-        assignmentRepository, courseRepository, teacherRepository, userRepository
+        assignmentRepository, courseRepository, teacherRepository, userRepository, uploadRepository
     )
     val attendanceService = AttendanceService(attendanceRepository, courseRepository)
     val teacherService = TeacherService(
@@ -59,6 +77,31 @@ fun Application.configureRouting() {
     // AI 纪要生成状态轮询：独立 Redis 客户端（要区分“没 key”和“Redis 挂了”两种降级）
     val aiStatusRedis = AiStatusRedis()
     val aiStatusService = AiStatusService(aiStatusRedis)
+    // 下课收尾（2026-10-26）：手动下课 / 开课满 90 分钟自动下课 → 择优选出本节最佳录音，等待语音转文字
+    val classEnd = com.kewu.recserver.ClassEndService(attributes[com.kewu.recserver.RecServicesKey])
+    val bg = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
+    teacherService.onClassEnded = { st, reason ->
+        bg.launch {
+            // 下课时各端正在自动停止并上传录音：先按现有录音择优一次，2 分钟后再择优一次（把晚到的上传算进去）
+            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }.onFailure { println("CLASS-END-ERROR: $it") }
+            kotlinx.coroutines.delay(120_000)
+            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }
+            // 第二轮择优（晚到的上传已算进去）后，用主录音走 SIS 转写 + AI 课堂纪要
+            val sid = st.courseId + "-" + (st.startedAt?.take(10) ?: java.time.LocalDate.now().toString()).replace("-", "")
+            runCatching { classEnd.transcribe(sid) }.onFailure { println("ASR-ERROR: $it") }
+        }
+    }
+    com.kewu.recserver.ClassEndService.onUpload = { sid ->
+        bg.launch { runCatching { classEnd.refreshIfDecided(sid) } }
+    }
+    bg.launch {
+        while (true) {
+            kotlinx.coroutines.delay(60_000)
+            runCatching { teacherService.autoEndOverdue(90) }
+                .onSuccess { if (it > 0) println("AUTO-END: $it class(es) ended after 90 min") }
+                .onFailure { println("AUTO-END-ERROR: $it") }
+        }
+    }
     routing {
         get("/") {
             call.respondText("kewu backend is running")
@@ -74,5 +117,26 @@ fun Application.configureRouting() {
         analyticsRoutes(radarService)
         questionRoutes(questionService)
         aiStatusRoutes(aiStatusService)
+        // 原 8081：/health、/api/recordings/*、/api/notes、/api/checkin、/api/sessions、/api/ai/*、
+        // /api/teacher/recording/devices*（2026-10-26 合并，路径与 8080 原有接口无重叠）
+        recordingModule()
+        // 作业附件 /api/uploads + 课前资料 /api/courses/{id}/materials（2026-10-26）
+        uploadRoutes(uploadRepository)
+        // 课表导入 / 我的课表 / 崩溃上报（2026-10-26）
+        scheduleRoutes()
+        // 班级通讯录 / 移出学生（2026-10-26）
+        rosterRoutes()
+        // 某门课历次下课选出的最佳录音（转写状态 PENDING_ASR / DONE…）
+        // 手动重新转写（转写失败 / 后来补了更好的录音时用）：POST /api/class-recordings/{sessionId}/transcribe
+        post("/api/class-recordings/{sessionId}/transcribe") {
+            val sid = call.parameters["sessionId"]!!
+            bg.launch { runCatching { classEnd.transcribe(sid, force = true) } }
+            call.respond(com.kewu.models.ApiResponse(0, "已开始转写，约几分钟后完成", true))
+        }
+        get("/api/courses/{courseId}/class-recordings") {
+            call.respond(com.kewu.models.ApiResponse(0, "ok", classEnd.list(call.parameters["courseId"]!!)))
+        }
+        // 总控端（管理后台）路由组：/api/admin/**（2026-10-28 移植 admin）
+        adminRoutes(adminService)
     }
 }

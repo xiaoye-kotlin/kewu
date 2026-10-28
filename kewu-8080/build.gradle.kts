@@ -1,5 +1,6 @@
 // 课悟 8080 业务后端（队友 2026-10-22 交付的完整源码，Ktor 3.3.3）
-// 独立工程只为构建/部署用，源码归队友；要并入主仓库等用户点头
+// 独立工程只为构建/部署用。2026-10-26 起原 8081 录音服务（../server）已并入本工程 com.kewu.recserver，
+// 对外只剩 8080 一个端口
 plugins {
     kotlin("jvm") version "2.4.10"
     kotlin("plugin.serialization") version "2.4.10"
@@ -21,6 +22,9 @@ dependencies {
     implementation("io.ktor:ktor-server-auth:3.3.3")
     implementation("io.ktor:ktor-server-auth-jwt:3.3.3")
     implementation("io.ktor:ktor-server-cors:3.3.3")
+    implementation("io.ktor:ktor-server-call-logging:3.3.3")
+    // 录音存华为云 OBS（原 8081 的依赖，2026-10-26 两个后端合并为一个）
+    implementation("com.huaweicloud:esdk-obs-java:3.25.10")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("at.favre.lib:bcrypt:0.10.2")
     implementation("com.auth0:java-jwt:4.4.0")

@@ -11,6 +11,7 @@ import org.jetbrains.exposed.sql.deleteWhere
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
+import org.jetbrains.exposed.sql.update
 
 // 用户仓储：MySQL 持久化，方法签名和原来内存版一致，上层无感
 class UserRepository {
@@ -30,6 +31,7 @@ class UserRepository {
                 it[passwordHash] = user.passwordHash
                 it[nickname] = user.nickname
                 it[role] = user.role
+                it[school] = user.school
             }
         }
         return user
@@ -46,6 +48,19 @@ class UserRepository {
             }
         }
         return true
+    }
+
+    /** 改资料：参数为 null 的字段不动（空串 = 清空）。 */
+    fun updateProfile(userId: String, nickname: String?, school: String?, className: String?, phone: String? = null, email: String? = null) {
+        transaction {
+            Users.update({ Users.id eq userId }) {
+                if (nickname != null) it[Users.nickname] = nickname
+                if (school != null) it[Users.school] = school.ifBlank { null }
+                if (className != null) it[Users.className] = className.ifBlank { null }
+                if (phone != null) it[Users.phone] = phone.ifBlank { null }
+                if (email != null) it[Users.email] = email.ifBlank { null }
+            }
+        }
     }
 
     fun getBoundCourseIds(userId: String): List<String> = transaction {
@@ -66,7 +81,11 @@ class UserRepository {
             passwordHash = this[Users.passwordHash],
             nickname = this[Users.nickname],
             role = this[Users.role],
-            courseIds = courseIds
+            courseIds = courseIds,
+            school = this[Users.school],
+            className = this[Users.className],
+            phone = this[Users.phone],
+            email = this[Users.email]
         )
     }
 }

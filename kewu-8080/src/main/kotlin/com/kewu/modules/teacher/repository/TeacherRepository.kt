@@ -14,6 +14,8 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
 
 // 班级的数据库仓储, 方法签名和内存版一致
 class TeacherRepository {
@@ -44,12 +46,15 @@ class TeacherRepository {
                     it[createdAt] = c.createdAt
                 }
             }
-            // 学生名单单独存关联表
+            // 学生名单单独存关联表：保留已有入班时间，避免老师改班级信息时把 joinedAt 重置
+            val existingJoined = ClassStudents.selectAll().where { ClassStudents.classId eq c.id }
+                .map { it[ClassStudents.studentId] to it[ClassStudents.joinedAt] }.toMap()
             ClassStudents.deleteWhere { ClassStudents.classId eq c.id }
             c.studentIds.forEach { sid ->
                 ClassStudents.insert {
                     it[classId] = c.id
                     it[studentId] = sid
+                    it[joinedAt] = existingJoined[sid] ?: nowStr()
                 }
             }
         }
@@ -83,6 +88,7 @@ class TeacherRepository {
             ClassStudents.insert {
                 it[ClassStudents.classId] = classId
                 it[ClassStudents.studentId] = studentId
+                it[ClassStudents.joinedAt] = nowStr()
             }
         }
         return true
@@ -127,6 +133,22 @@ class TeacherRepository {
         }
     }
 
+    /** 所有「上课中」的课堂（自动下课巡检用）。 */
+    fun listOnStates(): List<ClassState> = transaction {
+        ClassStates.selectAll().where { ClassStates.state eq "ON" }.map {
+            ClassState(
+                courseId = it[ClassStates.courseId],
+                courseName = it[ClassStates.courseName],
+                state = it[ClassStates.state],
+                teacherId = it[ClassStates.teacherId],
+                teacherName = it[ClassStates.teacherName],
+                startedAt = it[ClassStates.startedAt],
+                endedAt = it[ClassStates.endedAt],
+                updatedAt = it[ClassStates.updatedAt]
+            )
+        }
+    }
+
     fun findState(courseId: String): ClassState? = transaction {
         ClassStates.selectAll().where { ClassStates.courseId eq courseId }.firstOrNull()?.let {
             ClassState(
@@ -156,6 +178,33 @@ class TeacherRepository {
             )
         }
     }
+
+    // 按课程列出班级（总控端 GET /courses/{id}/classes，2026-10-28 移植 admin 时加）
+    fun listByCourse(courseId: String): List<ClassRoom> = transaction {
+        Classes.selectAll().where { Classes.courseId eq courseId }
+            .orderBy(Classes.createdAt)
+            .map { loadClassRoom(it[Classes.id]) }
+    }
+
+    // 删除班级：连带清班级学生关联（2026-10-28 移植 admin 时加）
+    fun deleteClass(id: String): Boolean {
+        if (findClass(id) == null) return false
+        transaction {
+            ClassStudents.deleteWhere { ClassStudents.classId eq id }
+            Classes.deleteWhere { Classes.id eq id }
+        }
+        return true
+    }
+
+    // 移出班级学生（2026-10-28 移植 admin 时加）
+    fun removeClassStudent(classId: String, studentId: String): Boolean = transaction {
+        ClassStudents.deleteWhere {
+            (ClassStudents.classId eq classId) and (ClassStudents.studentId eq studentId)
+        } > 0
+    }
+
+    private fun nowStr(): String =
+        LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
 
     fun nextId(prefix: String): String = "$prefix${System.nanoTime().toString().takeLast(6)}"
 

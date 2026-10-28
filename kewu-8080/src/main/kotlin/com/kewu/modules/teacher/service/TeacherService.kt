@@ -45,6 +45,8 @@ class TeacherService(
             teacher = req.teacher.ifBlank { teacher?.nickname ?: teacher?.username ?: "" }
         )
         courseRepository.createCourse(course)
+        // 2026-10-26：建课即绑到老师账号（旧版不绑，老师只能靠「全站课程列表」看到自己建的课，所有人都能看到所有课）
+        teacher?.let { userRepository.bindCourse(it.id, course.id) }
         return Result.success(course.toInfo())
     }
 
@@ -57,14 +59,19 @@ class TeacherService(
             return Result.failure(IllegalArgumentException("这个账号不是老师, 只有老师账号能建班"))
         }
         if (req.name.isBlank()) return Result.failure(IllegalArgumentException("班级名不能为空"))
-        val course = courseRepository.findCourse(req.courseId)
+        // 2026-10-27：同一老师不允许重名班级（旧版可建两个同名班，学生进了一个、课表导进另一个）
+        if (repository.listByTeacher(teacher.id).any { it.name.trim() == req.name.trim() }) {
+            return Result.failure(IllegalArgumentException("你已经有一个叫「${req.name.trim()}」的班级了，换个名字或直接在原班级里操作"))
+        }
+        // 课程可选（2026-10-27）：不传就先建班，导入课表时再关联（ScheduleService.import 回填 courseId）
+        val course = if (req.courseId.isBlank()) null else courseRepository.findCourse(req.courseId)
             ?: return Result.failure(IllegalArgumentException("课程不存在: ${req.courseId}"))
 
         val cls = ClassRoom(
             id = repository.nextId("k"),
             name = req.name,
-            courseId = course.id,
-            courseName = course.name,
+            courseId = course?.id ?: "",
+            courseName = course?.name ?: "",
             teacherId = teacher.id,
             teacherName = teacher.nickname ?: teacher.username,
             term = req.term,
@@ -104,8 +111,13 @@ class TeacherService(
         if (!cls.studentIds.add(student.id)) {
             return Result.failure(IllegalArgumentException("你已经在这个班里了"))
         }
+        // ★ 2026-10-27 修「输入邀请码显示加入成功，但老师端 0 人、学生端也没有班级」：
+        //   旧版只往内存里的 studentIds 加了一下，从没写进 class_students 表（MySQL 化之后遗留）
+        repository.addStudent(cls.id, student.id)
         // 加班顺手把这门课绑到学生身上, 学生端课程列表就能看到
-        userRepository.bindCourse(student.id, cls.courseId)
+        if (cls.courseId.isNotBlank()) userRepository.bindCourse(student.id, cls.courseId)
+        // 课表里本班的所有课程也绑上（2026-10-27：班级可以先建后导课表，学生加班就能看到整张课表的课）
+        com.kewu.modules.schedule.ScheduleService.courseIdsOfClass(cls.id).forEach { userRepository.bindCourse(student.id, it) }
         return Result.success(cls.toInfo())
     }
 
@@ -115,7 +127,8 @@ class TeacherService(
         val teacher = resolveUser(teacherIdOrName)
             ?: return Result.failure(IllegalArgumentException("老师账号不存在: $teacherIdOrName"))
         val today = LocalDate.now().toString()
-        val classes = repository.listByTeacher(teacher.id)
+        // 还没导入课表、没关联课程的班级不进控制台（无课可上）
+        val classes = repository.listByTeacher(teacher.id).filter { it.courseId.isNotBlank() }
         val courseIds = classes.map { it.courseId }.distinct()
 
         // ① 今日课程
@@ -208,7 +221,30 @@ class TeacherService(
             else -> return Result.failure(IllegalArgumentException("action 只能是 START(开课) 或 END(下课)"))
         }
         repository.saveState(state)
+        if (state.state == ClassStateValue.OFF) onClassEnded?.invoke(state, "MANUAL")
         return Result.success(state)
+    }
+
+    /** 下课回调（手动下课 / 自动下课都会触发）：由路由层挂上「择优录音」。 */
+    var onClassEnded: ((ClassState, String) -> Unit)? = null
+
+    /**
+     * 自动下课（2026-10-26）：开课超过 [maxMinutes] 分钟老师还没点下课的，后端替他下课并触发择优录音。
+     * 返回本次自动下课的课程数。由 Application 里的定时任务每分钟调用。
+     */
+    fun autoEndOverdue(maxMinutes: Long = 90): Int {
+        var n = 0
+        val nowT = LocalDateTime.now()
+        repository.listOnStates().forEach { st ->
+            val started = st.startedAt?.let { runCatching { LocalDateTime.parse(it, fmt) }.getOrNull() } ?: return@forEach
+            if (java.time.Duration.between(started, nowT).toMinutes() >= maxMinutes) {
+                val ended = st.copy(state = ClassStateValue.OFF, endedAt = now(), updatedAt = now())
+                repository.saveState(ended)
+                onClassEnded?.invoke(ended, "AUTO_90MIN")
+                n++
+            }
+        }
+        return n
     }
 
     // 查某门课当前是上课中还是没开
@@ -232,7 +268,7 @@ class TeacherService(
         return Result.success(
             cls.studentIds.map { id ->
                 val u = userRepository.findUserById(id)
-                StudentBrief(id, u?.nickname ?: u?.username ?: id)
+                StudentBrief(id, u?.nickname ?: u?.username ?: id, u?.username ?: "")
             }
         )
     }

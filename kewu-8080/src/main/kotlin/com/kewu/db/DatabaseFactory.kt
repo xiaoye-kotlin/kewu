@@ -1,13 +1,18 @@
 package com.kewu.db
 
+import at.favre.lib.crypto.bcrypt.BCrypt
 import com.zaxxer.hikari.HikariConfig
 import com.zaxxer.hikari.HikariDataSource
+import com.kewu.modules.user.models.UserRole
 import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.Database
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.SchemaUtils
 import org.jetbrains.exposed.sql.transactions.transaction
+import java.util.UUID
 
 // 共用的 JSON 实例：宽松、忽略未知键，模型加字段老数据照样读
 val kewuJson: Json = Json {
@@ -49,8 +54,30 @@ object DatabaseFactory {
             // 列已存在时这个方法返回空列表，重复启动无副作用。
             SchemaUtils.addMissingColumnsStatements(*allTables).forEach { exec(it) }
         }
-        seedIfEmpty()
+        // 2026-10-26 用户要求全部用真实数据：不再灌演示课程 / 作业 / 提交 / 签到（SeedData 保留源码仅供本地开发参考）
         connected = true
+        ensureAdmin() // 首次启动按 kewu.env 的 ADMIN_ACCOUNT/ADMIN_PASSWORD 建种子管理员（2026-10-28 移植 admin）
+    }
+
+    // 种子管理员：库里没有 ADMIN 才建；不配 ADMIN_ACCOUNT/ADMIN_PASSWORD 则跳过（不强制）
+    private fun ensureAdmin() {
+        val account = System.getenv("ADMIN_ACCOUNT")
+        val password = System.getenv("ADMIN_PASSWORD")
+        if (account.isNullOrBlank() || password.isNullOrBlank()) return
+        transaction {
+            val exists = !Users.selectAll().where { Users.role eq UserRole.ADMIN }.empty()
+            if (!exists) {
+                Users.insert {
+                    it[id] = UUID.randomUUID().toString()
+                    it[username] = account
+                    it[passwordHash] = BCrypt.withDefaults().hashToString(12, password.toCharArray())
+                    it[nickname] = account
+                    it[role] = UserRole.ADMIN
+                    it[status] = "active"
+                }
+                println("ADMIN-SEED: created seed admin account=$account")
+            }
+        }
     }
 
     // 表是空的才灌种子：重启不会重复插，老数据不丢

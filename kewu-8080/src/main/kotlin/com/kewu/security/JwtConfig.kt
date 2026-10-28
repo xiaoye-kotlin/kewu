@@ -26,6 +26,17 @@ object JwtConfig {
         .withExpiresAt(Date(System.currentTimeMillis() + EXPIRE_MS))
         .sign(Algorithm.HMAC256(SECRET))
 
+    // 仅校验签名/过期，返回 userId；失败返回 null。总控端用 Bearer Token 鉴权（token 里不含 role，需回查 users 表）
+    fun verifyToken(token: String): String? = runCatching {
+        val decoded = JWT.require(Algorithm.HMAC256(SECRET))
+            .withAudience(AUDIENCE)
+            .withIssuer(ISSUER)
+            .build()
+            .verify(token)
+        val userId = decoded.getClaim(CLAIM_USER_ID).asString()
+        userId.takeIf { it.isNotBlank() }
+    }.getOrNull()
+
     fun configure(config: AuthenticationConfig) {
         config.jwt(NAME) {
             realm = REALM
