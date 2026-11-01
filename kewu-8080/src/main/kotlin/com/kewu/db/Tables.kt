@@ -289,6 +289,16 @@ object RecordingSessions : Table("recording_sessions") {
     override val primaryKey = PrimaryKey(id)
 }
 
+// B站视频一键转课堂笔记：每个 bvid 一份生成的 Markdown 笔记（2026-11-01 新增）
+object BilibiliNotes : Table("bilibili_notes") {
+    val id = varchar("id", 64)
+    val bvid = varchar("bvid", 32).index()          // B站视频号，如 BV1xx411c7mD
+    val title = varchar("title", 512)                // 视频标题
+    val content = text("content")                    // 大模型生成的 Markdown 笔记
+    val createdAt = varchar("created_at", 32)         // 生成时间
+    override val primaryKey = PrimaryKey(id)
+}
+
 val allTables = arrayOf(
     Users, UserCourses, Courses, ClassNotes,
     Classes, ClassStudents, ClassStates,
@@ -296,5 +306,5 @@ val allTables = arrayOf(
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
     Questions,
     Uploads, CourseMaterials, ClassRecordings, CourseSchedules, CrashReports,
-    Recordings, RecordingSessions
+    Recordings, RecordingSessions, BilibiliNotes
 )

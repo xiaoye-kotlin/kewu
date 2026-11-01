@@ -75,6 +75,19 @@ class MaasAiService : AiService {
     }
 
     /**
+     * B站视频转课堂笔记（2026-11-01）：把视频逐字稿整理成结构化 Markdown 学习笔记。
+     * 转写稿可能很长（45 分钟约 1 万字），截取前 12000 字。
+     */
+    suspend fun bilibiliNotes(transcript: String): String {
+        if (transcript.isBlank()) return "（逐字稿为空，无法生成笔记）"
+        return chat(
+            system = "你是一个学习助手。请将以下视频逐字稿整理成结构化的 Markdown 学习笔记，包含：课程大纲、核心知识点。",
+            user = transcript.take(12000),
+            maxTokens = 2048
+        )
+    }
+
+    /**
      * 流式对话（2026-10-26，App 打字机效果）：以 MaaS 的 `stream=true` SSE 拉取，只把最终回答的
      * `delta.content` 逐段回调给 [onDelta]（思维链 reasoning_content 不外发）。成功结束返回 null，失败返回原因。
      */

@@ -32,6 +32,10 @@ import com.kewu.modules.upload.routes.uploadRoutes
 import com.kewu.modules.admin.routes.adminRoutes
 import com.kewu.modules.admin.service.AdminService
 import com.kewu.recserver.config.loadRecConfig
+import com.kewu.modules.bilibili.BilibiliFetcher
+import com.kewu.modules.bilibili.BilibiliNoteService
+import com.kewu.modules.bilibili.bilibiliRoutes
+import com.kewu.recserver.services.ai.MaasAiService
 import io.ktor.server.application.*
 import io.ktor.server.response.respond
 import kotlinx.coroutines.launch
@@ -102,6 +106,16 @@ fun Application.configureRouting() {
                 .onFailure { println("AUTO-END-ERROR: $it") }
         }
     }
+    // B站视频一键转课堂笔记（2026-11-01）：复用现有 SIS 转写 / 盘古 MaaS / OBS / Redis，零新增部署物
+    val recServices = attributes[com.kewu.recserver.RecServicesKey]
+    val bilibiliFetcher = BilibiliFetcher()
+    val bilibiliService = BilibiliNoteService(
+        fetcher = bilibiliFetcher,
+        transcription = recServices.transcription,
+        storage = recServices.storage,
+        redis = recServices.redis,
+        maas = recServices.ai as? MaasAiService ?: MaasAiService()
+    )
     routing {
         get("/") {
             call.respondText("kewu backend is running")
@@ -138,5 +152,7 @@ fun Application.configureRouting() {
         }
         // 总控端（管理后台）路由组：/api/admin/**（2026-10-28 移植 admin）
         adminRoutes(adminService)
+        // B站视频一键转课堂笔记（2026-11-01）：/api/bilibili/note/generate + /api/bilibili/note/{bvid}
+        bilibiliRoutes(bilibiliService, bg)
     }
 }

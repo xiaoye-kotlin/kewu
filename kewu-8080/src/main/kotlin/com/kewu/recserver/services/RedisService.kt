@@ -124,5 +124,12 @@ class RedisService(private val cfg: RedisConfig) {
             true
         }
 
+    // B站转笔记任务状态：kewu:bilibili:status:{bvid} 存 {"status":"PROCESSING|FINISHED|FAILED","reason":"..."}。
+    // 复用同一 Redis 连接，连不上自动降级（写入失败返回 false，读取失败返回 null）。24h 过期兜底，防任务中途挂掉永远卡 PROCESSING
+    suspend fun setBiliStatus(bvid: String, json: String): Boolean =
+        withRedis(false) { it.setex("kewu:bilibili:status:$bvid", TTL_CLASS_DATA_SECONDS, json); true }
+    suspend fun getBiliStatus(bvid: String): String? =
+        withRedis(null) { it.get("kewu:bilibili:status:$bvid") }
+
     fun close() = runCatching { connection?.close() }
 }
