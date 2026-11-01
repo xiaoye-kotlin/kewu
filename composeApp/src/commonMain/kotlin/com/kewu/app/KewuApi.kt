@@ -426,10 +426,16 @@ object KewuApi {
      * 统一解析响应（2026-10-26）：Ktor 默认不对 4xx/5xx 抛异常，旧代码 catch ResponseException 是死代码，
      * 非 JSON 的错误页（网关 502 HTML 等）解析失败只能显示「网络异常」。现在：
      * 401 → 清登录态 + [sessionExpired] 事件；其它非 2xx 且不是 JSON → 明确的「服务器开小差（HTTP xxx）」。
+     * ★ 2026-11-02：[isAuthEndpoint]（登录 / 注册本身）的 401 是后端表达「密码错误」的业务码
+     *   （UserRoutes onFailure 直接 respond 401），绝不能当成会话过期清登录态，要透传后端 message。
      */
-    private suspend fun parseBody(resp: io.ktor.client.statement.HttpResponse): JsonElement {
+    private suspend fun parseBody(resp: io.ktor.client.statement.HttpResponse, isAuthEndpoint: Boolean = false): JsonElement {
         val code = resp.status.value
         if (code == 401) {
+            if (isAuthEndpoint) {
+                val text = resp.bodyAsText()
+                throw ApiException(parseError(text).ifBlank { "登录失败，请稍后重试" })
+            }
             onUnauthorized()
             throw ApiException("登录已过期，请重新登录")
         }
@@ -460,14 +466,15 @@ object KewuApi {
         kvSet("kewu_username", null)
     }
 
-    /** 通用 POST（8080 壳）。[bodyObj] 为 Kotlin Map/List，转 JSON 字符串发送。 */
-    private suspend fun postJson(url: String, bodyObj: Any?, auth: Boolean = false): JsonElement {
+    /** 通用 POST（8080 壳）。[bodyObj] 为 Kotlin Map/List，转 JSON 字符串发送。
+     *  [isAuthEndpoint]：登录 / 注册接口的 401 是业务错误（密码错误等），透传后端 message，见 [parseBody]。 */
+    private suspend fun postJson(url: String, bodyObj: Any?, auth: Boolean = false, isAuthEndpoint: Boolean = false): JsonElement {
         val resp = client.post(url) {
             authHeaders().forEach { (k, v) -> header(k, v) }
             contentType(ContentType.Application.Json)
             setBody(json.encodeToString(JsonElement.serializer(), toJsonElement(bodyObj)))
         }
-        return parseBody(resp)
+        return parseBody(resp, isAuthEndpoint)
     }
 
     /** 从错误响应体里尽量抽出 message / error 字段。 */
@@ -522,6 +529,7 @@ object KewuApi {
         val el = postJson(
             "$BASE_URL/api/user/login",
             mapOf("username" to username, "password" to password),
+            isAuthEndpoint = true,
         )
         val data = el.asDataOrThrow() as? JsonObject
             ?: throw ApiException("服务器响应异常，请稍后重试")
@@ -549,7 +557,7 @@ object KewuApi {
         if (role.isNotBlank()) body["role"] = role
         // 2026-10-26：注册选的学校存后端（旧版只写手机本地 kv，换手机 / 重装后「未填写学校」）
         if (school.isNotBlank()) body["school"] = school
-        val el = postJson("$BASE_URL/api/user/register", body)
+        val el = postJson("$BASE_URL/api/user/register", body, isAuthEndpoint = true)
         el.asDataOrThrow()
         null
     } catch (e: CancellationException) { throw e }

@@ -101,6 +101,19 @@ actual fun shareText(text: String) {
     appContext.startActivity(Intent.createChooser(intent, "分享到").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
 }
 
+actual fun openBilibiliSearch(keyword: String) {
+    // 优先调起哔哩哔哩 App 的搜索页（bilibili://search）；没装 App（ActivityNotFoundException）回退浏览器网页搜索
+    val encoded = java.net.URLEncoder.encode(keyword, "UTF-8")
+    try {
+        appContext.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse("bilibili://search?keyword=$encoded"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: android.content.ActivityNotFoundException) {
+        openUrl("https://search.bilibili.com/all?keyword=$encoded")
+    }
+}
+
 actual fun platformExitApp() {
     // 一级界面双击返回键的第二下：finish 当前 Activity（回到桌面 = 退出）。
     // 兜底：appActivity 为 null（理论上不会）时不崩。

@@ -54,5 +54,11 @@ expect fun openAppSettings()
 /** 系统分享：调起系统分享面板把文本分享到任意 App。Android=ACTION_SEND+Chooser；其它平台 no-op。 */
 expect fun shareText(text: String)
 
+/**
+ * 打开 B 站搜索相关视频（2026-11-02）：装了哔哩哔哩 App 就跳 App 的搜索页，
+ * 没装回退浏览器打开 B 站搜索网页。iOS 走网页（B 站 universal link 会自动提示用 App 打开）。
+ */
+expect fun openBilibiliSearch(keyword: String)
+
 /** 退出应用（一级界面双击返回键的第二下）。Android=finish 当前 Activity；iOS 不主动退出（no-op）。 */
 expect fun platformExitApp()

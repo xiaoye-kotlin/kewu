@@ -62,7 +62,12 @@ import kotlinx.coroutines.launch
  * - 转写超长时明确标注「长课转写摘录」（首 8000 + 尾 4000 字），不悄悄截断冒充完整。
  */
 
-private data class NoteTutorMsg(val text: String, val isUser: Boolean)
+private data class NoteTutorMsg(
+    val text: String,
+    val isUser: Boolean,
+    /** B 站相关视频推荐（2026-11-02）：仅回答气泡携带，渲染在气泡下方。 */
+    val biliKeyword: String? = null,
+)
 
 /** sessionId → 本会话消息（含欢迎语），进程级隔离。 */
 private val tutorSessions = mutableMapOf<String, List<NoteTutorMsg>>()
@@ -169,6 +174,12 @@ fun ClassNoteTutorScreen(
                 if (last != null && !last.isUser && last.text.isBlank()) {
                     msgs = msgs.dropLast(1) + last.copy(text = "小悟暂时连不上 AI 服务，请稍后重试")
                 }
+            } else {
+                // 回答成功后随消息附一条 B 站相关视频推荐（关键词 = 本次提问）
+                val last = msgs.lastOrNull()
+                if (last != null && !last.isUser) {
+                    msgs = msgs.dropLast(1) + last.copy(biliKeyword = biliKeywordOf(text))
+                }
             }
             streaming = false
             persist()
@@ -188,7 +199,7 @@ fun ClassNoteTutorScreen(
                     .padding(horizontal = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                msgs.forEach { m -> TutorBubble(m) }
+                msgs.forEach { m -> NoteTutorBubble(m) }
                 if (streaming && msgs.lastOrNull()?.text.isNullOrBlank()) {
                     Text("小悟正在输入…", color = cs.onSurfaceSecondary, fontSize = 12.sp)
                 }
@@ -237,23 +248,31 @@ fun ClassNoteTutorScreen(
 }
 
 @Composable
-private fun TutorBubble(m: NoteTutorMsg) {
+private fun NoteTutorBubble(m: NoteTutorMsg) {
     val cs = COUITheme.colorScheme
-    if (m.text.isBlank()) return // 流式占位空气泡不画
+    if (m.text.isBlank() && m.biliKeyword == null) return // 流式占位空气泡不画
     Row(Modifier.fillMaxWidth()) {
         if (m.isUser) Spacer(Modifier.weight(1f))
-        Box(
-            Modifier
-                .widthIn(max = 290.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(if (m.isUser) cs.primary else cs.secondaryContainer)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-        ) {
-            Text(
-                m.text,
-                color = if (m.isUser) androidx.compose.ui.graphics.Color.White else cs.onSurface,
-                fontSize = 14.sp, lineHeight = 20.sp,
-            )
+        Column(Modifier.widthIn(max = 290.dp)) {
+            if (m.text.isNotBlank()) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(if (m.isUser) cs.primary else cs.secondaryContainer)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        m.text,
+                        color = if (m.isUser) androidx.compose.ui.graphics.Color.White else cs.onSurface,
+                        fontSize = 14.sp, lineHeight = 20.sp,
+                    )
+                }
+            }
+            // B 站相关视频推荐（2026-11-02）
+            m.biliKeyword?.let { kw ->
+                Spacer(Modifier.height(6.dp))
+                BilibiliSuggestRow(kw)
+            }
         }
         if (!m.isUser) Spacer(Modifier.weight(1f))
     }

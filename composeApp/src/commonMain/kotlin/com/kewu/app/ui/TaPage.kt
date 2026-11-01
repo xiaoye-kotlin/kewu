@@ -305,7 +305,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         if (missed.isNotEmpty()) messages = messages + entriesToMsgs(missed)
         AssistantHub.incoming.collect { inc ->
             if (inc.key == ChatHistory.KEY_STUDENT && messages.none { it.id == inc.entry.id }) {
-                messages = messages + ChatMsg(inc.entry.text, isUser = false, id = inc.entry.id, ts = inc.entry.ts)
+                val kw = (inc.payload as? BiliSuggest)?.keyword?.takeIf { it.isNotBlank() }
+                messages = messages + ChatMsg(inc.entry.text, isUser = false, id = inc.entry.id, ts = inc.entry.ts, biliKeyword = kw)
             }
         }
     }
@@ -354,7 +355,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     val parsed = AiAgent.parse(reply)
                     // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
                     val note = parsed.action?.let { AiAgent.execute("student", it) }
-                    AssistantHub.Reply(listOfNotNull(parsed.text.ifEmpty { null }, note).joinToString("\n"))
+                    // 回答成功后随消息附一条 B 站相关视频推荐（AI 服务连不上时不推）
+                    AssistantHub.Reply(
+                        listOfNotNull(parsed.text.ifEmpty { null }, note).joinToString("\n"),
+                        payload = BiliSuggest(biliKeywordOf(text)),
+                    )
                 }
             }
         }
@@ -574,15 +579,26 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                     haptic(HapticKind.Medium)
                                 }
                             } else {
-                                AiBubble(
-                                    msg,
-                                    pageBackdrop,
-                                    reportBounds = msg == menuMsg,
-                                    onBounds = { menuAnchor = it },
-                                ) {
-                                    menuMsg = msg
-                                    menuIsUser = false
-                                    haptic(HapticKind.Medium)
+                                Column {
+                                    AiBubble(
+                                        msg,
+                                        pageBackdrop,
+                                        reportBounds = msg == menuMsg,
+                                        onBounds = { menuAnchor = it },
+                                    ) {
+                                        menuMsg = msg
+                                        menuIsUser = false
+                                        haptic(HapticKind.Medium)
+                                    }
+                                    // B 站相关视频推荐（2026-11-02）：随回答到达，点击跳 B 站 App / 浏览器
+                                    msg.biliKeyword?.let { kw ->
+                                        Spacer(Modifier.height(6.dp))
+                                        BilibiliSuggestRow(
+                                            kw,
+                                            // 与 AI 气泡同侧（左），留出气尾巴的缩进
+                                            modifier = Modifier.padding(end = 48.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -805,6 +821,8 @@ private data class ChatMsg(
      * 气泡顶部渲染一块灰色引用小条；null 表示这条消息没有引用。
      */
     val quote: String? = null,
+    /** B 站相关视频推荐（2026-11-02）：仅 AI 回答气泡可能携带，渲染在气泡下方的推荐卡。 */
+    val biliKeyword: String? = null,
 ) {
     /** 复制/引用/分享用的纯文本（语音消息给可读描述）。 */
     val displayText: String
