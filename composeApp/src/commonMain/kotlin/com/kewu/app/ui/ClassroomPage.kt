@@ -83,6 +83,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.lerp
 import com.kewu.app.AttendanceSession
+import com.kewu.app.ClassNoteTarget
 import com.kewu.app.CourseInfo
 import com.kewu.app.CourseRepo
 import com.kewu.app.HapticKind
@@ -444,7 +445,7 @@ internal fun ExclaimMark(
 }
 
 // 课堂主页下钻目标（5 态）；attendanceId 单独存值
-private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE, COURSES, MISTAKES, PLAN }
+private enum class ClassroomDrill { NONE, TIMETABLE, ATTENDANCE, SCAN, CODE, COURSES, MISTAKES, PLAN, CLASS_NOTE }
 
 // ───────────────────────── 课堂主页 ─────────────────────────
 
@@ -547,6 +548,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var drill by remember { mutableStateOf(ClassroomDrill.NONE) }
     var attendanceId by remember { mutableStateOf<String?>(null) }
     var pendingCode by remember { mutableStateOf("") }
+    // 单节课堂纪要下钻目标（通知「录音转写」点击进入，courseId + 日期）
+    var classNoteTarget by remember { mutableStateOf<ClassNoteTarget?>(null) }
     LockTabSwipe(drill != ClassroomDrill.NONE)
 
     // 通知中心：铃铛未读数 + 弹窗显隐（首页右上角系统通知，与助教 AI 红点无关）
@@ -584,11 +587,15 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             if ((drill == ClassroomDrill.CODE || drill == ClassroomDrill.ATTENDANCE) && attId == null) {
                 drill = ClassroomDrill.NONE
             }
+            if (drill == ClassroomDrill.CLASS_NOTE && classNoteTarget == null) {
+                drill = ClassroomDrill.NONE
+            }
         }
         val drillKey = when {
             drill == ClassroomDrill.ATTENDANCE && attId != null -> 2
             drill == ClassroomDrill.SCAN -> 3
             drill == ClassroomDrill.CODE && attId != null -> 4
+            drill == ClassroomDrill.CLASS_NOTE && classNoteTarget != null -> 8
             drill == ClassroomDrill.TIMETABLE -> 1
             drill == ClassroomDrill.COURSES -> 5
             drill == ClassroomDrill.MISTAKES -> 6
@@ -617,6 +624,16 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                 7 -> {
                     BackHandler { drill = ClassroomDrill.NONE }
                     StudyPlanScreen(onBack = { drill = ClassroomDrill.NONE })
+                }
+                8 -> {
+                    // 单节课堂纪要详情（通知「录音转写」点击进入）
+                    BackHandler { drill = ClassroomDrill.NONE; classNoteTarget = null }
+                    val nt = classNoteTarget ?: return@KewuSlideHost
+                    ClassNoteDetailScreen(
+                        courseId = nt.courseId,
+                        date = nt.date,
+                        onBack = { drill = ClassroomDrill.NONE; classNoteTarget = null },
+                    )
                 }
                 2 -> {
                     // 拦截系统返回手势，回到课堂主页，而不是让 Activity 直接 finish 退出 app。
@@ -753,6 +770,12 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             showNotif = false
             Notifications.markAllRead()
             notifUnread = 0
+        }, onOpenClassNote = { target ->
+            showNotif = false
+            Notifications.markAllRead()
+            notifUnread = 0
+            classNoteTarget = target
+            drill = ClassroomDrill.CLASS_NOTE
         })
     }
 }

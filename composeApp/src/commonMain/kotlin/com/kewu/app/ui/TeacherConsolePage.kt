@@ -123,6 +123,8 @@ private sealed class ConsoleDrill {
     data object TODAY : ConsoleDrill()
     /** 课前准备：开课前询问是否上传本节资料（2026-10-26），之后才发起签到。 */
     data class PRECLASS(val course: CourseInfo, val durationMinutes: Int) : ConsoleDrill()
+    /** 单节课堂纪要详情（通知「录音转写」点击进入，复用学生端共享页）。 */
+    data class CLASS_NOTE(val courseId: String, val date: String) : ConsoleDrill()
 }
 
 /** 返回上一级（与 BackHandler 同口径）。 */
@@ -310,6 +312,14 @@ fun TeacherConsolePage(
                     },
                     onToast = { scope.launch { snackbar.toast(it) } },
                 )
+                is ConsoleDrill.CLASS_NOTE -> {
+                    BackHandler { drill = ConsoleDrill.NONE }
+                    ClassNoteDetailScreen(
+                        courseId = d.courseId,
+                        date = d.date,
+                        onBack = { drill = ConsoleDrill.NONE },
+                    )
+                }
                 is ConsoleDrill.DETAIL -> AttendanceDetailScreen(
                     attendanceId = d.attendanceId,
                     studentId = KewuApi.username ?: "",
@@ -321,6 +331,10 @@ fun TeacherConsolePage(
         NotificationSheet(show = showNotif, onDismiss = {
             showNotif = false
             notifUnread = Notifications.unreadCount()
+        }, onOpenClassNote = { target ->
+            showNotif = false
+            notifUnread = Notifications.unreadCount()
+            drill = ConsoleDrill.CLASS_NOTE(target.courseId, target.date)
         })
     }
 }

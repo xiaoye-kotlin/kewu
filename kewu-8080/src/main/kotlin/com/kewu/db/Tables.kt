@@ -215,6 +215,7 @@ object ClassRecordings : Table("class_recordings") {
     val endReason = varchar("end_reason", 16)        // MANUAL / AUTO_90MIN
     val decidedAt = varchar("decided_at", 32)
     val transcriptStatus = varchar("transcript_status", 16) // PENDING_ASR / NO_AUDIO / DONE / FAILED
+    val durationSec = integer("duration_sec").nullable() // 主录音时长（2026-11-01；老数据为空，前端可用 OBS HEAD 兜底）
     val transcript = text("transcript").nullable()
     val summary = text("summary").nullable()      // AI 课堂纪要（转写后由 MaaS 生成，小悟辅导学生时引用）
     val asrError = text("asr_error").nullable()   // 转写失败原因

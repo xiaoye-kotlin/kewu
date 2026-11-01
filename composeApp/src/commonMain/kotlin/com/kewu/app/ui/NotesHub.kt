@@ -25,11 +25,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.AssignmentInfo
 import com.kewu.app.ClassNoteInfo
+import com.kewu.app.ClassNoteTarget
+import com.kewu.app.ClassRecordingInfo
 import com.kewu.app.CourseInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
@@ -72,6 +75,7 @@ fun CourseDetailScreen(
     courseId: String,
     onBack: () -> Unit,
     onOpenAssignment: (String) -> Unit,
+    onOpenClassNote: (ClassNoteTarget) -> Unit = {},
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
@@ -82,6 +86,8 @@ fun CourseDetailScreen(
     var noteCache by remember { mutableStateOf<String?>(null) }
     var notes by remember { mutableStateOf<List<ClassNoteInfo>?>(null) }
     var assignments by remember { mutableStateOf<List<AssignmentInfo>?>(null) }
+    // 按节课的真实课堂会话（class-recordings，2026-10-31；null = 加载失败，空 = 还没有）
+    var recordings by remember { mutableStateOf<List<ClassRecordingInfo>?>(null) }
     var loading by remember { mutableStateOf(true) }
     var expandedNoteId by remember { mutableStateOf<String?>(null) }
     var expandedContent by remember { mutableStateOf<ClassNoteInfo?>(null) }
@@ -94,6 +100,8 @@ fun CourseDetailScreen(
             assignments = KewuApi.getAssignments(courseId)
             loading = false
         }
+        // 按节课纪要走 8080 的 class-recordings，单独拉、不阻塞主体；老后端没有这个接口 → null → 不显示该段
+        scope.launch { recordings = KewuApi.getClassRecordings(courseId) }
         // 速记缓存走 8081（另一台服务），单独拉、不阻塞主体加载；404 / 失败 → null → 不显示
         scope.launch { noteCache = KewuApi.getNoteCache(courseId)?.takeIf { it.isNotBlank() } }
     }
@@ -141,6 +149,19 @@ fun CourseDetailScreen(
                     HubSectionLabel("课堂速记（实时缓存）")
                     NoteCacheCard(text)
                     Spacer(Modifier.height(14.dp))
+                }
+
+                // 按节课的 AI 课堂纪要（class-recordings 真实课堂会话；老后端没接口时整段不出现）
+                recordings?.let { list ->
+                    if (list.isNotEmpty()) {
+                        HubSectionLabel("AI 课堂纪要（按节课）")
+                        list.sortedByDescending { it.decidedAt }.forEach { rec ->
+                            ClassRecordingRow(rec) {
+                                onOpenClassNote(ClassNoteTarget(courseId, rec.date))
+                            }
+                        }
+                        Spacer(Modifier.height(14.dp))
+                    }
                 }
 
                 // 课堂纪要
@@ -272,6 +293,37 @@ private fun NoteRow(
                     )
                 }
             }
+        }
+    }
+}
+
+/** 按节课纪要行：日期 + 转写状态 + 生成时间，点击进入单节详情 [ClassNoteDetailScreen]。 */
+@Composable
+private fun ClassRecordingRow(
+    rec: ClassRecordingInfo,
+    onClick: () -> Unit,
+) {
+    val cs = COUITheme.colorScheme
+    val (statusLabel, statusColor) = when (rec.transcriptStatus) {
+        "DONE" -> "纪要已生成" to KewuGreen
+        "PENDING_ASR", "TRANSCRIBING" -> "转写中" to cs.primary
+        "FAILED" -> "转写失败" to Color(0xFFFF9500)
+        "NO_AUDIO" -> "无可用录音" to cs.onSurfaceSecondary
+        "EMPTY" -> "录音为空" to cs.onSurfaceSecondary
+        else -> "状态未知" to cs.onSurfaceSecondary
+    }
+    RowCard(onClick = { haptic(HapticKind.Tick); onClick() }) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text(rec.date, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    "生成于 ${rec.decidedAt.take(16).replace("T", " ")}",
+                    color = cs.onSurfaceSecondary, fontSize = 12.5.sp, maxLines = 1,
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            KewuTag(statusLabel, statusColor.copy(alpha = 0.16f), statusColor)
         }
     }
 }

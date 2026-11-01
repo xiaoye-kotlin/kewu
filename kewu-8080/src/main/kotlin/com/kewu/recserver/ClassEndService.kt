@@ -1,6 +1,8 @@
 package com.kewu.recserver
 
 import com.kewu.db.ClassRecordings
+import com.kewu.db.Classes
+import com.kewu.db.Courses
 import com.kewu.recserver.model.RecordingMeta
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -50,6 +52,9 @@ class ClassEndService(private val services: RecServices) {
         val endReason: String = "",
         val decidedAt: String = "",
         val transcriptStatus: String = "",
+        val durationSec: Int? = null,
+        val teacherId: String? = null,
+        val teacherName: String? = null,
         val transcript: String? = null,
         val summary: String? = null,
         val asrError: String? = null
@@ -65,6 +70,7 @@ class ClassEndService(private val services: RecServices) {
         val scored = metas.map { it to services.scorer.score(it).score }
         val fused = services.fusion.fuse(sessionId, scored)
         val primary = metas.firstOrNull { it.recordingId == fused.primaryRecordingId }
+        val duration = primary?.durationSec?.takeIf { it > 0 }?.toInt()
         val now = LocalDateTime.now().format(fmt)
         transaction {
             val old = ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.firstOrNull()
@@ -80,6 +86,7 @@ class ClassEndService(private val services: RecServices) {
                     it[candidateCount] = metas.size
                     it[endReason] = reason
                     it[decidedAt] = now
+                    it[ClassRecordings.durationSec] = duration
                     if (!keepAsr) it[transcriptStatus] = if (primary == null) "NO_AUDIO" else "PENDING_ASR"
                 }
             } else {
@@ -92,6 +99,7 @@ class ClassEndService(private val services: RecServices) {
                     it[candidateCount] = metas.size
                     it[endReason] = reason
                     it[decidedAt] = now
+                    it[ClassRecordings.durationSec] = duration
                     it[transcriptStatus] = if (primary == null) "NO_AUDIO" else "PENDING_ASR"
                 }
             }
@@ -141,6 +149,12 @@ class ClassEndService(private val services: RecServices) {
     }
 
     fun list(courseId: String): List<ClassRecordingView> = transaction {
+        // 教师信息取课程的教学班关系；不用 ClassStates（它只保存“当前课”，会随下一次上课覆盖）。
+        val teachingClass = Classes.selectAll().where { Classes.courseId eq courseId }.firstOrNull()
+        val courseTeacher = Courses.selectAll().where { Courses.id eq courseId }.firstOrNull()?.get(Courses.teacher).orEmpty()
+        val teacherId = teachingClass?.get(Classes.teacherId)
+        val teacherName = teachingClass?.get(Classes.teacherName)?.ifBlank { null } ?: courseTeacher.ifBlank { null }
+
         ClassRecordings.selectAll().where { ClassRecordings.courseId eq courseId }
             .orderBy(ClassRecordings.decidedAt, SortOrder.DESC)
             .map {
@@ -149,7 +163,9 @@ class ClassEndService(private val services: RecServices) {
                     primaryRecordingId = it[ClassRecordings.primaryRecordingId], primaryUrl = it[ClassRecordings.primaryUrl],
                     strategy = it[ClassRecordings.strategy], candidateCount = it[ClassRecordings.candidateCount],
                     endReason = it[ClassRecordings.endReason], decidedAt = it[ClassRecordings.decidedAt],
-                    transcriptStatus = it[ClassRecordings.transcriptStatus], transcript = it[ClassRecordings.transcript],
+                    transcriptStatus = it[ClassRecordings.transcriptStatus], durationSec = it[ClassRecordings.durationSec],
+                    teacherId = teacherId, teacherName = teacherName,
+                    transcript = it[ClassRecordings.transcript],
                     summary = it[ClassRecordings.summary], asrError = it[ClassRecordings.asrError]
                 )
             }

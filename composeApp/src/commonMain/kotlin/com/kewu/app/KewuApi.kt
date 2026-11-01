@@ -4,6 +4,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.request.get
+import io.ktor.client.request.head
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
@@ -62,6 +63,34 @@ data class ClassNoteInfo(
     val id: String, val courseId: String, val title: String, val content: String,
     val author: String, val createdAt: String,
 )
+
+/** 下课后由多端录音择优 + SIS 转写 + AI 整理出的单节课堂记录。 */
+data class ClassRecordingInfo(
+    val sessionId: String, val courseId: String,
+    val primaryRecordingId: String?, val primaryUrl: String?,
+    val strategy: String, val candidateCount: Int, val endReason: String, val decidedAt: String,
+    val transcriptStatus: String,
+    /** 主录音时长；老后端 / 老记录可为 null，由详情页 OBS HEAD 懒加载兜底。 */
+    val durationSec: Int? = null,
+    val teacherId: String? = null, val teacherName: String? = null,
+    val transcript: String = "", val summary: String = "", val asrError: String? = null,
+) {
+    /** sessionId 约定 `courseId-yyyyMMdd`；日期独立出来用于列表 / 通知定位。 */
+    val date: String
+        get() = sessionId.substringAfterLast('-').let { d ->
+            if (d.length == 8) "${d.take(4)}-${d.substring(4, 6)}-${d.takeLast(2)}" else d
+        }
+}
+
+/** 教师联系方式（受登录和课程关系保护；未公开字段为 null）。 */
+data class TeacherContactInfo(
+    val teacherId: String? = null, val teacherName: String? = null,
+    val phone: String? = null, val email: String? = null,
+)
+
+/** 课堂纪要通知跳转目标。 */
+data class ClassNoteTarget(val courseId: String, val date: String)
+
 data class UserMe(
     val user: UserInfo?, val courses: List<CourseInfo>,
     /** 学生加入的教学班（2026-10-26：学生「班级」以此为准，不可手改）。 */
@@ -899,23 +928,64 @@ object KewuApi {
     catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
+    /** 某门课的全部课堂录音会话（失败 null；真空列表 emptyList）。新增字段全部兼容旧后端。 */
+    suspend fun getClassRecordings(courseId: String): List<ClassRecordingInfo>? = try {
+        val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/class-recordings")
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
+            ClassRecordingInfo(
+                sessionId = o["sessionId"].str(), courseId = o["courseId"].str(),
+                primaryRecordingId = o["primaryRecordingId"].strOrNull(),
+                primaryUrl = o["primaryUrl"].strOrNull(),
+                strategy = o["strategy"].str(), candidateCount = o["candidateCount"].int(),
+                endReason = o["endReason"].str(), decidedAt = o["decidedAt"].str(),
+                transcriptStatus = o["transcriptStatus"].str(),
+                durationSec = o["durationSec"].strOrNull()?.toIntOrNull(),
+                teacherId = o["teacherId"].strOrNull(), teacherName = o["teacherName"].strOrNull(),
+                transcript = o["transcript"].str(), summary = o["summary"].str(),
+                asrError = o["asrError"].strOrNull(),
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 任课教师联系方式（需登录且与课程相关；接口未上线 / 403 / 404 / 网络失败均返回 null，UI 显示未公开或暂不可获取）。 */
+    suspend fun getTeacherContact(courseId: String): TeacherContactInfo? = try {
+        val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/teacher-contact", auth = true)
+        val d = el.dataObjectOrNull("data") ?: return null
+        TeacherContactInfo(
+            teacherId = d["teacherId"].strOrNull(), teacherName = d["teacherName"].strOrNull(),
+            phone = d["phone"].strOrNull(), email = d["email"].strOrNull(),
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 老后端没有 durationSec 时，对 OBS 主录音 HEAD 一次读取对象元数据（仅单节详情页调用）。 */
+    suspend fun probeObsDurationSec(url: String): Int? = try {
+        val resp = client.head(url) { timeout { requestTimeoutMillis = 8_000; socketTimeoutMillis = 8_000 } }
+        resp.headers["x-obs-meta-durationsec"]?.toDoubleOrNull()?.toInt()
+            ?: resp.headers["X-OBS-Meta-DurationSec"]?.toDoubleOrNull()?.toInt()
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 从课堂纪要通知 ID 提取跳转目标；格式 `notes-{courseId}-{yyyy-MM-dd}`，courseId 允许含连字符。 */
+    fun classNoteTargetFromNotificationId(id: String): ClassNoteTarget? {
+        val match = Regex("^notes-(.+)-(\\d{4}-\\d{2}-\\d{2})$").matchEntire(id) ?: return null
+        val courseId = match.groupValues[1]
+        val date = match.groupValues[2]
+        return if (courseId.isNotBlank()) ClassNoteTarget(courseId, date) else null
+    }
+
     /**
      * 某课最近几节课的 AI 课堂纪要（2026-10-26：下课后服务器用华为云 SIS 把最佳录音转成文字，再由大模型整理成纪要）。
      * 返回 (日期 yyyy-MM-dd, 纪要) 列表，最新在前；没有转写完成的课则为空。
      */
-    suspend fun getClassNotes(courseId: String, limit: Int = 3): List<Pair<String, String>> = try {
-        val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/class-recordings")
-        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }
-            .filter { it["transcriptStatus"].str() == "DONE" }
-            .mapNotNull { o ->
-                val notes = o["summary"].str().ifBlank { o["transcript"].str().take(1500) }
-                if (notes.isBlank()) null
-                else o["sessionId"].str().substringAfterLast('-').let { d ->
-                    if (d.length == 8) "${d.take(4)}-${d.substring(4, 6)}-${d.takeLast(2)}" else d
-                } to notes
+    suspend fun getClassNotes(courseId: String, limit: Int = 3): List<Pair<String, String>> =
+        getClassRecordings(courseId).orEmpty()
+            .filter { it.transcriptStatus == "DONE" }
+            .mapNotNull { r ->
+                val notes = r.summary.ifBlank { r.transcript.take(1500) }
+                if (notes.isBlank()) null else r.date to notes
             }.take(limit)
-    } catch (e: CancellationException) { throw e }
-    catch (_: Exception) { emptyList() }
 
     /** 某课的课前资料（最新在前）：(标题, 说明, 附件名列表)。失败返回空。 */
     suspend fun getCourseMaterials(courseId: String): List<Triple<String, String, List<String>>> = try {

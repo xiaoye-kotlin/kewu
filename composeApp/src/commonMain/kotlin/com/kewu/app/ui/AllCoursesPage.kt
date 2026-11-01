@@ -26,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.kewu.app.BackHandler
+import com.kewu.app.ClassNoteTarget
 import com.kewu.app.CourseInfo
 import com.kewu.app.CourseRepo
 import com.kewu.app.HapticKind
@@ -47,9 +48,12 @@ import kotlinx.coroutines.launch
 fun AllCoursesPage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
     var openCourse by remember { mutableStateOf<String?>(null) }
     var openAssignment by remember { mutableStateOf<String?>(null) }
+    // 单节课堂纪要详情（课程详情里的按节课纪要列表点击进入）
+    var openNote by remember { mutableStateOf<ClassNoteTarget?>(null) }
     LaunchedEffect(Unit) { onNavHide(false) }
 
     val depth = when {
+        openNote != null -> 3
         openAssignment != null -> 2
         openCourse != null -> 1
         else -> 0
@@ -69,6 +73,15 @@ fun AllCoursesPage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
         onSwipeCommit = { openCourse = null },
     ) { d ->
         when (d) {
+            3 -> {
+                val nt = openNote ?: return@KewuSlideHost
+                BackHandler { openNote = null }
+                ClassNoteDetailScreen(
+                    courseId = nt.courseId,
+                    date = nt.date,
+                    onBack = { openNote = null },
+                )
+            }
             2 -> {
                 val aid = openAssignment ?: last[1] ?: return@KewuSlideHost
                 BackHandler { openAssignment = null }
@@ -81,6 +94,7 @@ fun AllCoursesPage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     courseId = cid,
                     onBack = { openCourse = null },
                     onOpenAssignment = { openAssignment = it },
+                    onOpenClassNote = { openNote = it },
                 )
             }
             else -> CourseListContent(onBack = onBack, onOpen = { openCourse = it.id })

@@ -34,7 +34,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.ClassNoteTarget
 import com.kewu.app.HapticKind
+import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.Notifications
@@ -124,6 +126,7 @@ private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBell(color: Col
 fun NotificationSheet(
     show: Boolean,
     onDismiss: () -> Unit,
+    onOpenClassNote: ((ClassNoteTarget) -> Unit)? = null,
 ) {
     val cs = COUITheme.colorScheme
     // 只在打开时读一次（旧版每次重组都读 kv + 解析 JSON，弹窗没打开也在读）
@@ -145,7 +148,7 @@ fun NotificationSheet(
         } else {
             Column(Modifier.verticalScroll(rememberScrollState())) {
                 list.forEach { n ->
-                    NotificationRow(n)
+                    NotificationRow(n, onOpenClassNote)
                     Spacer(Modifier.height(8.dp))
                 }
                 Spacer(Modifier.height(8.dp))
@@ -155,14 +158,24 @@ fun NotificationSheet(
 }
 
 @Composable
-private fun NotificationRow(n: Notifications.Info) {
+private fun NotificationRow(
+    n: Notifications.Info,
+    onOpenClassNote: ((ClassNoteTarget) -> Unit)?,
+) {
     val cs = COUITheme.colorScheme
     val (label, tint) = typeMeta(n.type)
+    // 录音转写通知可下钻到单节课堂纪要详情
+    val noteTarget = remember(n.id) {
+        if (n.type == Notifications.TYPE_RECORDING_DONE && onOpenClassNote != null)
+            KewuApi.classNoteTargetFromNotificationId(n.id)
+        else null
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 16.dp,
         insideMargin = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         colors = kewuCardColors(),
+        onClick = noteTarget?.let { t -> { haptic(HapticKind.Tick); onOpenClassNote?.invoke(t) } },
     ) {
         Row(verticalAlignment = Alignment.Top) {
             // 未读小圆点
