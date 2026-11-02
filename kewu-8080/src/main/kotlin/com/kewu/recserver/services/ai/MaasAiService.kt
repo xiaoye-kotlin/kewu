@@ -3,33 +3,37 @@ package com.kewu.recserver.services.ai
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import org.slf4j.LoggerFactory
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 
-// 真实 AI 实现：对接华为云 ModelArts MaaS 的 V2 标准 chat/completions 接口。
-// 配置全部走环境变量（密钥不进代码、不进仓库）：
-//   MAAS_API_KEY  必填，MaaS 控制台拿到的 API Key
-//   MAAS_API_URL  可选，默认 https://api.modelarts-maas.com/v2/chat/completions
-//   MAAS_MODEL    可选，默认 openpangu-2.0-flash
-// 鉴权：Authorization: Bearer <MAAS_API_KEY>，请求体 OpenAI 兼容（model + messages[]）
+// 统一 AI 实现：DeepSeek / OpenAI 兼容的 chat/completions。
+// 配置只允许从环境变量读取（密钥不进代码、不进仓库）：
+//   MAAS_API_URL     必填，chat/completions 完整地址
+//   MAAS_API_KEY     必填，Bearer Token
+//   MAAS_MODEL_NAME  必填，例如 DeepSeek-V4.1-Flash-1017
+// 请求体统一为 OpenAI 兼容结构：{"model":"...","messages":[...]}。
 class MaasAiService : AiService {
 
-    private val apiKey: String = System.getenv("MAAS_API_KEY")?.takeIf { it.isNotBlank() } ?: System.getenv("API_KEY") ?: ""
-    private val apiUrl: String =
-        System.getenv("MAAS_API_URL").takeIf { !it.isNullOrBlank() }
-            ?: System.getenv("API_URL").takeIf { !it.isNullOrBlank() }
-            ?: "https://api.modelarts-maas.com/v2/chat/completions"
-    private val model: String =
-        System.getenv("MAAS_MODEL").takeIf { !it.isNullOrBlank() }
-            ?: System.getenv("MODEL_NAME").takeIf { !it.isNullOrBlank() } ?: "openpangu-2.0-flash"
+    private val log = LoggerFactory.getLogger(MaasAiService::class.java)
+
+    private val apiUrl: String = env("MAAS_API_URL")
+    private val apiKey: String = env("MAAS_API_KEY")
+    private val modelName: String = env("MAAS_MODEL_NAME")
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(20))
@@ -50,7 +54,7 @@ class MaasAiService : AiService {
 
     /**
      * 课堂纪要（2026-10-26，SIS 转写之后调用）：给小悟辅导学生用的结构化纪要。
-     * 转写稿可能很长（45 分钟约 1 万字），截取前 12000 字。
+     * 转写稿可能很长（45 分钟约 1 万字），截取前 20000 字。
      */
     suspend fun classNotes(courseName: String, transcript: String): String {
         if (transcript.isBlank()) return ""
@@ -104,7 +108,51 @@ class MaasAiService : AiService {
     }
 
     /**
-     * 流式对话（2026-10-26，App 打字机效果）：以 MaaS 的 `stream=true` SSE 拉取，只把最终回答的
+     * 多模态预留（2026-11-02）：发送图片 Base64 + 文本提示词。
+     * DeepSeek/OpenAI 兼容格式里，user.content 是数组：[text, image_url]。
+     * 后续“拍照搜题”可直接调用这里；错误不会抛出，统一返回友好中文提示。
+     */
+    suspend fun analyzeImageBase64(
+        base64: String,
+        prompt: String,
+        imageFormat: String = "jpeg",
+        maxTokens: Int = 2048
+    ): String {
+        if (base64.isBlank()) return "（图片内容为空）"
+        if (prompt.isBlank()) return "（问题为空）"
+        missingConfig()?.let { return it }
+
+        val format = imageFormat.trim().removePrefix("image/").lowercase()
+        if (format !in setOf("jpeg", "jpg", "png", "webp", "gif")) {
+            return "（不支持的图片格式：$imageFormat）"
+        }
+
+        val body = buildJsonObject {
+            put("model", modelName)
+            put("max_tokens", maxTokens)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "text")
+                            put("text", prompt)
+                        })
+                        add(buildJsonObject {
+                            put("type", "image_url")
+                            put("image_url", buildJsonObject {
+                                put("url", "data:image/$format;base64,${base64.trim()}")
+                            })
+                        })
+                    })
+                })
+            })
+        }.toString()
+        return postChat(body, timeoutSeconds = 120)
+    }
+
+    /**
+     * 流式对话（2026-10-26，App 打字机效果）：以 `stream=true` SSE 拉取，只把最终回答的
      * `delta.content` 逐段回调给 [onDelta]（思维链 reasoning_content 不外发）。成功结束返回 null，失败返回原因。
      */
     suspend fun stream(
@@ -113,21 +161,23 @@ class MaasAiService : AiService {
         thinking: Boolean,
         onDelta: suspend (String) -> Unit,
     ): String? {
-        if (apiKey.isBlank()) return "AI 未配置"
-        val body = kotlinx.serialization.json.buildJsonObject {
-            put("model", kotlinx.serialization.json.JsonPrimitive(model))
-            put("max_tokens", kotlinx.serialization.json.JsonPrimitive(maxTokens))
-            put("stream", kotlinx.serialization.json.JsonPrimitive(true))
-            // 关闭思维链：openpangu 默认先想 5–10 秒才出第一个字（2026-10-26 实测 thinking.type=disabled 首字 ~1s）
-            if (!thinking) put("thinking", kotlinx.serialization.json.buildJsonObject {
-                put("type", kotlinx.serialization.json.JsonPrimitive("disabled"))
+        missingConfig()?.let { return it }
+        val body = buildJsonObject {
+            put("model", modelName)
+            put("max_tokens", maxTokens)
+            put("stream", true)
+            // 关闭思维链：部分模型默认先想几秒才出第一个字；DeepSeek 不支持的参数会自动忽略
+            if (!thinking) put("thinking", buildJsonObject {
+                put("type", "disabled")
             })
-            put("messages", kotlinx.serialization.json.JsonArray(messages.map { (role, content) ->
-                kotlinx.serialization.json.buildJsonObject {
-                    put("role", kotlinx.serialization.json.JsonPrimitive(role))
-                    put("content", kotlinx.serialization.json.JsonPrimitive(content))
+            put("messages", buildJsonArray {
+                messages.forEach { (role, content) ->
+                    add(buildJsonObject {
+                        put("role", role)
+                        put("content", content)
+                    })
                 }
-            }))
+            })
         }.toString()
         return withContext(Dispatchers.IO) {
             try {
@@ -141,7 +191,8 @@ class MaasAiService : AiService {
                     .build()
                 val resp = client.send(request, HttpResponse.BodyHandlers.ofLines())
                 if (resp.statusCode() !in 200..299) {
-                    return@withContext "HTTP ${resp.statusCode()}"
+                    log.warn("MaasAi: 流式调用失败 HTTP ${resp.statusCode()}")
+                    return@withContext "AI 调用失败（HTTP ${resp.statusCode()}）"
                 }
                 val it = resp.body().iterator()
                 while (it.hasNext()) {
@@ -152,50 +203,60 @@ class MaasAiService : AiService {
                     val delta = try {
                         Json.parseToJsonElement(data).jsonObject["choices"]?.jsonArray?.firstOrNull()
                             ?.jsonObject?.get("delta")?.jsonObject?.get("content")
-                            ?.let { c -> if (c is kotlinx.serialization.json.JsonNull) null else c.jsonPrimitive.content }
+                            ?.let { c -> if (c is JsonNull) null else c.jsonPrimitive.content }
                     } catch (_: Throwable) { null }
                     if (!delta.isNullOrEmpty()) onDelta(delta)
                 }
                 null
             } catch (t: Throwable) {
+                log.warn("MaasAi: 流式调用异常：${t.message ?: t.javaClass.simpleName}")
                 t.message ?: t.javaClass.simpleName
             }
         }
     }
 
     private suspend fun chat(system: String, user: String, maxTokens: Int): String {
-        if (apiKey.isBlank()) return "（AI 未配置：缺少环境变量 MAAS_API_KEY）"
-        val body = Json.encodeToString(
-            MaasRequest.serializer(),
-            MaasRequest(
-                model = model,
-                messages = listOf(
-                    MaasMessage("system", system),
-                    MaasMessage("user", user)
-                ),
-                max_tokens = maxTokens
-            )
-        )
+        missingConfig()?.let { return it }
+        val body = buildJsonObject {
+            put("model", modelName)
+            put("max_tokens", maxTokens)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "system")
+                    put("content", system)
+                })
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", user)
+                })
+            })
+        }.toString()
+        return postChat(body, timeoutSeconds = if (maxTokens > 1024) 150 else 60)
+    }
+
+    // 非流式 chat/completions。所有网络/解析异常都在这里兜住，只返回友好提示，绝不向外抛。
+    private suspend fun postChat(body: String, timeoutSeconds: Long): String {
         return withContext(Dispatchers.IO) {
             var lastErr: String? = null
-            // 最多试两次：华为云 MaaS 偶有 connect timed out 的瞬时抖动（实测过一次，
-            // 1 分钟后同样请求又全部成功），重试一次就能救回来，比直接报错体面得多
+            // 最多试两次：模型网关偶有 connect timed out 的瞬时抖动，重试一次比直接报错体面得多
             repeat(2) { attempt ->
                 try {
                     val request = HttpRequest.newBuilder()
                         .uri(URI.create(apiUrl))
-                        .timeout(Duration.ofSeconds(if (maxTokens > 1024) 150 else 60))
+                        .timeout(Duration.ofSeconds(timeoutSeconds))
                         .header("Content-Type", "application/json")
                         .header("Authorization", "Bearer $apiKey")
                         .POST(HttpRequest.BodyPublishers.ofString(body))
                         .build()
                     val response = client.send(request, HttpResponse.BodyHandlers.ofString())
                     if (response.statusCode() !in 200..299) {
-                        return@withContext "（AI 调用失败：HTTP ${response.statusCode()} ${response.body().take(300)}）"
+                        log.warn("MaasAi: HTTP ${response.statusCode()} ${response.body().take(300)}")
+                        return@withContext "（AI 调用失败：HTTP ${response.statusCode()}）"
                     }
                     return@withContext extractContent(response.body())
                 } catch (t: Throwable) {
                     lastErr = t.message ?: t.javaClass.simpleName
+                    log.warn("MaasAi: 调用异常（第 ${attempt + 1} 次）：$lastErr")
                     if (attempt == 0) delay(1000)
                 }
             }
@@ -203,26 +264,48 @@ class MaasAiService : AiService {
         }
     }
 
-    // 从 V2 响应里取 choices[0].message.content（reasoning_content 那部分是思考链，不要）
+    // 从 OpenAI 兼容响应里取 choices[0].message.content（reasoning_content 是思考链，不外发）。
+    // 解析前先去 ```json ... ``` 围栏，避免模型多包一层 Markdown 时 Json.parseToJsonElement 崩溃。
     private fun extractContent(body: String): String {
         return try {
-            val root = Json.parseToJsonElement(body).jsonObject
+            val cleanedBody = stripMarkdownFences(body)
+            val root = Json.parseToJsonElement(cleanedBody).jsonObject
             val choices = root["choices"]?.jsonArray
             val message = choices?.firstOrNull()?.jsonObject?.get("message")?.jsonObject
             val content = message?.get("content")?.jsonPrimitive?.content
+                ?.let { stripMarkdownFences(it) }
             if (!content.isNullOrBlank()) content else "（AI 返回内容为空）"
         } catch (t: Throwable) {
-            "（AI 返回解析失败：${t.message ?: t.javaClass.simpleName}）"
+            log.warn("MaasAi: 返回解析失败：${t.message ?: t.javaClass.simpleName}")
+            "（AI 返回解析失败，请稍后再试）"
         }
     }
+
+    // 去掉模型偶尔包上的 ```json ... ``` / ``` ... ``` 围栏。只处理 JSON 需要的那段，不改正文内容。
+    private fun stripMarkdownFences(text: String): String {
+        var t = text.trim()
+        val fence = "```"
+        val start = t.indexOf(fence)
+        if (start < 0) return t
+        t = t.substring(start + fence.length).trimStart()
+        val newline = t.indexOf('\n')
+        if (newline > 0) {
+            val first = t.substring(0, newline).trim()
+            if (first.matches(Regex("[A-Za-z0-9_-]+"))) t = t.substring(newline + 1)
+        }
+        val end = t.lastIndexOf(fence)
+        if (end >= 0) t = t.substring(0, end)
+        return t.trim()
+    }
+
+    private fun env(name: String): String = System.getenv(name)?.trim().orEmpty()
+
+    private fun missingConfig(): String? {
+        val missing = buildList {
+            if (apiUrl.isBlank()) add("MAAS_API_URL")
+            if (apiKey.isBlank()) add("MAAS_API_KEY")
+            if (modelName.isBlank()) add("MAAS_MODEL_NAME")
+        }
+        return if (missing.isEmpty()) null else "（AI 未配置：缺少环境变量 ${missing.joinToString(" / ")}）"
+    }
 }
-
-@Serializable
-private data class MaasMessage(val role: String, val content: String)
-
-@Serializable
-private data class MaasRequest(
-    val model: String,
-    val messages: List<MaasMessage>,
-    val max_tokens: Int
-)

@@ -1,9 +1,9 @@
 package com.kewu.recserver.services.ai
 
-// AI 模块接口：把转写文本喂进去，拿回总结和问答。现在先留口子，还没接
+// AI 模块接口：把转写文本喂进去，拿回总结和问答。
 interface AiService {
     suspend fun summarize(transcript: String): String
-    // maxTokens：openpangu 的思考链也算在额度里，App 让它一次出多道题时要给足（原 8081 写死 768，多题必失败）
+    // maxTokens：模型的思考链也可能占用输出额度，App 让它一次出多道题时要给足（原 8081 写死 768，多题必失败）
     suspend fun answer(question: String, context: String, maxTokens: Int = 768): String
 }
 

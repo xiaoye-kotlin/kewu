@@ -17,19 +17,21 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 
-// 华为云 MaaS（盘古大模型）语义提取客户端。
+// 学情雷达 AI 语义提取客户端（DeepSeek / OpenAI 兼容 chat/completions）。
 // 只做一件事：把一段学生提问文本发过去，拿回模型生成的“原始文本”。
 // 解析(去 markdown 围栏、抽 JSON 数组)交给 RadarService，这里不关心业务形态。
+//
+// 配置严格只读环境变量，没配就空串（下面会判定为“未配置”直接降级）：
+//   MAAS_API_URL / MAAS_API_KEY / MAAS_MODEL_NAME
 //
 // 容错铁律：4xx/5xx 会抛 ResponseException（必须读 e.response 才能拿到错误体），
 // 超时/连不上/任何异常都返回 null —— 上层据此降级返回空数组，绝不抛 500。
 class HuaweiMaaSClient {
     private val log = LoggerFactory.getLogger(HuaweiMaaSClient::class.java)
 
-    // 配置全走环境变量，没配就空串（下面会判定为“未配置”直接降级）
-    private val apiUrl = System.getenv("API_URL") ?: ""
-    private val apiKey = System.getenv("API_KEY") ?: ""
-    private val modelName = System.getenv("MODEL_NAME") ?: ""
+    private val apiUrl = System.getenv("MAAS_API_URL")?.trim().orEmpty()
+    private val apiKey = System.getenv("MAAS_API_KEY")?.trim().orEmpty()
+    private val modelName = System.getenv("MAAS_MODEL_NAME")?.trim().orEmpty()
 
     private val client = HttpClient(CIO) {
         install(HttpTimeout) {
@@ -42,8 +44,8 @@ class HuaweiMaaSClient {
     // 把 50 条问题拼成提示词，调模型，返回模型“思考出来的文本”。
     // 返回 null = 本次调用失败/未配置，上层当降级处理。
     suspend fun extractKeywords(questionsText: String): String? {
-        if (apiUrl.isBlank() || apiKey.isBlank()) {
-            log.warn("HuaweiMaaS: API_URL/API_KEY 未配置，跳过 AI 调用（降级返回空）")
+        if (apiUrl.isBlank() || apiKey.isBlank() || modelName.isBlank()) {
+            log.warn("HuaweiMaaS: MAAS_API_URL/MAAS_API_KEY/MAAS_MODEL_NAME 未配置，跳过 AI 调用（降级返回空）")
             return null
         }
 
@@ -86,7 +88,9 @@ class HuaweiMaaSClient {
     // 华为云 MaaS / OpenAI 兼容网关的返回形态不一，这里尽量兼容几种常见结构，
     // 最终抠出模型生成的“那段文本”（里面应当就是我们想要的 JSON 数组）。
     private fun extractTextFromResponse(raw: String): String? {
-        val trimmed = raw.trim()
+        // DeepSeek 兼容接口理论上返回标准信封，但模型文本可能再包一层 ```json ... ```；
+        // 解析前先清 Markdown 围栏，避免 Json.parseToJsonElement 直接崩。
+        val trimmed = stripMarkdownFences(raw)
         if (trimmed.isEmpty()) return null
         // 只有“纯 JSON 数组”才可能是模型直接吐给我们的结构，可以原样返回。
         // 千万不要把 startsWith("{") 也加进来：MaaS 的完整响应信封本身就以 { 开头，
@@ -129,6 +133,23 @@ class HuaweiMaaSClient {
                 else -> trimmed
             }
         }.getOrNull() ?: trimmed
+    }
+
+    // 去掉 ```json ... ``` / ``` ... ``` 围栏，只保留围栏里的内容；没有围栏则原样返回。
+    private fun stripMarkdownFences(text: String): String {
+        var t = text.trim()
+        val fence = "```"
+        val start = t.indexOf(fence)
+        if (start < 0) return t
+        t = t.substring(start + fence.length).trimStart()
+        val newline = t.indexOf('\n')
+        if (newline > 0) {
+            val first = t.substring(0, newline).trim()
+            if (first.matches(Regex("[A-Za-z0-9_-]+"))) t = t.substring(newline + 1)
+        }
+        val end = t.lastIndexOf(fence)
+        if (end >= 0) t = t.substring(0, end)
+        return t.trim()
     }
 
     private fun buildPrompt(questionsText: String): String = """
