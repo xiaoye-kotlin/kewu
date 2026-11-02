@@ -168,11 +168,15 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                 .background(cs.surface),
         )
         // ★ 下钻转场：Telegram 式推入 / 返回（KewuSlideHost Push）。作答页不开右滑返回（一滑丢答案）。
+        // ★ 2026-11-02：KewuSlideHost 内部用 `to == null` 表示「没有目标页」，目标态本身不能是 null ——
+        //   旧版直接传 String?，返回（置 null）时 to 仍为 null → 动画直接 return，页面卡在作业详情：
+        //   提交成功后 onBack 无效、左上角返回 / 系统返回键都退不出去。改用非空 key（"" = 列表）。
         KewuSlideHost(
-            targetState = assignmentId,
+            targetState = assignmentId ?: "",
             modifier = Modifier.fillMaxSize(),
-            isForward = { _, to -> to != null },
-        ) { drillId ->
+            isForward = { _, to -> to.isNotEmpty() },
+        ) { key ->
+            val drillId = key.ifEmpty { null }
             if (drillId == null) {
                 TaskListContent(
                     tasks = tasks,
@@ -246,9 +250,6 @@ private fun TaskListContent(
                     Text(
                         "任务", color = cs.onSurface, fontSize = 20.sp,
                         fontWeight = FontWeight.SemiBold, maxLines = 1,
-                    )
-                    Text(
-                        "作业 · 待办 · 提醒", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1,
                     )
                 }
             }
@@ -460,4 +461,13 @@ private fun nowCnString(): String {
     val minOfDay = (ms / 60_000L) % (24 * 60)
     fun p2(v: Long) = if (v < 10) "0$v" else "$v"
     return todayCn() + " " + p2(minOfDay / 60) + ":" + p2(minOfDay % 60)
+}
+
+/**
+ * 底部「任务」tab 的红点数（2026-11-02）：未交（含被打回）且没过截止的作业数。
+ * 已截止交不了的不算，否则红点永远消不掉；新作业到达时 AssignmentRepo 刷新后自动 +1。
+ */
+internal fun pendingTaskCount(items: List<com.kewu.app.AssignmentRepo.Item>?): Int {
+    val now = deadlineSortKey(nowCnString()) ?: ""
+    return items.orEmpty().count { it.pending && (deadlineSortKey(it.assignment.deadline)?.let { k -> k >= now } ?: true) }
 }

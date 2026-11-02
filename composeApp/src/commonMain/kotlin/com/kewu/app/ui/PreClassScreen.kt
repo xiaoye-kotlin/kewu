@@ -157,7 +157,7 @@ fun PreClassScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "小悟会把资料和课堂录音放在一起分析：哪些知识点讲透了、哪些学生可能没跟上，课后据此给学生个性化指导。可跳过，之后不影响签到。",
+                        "可跳过，不影响签到",
                         color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 19.sp,
                     )
                 }

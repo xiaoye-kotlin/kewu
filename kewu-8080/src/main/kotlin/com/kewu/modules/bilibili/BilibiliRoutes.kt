@@ -50,9 +50,11 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
             call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(1, "bvid 必填（传 B站视频号，如 BV1xx411c7mD）"))
             return@post
         }
-        // 丢到后台协程执行整条流水线，接口立即返回 PROCESSING
-        scope.launch {
-            runCatching { service.generate(bvid) }.onFailure { e -> println("BILIBILI-ERROR: $e") }
+        // 丢到后台协程执行整条流水线，接口立即返回 PROCESSING；已在跑就不重复起（FAILED / 已完成都可重新生成）
+        if (service.tryStart(bvid)) {
+            scope.launch {
+                runCatching { service.generate(bvid) }.onFailure { e -> println("BILIBILI-ERROR: $e") }
+            }
         }
         call.respond(ApiResponse(0, "已开始生成，请稍后用 GET 接口轮询结果", mapOf("status" to "PROCESSING")))
     }

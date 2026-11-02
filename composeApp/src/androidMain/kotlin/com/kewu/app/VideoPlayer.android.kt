@@ -67,10 +67,31 @@ actual fun VideoPlayerView(
             playWhenReady = true
         }
     }
+    // 自绘控制条（VideoControls）：注册命令 + 每 250ms 同步进度
     androidx.compose.runtime.DisposableEffect(player) {
-        onDispose { player.release() }
+        VideoControls.onToggle = { if (player.isPlaying) player.pause() else { if (player.playbackState == Player.STATE_ENDED) player.seekTo(0); player.play() } }
+        VideoControls.onSeek = { player.seekTo(it) }
+        VideoControls.available = true
+        onDispose {
+            VideoControls.available = false
+            VideoControls.onToggle = null
+            VideoControls.onSeek = null
+            VideoControls.playing = false
+            VideoControls.positionMs = 0
+            VideoControls.durationMs = 0
+            player.release()
+        }
     }
-    // 全屏（2026-11-02 用户：视频没法放大）：控制条全屏键 → 横屏 + 隐藏系统栏；退出 / 离开播放层时恢复
+    androidx.compose.runtime.LaunchedEffect(player) {
+        while (true) {
+            VideoControls.playing = player.isPlaying || (player.playWhenReady && player.playbackState == Player.STATE_BUFFERING)
+            VideoControls.buffering = player.playbackState == Player.STATE_BUFFERING
+            VideoControls.durationMs = player.duration.takeIf { it > 0 } ?: 0L
+            VideoControls.positionMs = player.currentPosition.coerceAtLeast(0L)
+            kotlinx.coroutines.delay(250)
+        }
+    }
+    // 全屏（2026-11-02 用户：视频没法放大）：自绘控制条的全屏键 → 横屏 + 隐藏系统栏；退出 / 离开播放层时恢复
     val fullscreen = VideoFullscreen.on
     val activity = context as? android.app.Activity ?: platformActivity() as? android.app.Activity
     androidx.compose.runtime.LaunchedEffect(fullscreen) { activity?.let { applyFullscreen(it, fullscreen) } }
@@ -83,14 +104,13 @@ actual fun VideoPlayerView(
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
-                useController = true
-                setFullscreenButtonClickListener { VideoFullscreen.on = it }
+                // 控制条由公共层自绘（coui 进度条 + 液态玻璃按钮），自带的那条又高又长，关掉
+                useController = false
             }
         },
         // 重试会重建 player：update 里重新绑定（旧版只在 factory 里绑一次，重试后画面不更新）
         update = { view ->
             if (view.player !== player) view.player = player
-            view.setFullscreenButtonState(fullscreen)
         },
         modifier = modifier,
     )

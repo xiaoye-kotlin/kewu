@@ -61,6 +61,7 @@ import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.AiAgent
@@ -312,11 +313,15 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         // ★ 2026-10-25：同一天只在**第一次**进入助教页时播报一次；当天再进来直接复用
         //   聊天记录里已存的简报，不再重复打扰（用户反馈「每次进入都会发」）。
         //   判据用「当天 00:00 的时间戳」写进 kv，跨天自动失效；次日进入会重新播报。
-        if (kvGet(KEY_TA_BRIEF_DAY)?.toLongOrNull() == visibleCutoff) {
+        // ★ 2026-11-02：判据改用「今天 00:00」而不是 visibleCutoff —— 后者会随下拉加载更早对话往前推，
+        //   旧版先下拉再写标记就写成了前一天，AssistantHub 每次都判「今天没播报」→ 助教 tab 红点 3 永远消不掉。
+        //   标记在开始播报时立即写：老师已经进了页面，切走也不再用红点催。
+        val briefDay = ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds())
+        if (kvGet(KEY_TA_BRIEF_DAY)?.toLongOrNull() == briefDay) {
             return@LaunchedEffect
         }
-        // ★ 2026-10-26：「今日已播报」标记挪到三条都发完之后再写（旧版先写标记，播报途中切走 tab
-        //   剩下的简报当天就再也不发了）
+        kvSet(KEY_TA_BRIEF_DAY, briefDay.toString())
+        AssistantHub.refreshUnread(ChatHistory.KEY_TEACHER)
 
         delay(500)
         push(TaMsg(false, buildList {
@@ -342,7 +347,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         delay(650)
         push(TaMsg(false, buildList {
             if (watchList.isEmpty()) {
-                add(TaBlock.Text("近期没有发现需要特别关注的学生（签到风险与作业预批阅均正常）。"))
+                add(TaBlock.Text("近期没有需要特别关注的学生。"))
             } else {
                 add(TaBlock.Text("以下学生近期需要关注：", emphasis = true))
                 add(TaBlock.Students(watchList))
@@ -359,7 +364,6 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             }
             add(TaBlock.Text("有问题随时问我，比如「谁退步了」「作业质量怎么样」「谁没签到」。"))
         }), persist = true)
-        kvSet(KEY_TA_BRIEF_DAY, visibleCutoff.toString())
     }
 
     // 新消息平滑滑到底；键盘弹起 / 收起等视口变化时保持贴底（2026-10-26 改用 ChatAutoScroll，
@@ -542,11 +546,10 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     Spacer(Modifier.height(2.dp))
                     // 2026-10-24：等待 AI 回复时顶部状态改为「小悟正在输入中…」
                     Text(
-                        if (aiThinking) "小悟正在输入中…" else "KEWU AI · 学情分析",
+                        if (aiThinking) "小悟正在输入中…" else "学情分析",
                         color = cs.onSurfaceSecondary, fontSize = 11.5.sp,
                     )
                 }
-                KewuTag("主动播报", color = cs.tertiaryContainer, contentColor = cs.onTertiaryContainer)
             }
 
             // ── 对话列（2026-10-24：顶部下拉加载更早对话；消息 animateItem 滑入） ──
@@ -568,6 +571,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                         if (available.y < 0) pullAcc = 0f
                         return Offset.Zero
                     }
+
+                    // 松手即归零：旧版松手后 pullAcc 留在半路，提示文字在两种状态间来回跳
+                    override suspend fun onPreFling(available: Velocity): Velocity {
+                        pullAcc = 0f
+                        return Velocity.Zero
+                    }
                 }
             }
             // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃）
@@ -577,19 +586,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 modifier = Modifier.fillMaxWidth().weight(1f).nestedScroll(pullConnection),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
             ) {
-                item(key = "history-tip") {
-                    Text(
-                        when {
-                            pullAcc > 10f -> "松开加载更早的对话…"
-                            hasMoreHistory -> "下拉加载更早的对话"
-                            else -> ""
-                        },
-                        color = cs.onSurfaceSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
                     Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                         TaBubble(

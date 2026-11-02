@@ -11,6 +11,8 @@ import com.kewu.recserver.model.RecordingUploadResult
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.PartData
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
 import io.ktor.server.response.respond
@@ -41,6 +43,7 @@ fun Route.recordingRoutes() {
             var classId = ""; var sessionId = ""; var deviceId = ""; var role = "student"
             var format: String? = null; var sampleRate: Int? = null; var durationSec: Double? = null
             var avgLevelDb: Double? = null
+            var username = ""; var endedAtMs: Long? = null
             var bytes: ByteArray? = null; var ext = "bin"
             var readError: String? = null
 
@@ -55,6 +58,8 @@ fun Route.recordingRoutes() {
                         "durationSec" -> part.value.toDoubleOrNull()?.let { durationSec = it }
                         "avgLevel", "avgLevelDb" -> part.value.toDoubleOrNull()?.let { avgLevelDb = it }
                         "format" -> if (format == null) format = part.value
+                        "username" -> username = part.value.trim().take(64)
+                        "endedAt" -> part.value.toLongOrNull()?.let { endedAtMs = it }
                     }
                     is PartData.FileItem -> if (part.name == "audio") {
                         try {
@@ -115,19 +120,26 @@ fun Route.recordingRoutes() {
                 )
             )
             val score = services.scorer.score(meta).score
+            // 上传人：按账号查用户 id / 姓名（老版本 App 不传 username，留空）
+            val uploader = if (username.isBlank()) null else runCatching {
+                transaction { com.kewu.db.Users.selectAll().where { com.kewu.db.Users.username eq username }.firstOrNull() }
+            }.getOrNull()
+            val uploaderId = uploader?.get(com.kewu.db.Users.id)
+            val uploaderName = uploader?.get(com.kewu.db.Users.nickname)?.ifBlank { null } ?: username.ifBlank { null }
             // 逐条上传落 recordings 表：总控端「查看全部录音」的数据源。失败只告警，绝不影响上传返回
             runCatching {
-                val courseId = if (classId.isNotBlank()) {
+                // App 传的 classId 实际是课程 id：先按教学班查，查不到就当课程 id 用
+                val courseId = if (classId.isNotBlank()) transaction {
                     Classes.selectAll().where { Classes.id eq classId }.firstOrNull()?.get(Classes.courseId)
-                } else null
+                } ?: classId else null
                 transaction {
                     Recordings.insert {
                         it[Recordings.id] = recordingId
                         it[Recordings.classId] = classId
                         it[Recordings.sessionId] = sessionId.ifBlank { null }
                         it[Recordings.courseId] = courseId
-                        it[Recordings.studentId] = null
-                        it[Recordings.studentName] = null
+                        it[Recordings.studentId] = uploaderId
+                        it[Recordings.studentName] = uploaderName
                         it[Recordings.role] = role
                         it[Recordings.deviceId] = deviceId.ifBlank { null }
                         it[Recordings.url] = url
@@ -143,7 +155,10 @@ fun Route.recordingRoutes() {
             }.onFailure { println("REC-DB-WARN: $it") }
             // 元数据按会话落一份 Redis，服务端自己有账，不全靠融合时客户端传
             if (sessionId.isNotBlank()) {
-                services.redis.saveRecordingMeta(sessionId, Json.encodeToString(RecordingMeta.serializer(), meta.copy(storedUrl = url)))
+                services.redis.saveRecordingMeta(sessionId, Json.encodeToString(RecordingMeta.serializer(), meta.copy(
+                    storedUrl = url, username = username.ifBlank { null }, displayName = uploaderName,
+                    endedAtMs = endedAtMs ?: System.currentTimeMillis()
+                )))
             }
             if (sessionId.isNotBlank()) com.kewu.recserver.ClassEndService.onUpload?.invoke(sessionId)
             call.respond(
@@ -153,6 +168,23 @@ fun Route.recordingRoutes() {
         } catch (t: Throwable) {
             println("UPLOAD-ERROR: " + t.stackTraceToString())
             call.respondText("error: ${t.message}", status = HttpStatusCode.InternalServerError)
+        }
+    }
+
+    // 教师端：一节课所有端上传的录音 + 课堂专注结论（2026-11-02）。需登录且不是学生
+    authenticate(com.kewu.security.JwtConfig.NAME) {
+        get("/api/class-recordings/{sessionId}/recordings") {
+            val uid = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload
+                ?.getClaim(com.kewu.security.JwtConfig.CLAIM_USER_ID)?.asString()
+            val role = uid?.let { id ->
+                transaction { com.kewu.db.Users.selectAll().where { com.kewu.db.Users.id eq id }.firstOrNull()?.get(com.kewu.db.Users.role) }
+            }
+            if (role == null || role.equals("student", ignoreCase = true)) {
+                call.respond(HttpStatusCode.Forbidden, com.kewu.models.ApiResponse<String>(1, "仅教师可查看"))
+                return@get
+            }
+            val sid = call.parameters["sessionId"]!!
+            call.respond(com.kewu.models.ApiResponse(0, "ok", com.kewu.recserver.ClassEndService.sessionRecordings(sid)))
         }
     }
 

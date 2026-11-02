@@ -47,6 +47,10 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -65,7 +69,8 @@ import kotlinx.serialization.json.put
  *   - [KnowledgeVideoDialog]：点知识点弹出的 coui 弹窗（AI 关键词 → B 站视频，点卡片在 App 内播放）；
  *   - [MasteryStore] + [MasteryRateDialog]：看完视频后学生自评掌握度（1–100%，只能升不能降），
  *     到 100% 记为「已掌握」并留下记录（曾经薄弱的知识点）。
- * 视频播放直链带过期参数，所以视频列表只放内存（会话内复用），关键词可以落盘。
+ * 「为你推荐」提速（2026-11-02 用户：要等约一分钟）：上次结果落盘、进页先秒出；AI 抽词限时 8 秒，
+ * 超时改用作业知识点等本地关键词；各关键词并行搜索、搜到一个出一批。直链过期时播放层会按标题重新取。
  */
 
 internal object BiliRecommend {
@@ -115,15 +120,73 @@ internal object BiliRecommend {
         appendLine("最近做错的题：" + wrong.joinToString("；").ifBlank { "无" })
     }
 
-    /** 「为你推荐」：AI 关键词 × 每个关键词 3 条视频。30 分钟内复用（直链有过期时间，不落盘）。 */
-    suspend fun recommendations(force: Boolean = false): List<Pair<String, List<BilibiliVideoInfo>>> {
+    /** 不靠 AI 的兜底关键词：作业知识点 → 作业标题 → 通用学科。 */
+    private fun localKeywords(n: Int): List<String> {
+        val items = AssignmentRepo.items.value.orEmpty()
+        val kp = items.flatMap { it.assignment.knowledgePoints }.map { it.trim() }.filter { it.length in 2..16 }
+        val titles = items.map { it.assignment.title.replace(Regex("[《》【】\\[\\]()（）]"), " ").trim() }.filter { it.length in 2..16 }
+        return (kp + titles + listOf("高等数学 重点", "线性代数 入门", "大学物理 基础")).distinct().take(n)
+    }
+
+    private fun recDiskKey() = "kewu_bili_rec_" + KewuApi.username.orEmpty()
+    private val json = Json { ignoreUnknownKeys = true }
+
+    /** 上次推荐（落盘）：进页先秒出，后台再按需刷新。 */
+    fun diskRecommendations(): List<Pair<String, List<BilibiliVideoInfo>>> = runCatching {
+        (json.parseToJsonElement(kvGet(recDiskKey()) ?: return emptyList()) as JsonArray).mapNotNull { g ->
+            val o = g as? JsonObject ?: return@mapNotNull null
+            val kw = (o["k"] as? JsonPrimitive)?.content ?: return@mapNotNull null
+            val vs = (o["v"] as? JsonArray).orEmpty().mapNotNull { e ->
+                val v = e as? JsonObject ?: return@mapNotNull null
+                fun f(k: String) = (v[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                BilibiliVideoInfo(f("b") ?: return@mapNotNull null, f("t").orEmpty(), f("c").orEmpty(), f("vu"), f("au"))
+            }
+            if (vs.isEmpty()) null else kw to vs
+        }
+    }.getOrDefault(emptyList())
+
+    private fun saveDisk(list: List<Pair<String, List<BilibiliVideoInfo>>>) {
+        kvSet(recDiskKey(), buildJsonArray {
+            list.forEach { (kw, vs) ->
+                add(buildJsonObject {
+                    put("k", kw)
+                    put("v", buildJsonArray {
+                        vs.forEach { v ->
+                            add(buildJsonObject { put("b", v.bvid); put("t", v.title); put("c", v.cover); put("vu", v.videoUrl); put("au", v.audioUrl) })
+                        }
+                    })
+                })
+            }
+        }.toString())
+    }
+
+    /**
+     * 「为你推荐」：关键词 × 每个关键词 3 条视频，**逐批回调** [onUpdate]（搜到一个关键词就刷新一次）。
+     * 30 分钟内复用内存结果；AI 抽词限时 8 秒，超时用 [localKeywords]。
+     */
+    suspend fun recommendations(
+        force: Boolean = false,
+        onUpdate: (List<Pair<String, List<BilibiliVideoInfo>>>) -> Unit = {},
+    ): List<Pair<String, List<BilibiliVideoInfo>>> {
         recCache?.let { (ts, list) -> if (!force && nowMs() - ts < 30 * 60_000L && list.isNotEmpty()) return list }
-        AssignmentRepo.refresh(maxAgeMs = 5 * 60_000L)
-        val kws = extractKeywords(studentContext(), 4)
-        val result = coroutineScope {
-            kws.map { kw -> async { kw to videos(kw, 3) } }.awaitAll()
-        }.filter { it.second.isNotEmpty() }
-        if (result.isNotEmpty()) recCache = nowMs() to result
+        withTimeoutOrNull(3_000) { AssignmentRepo.refresh(maxAgeMs = 5 * 60_000L) }
+        val kws = withTimeoutOrNull(8_000) { extractKeywords(studentContext(), 4) }?.takeIf { it.isNotEmpty() } ?: localKeywords(4)
+        val mutex = Mutex()
+        val acc = mutableListOf<Pair<String, List<BilibiliVideoInfo>>>()
+        coroutineScope {
+            kws.forEach { kw ->
+                launch {
+                    val vs = videos(kw, 3)
+                    if (vs.isNotEmpty()) mutex.withLock {
+                        acc += kw to vs
+                        // 按关键词原顺序展示，避免先到先排导致列表跳动
+                        onUpdate(acc.sortedBy { kws.indexOf(it.first) })
+                    }
+                }
+            }
+        }
+        val result = acc.sortedBy { kws.indexOf(it.first) }
+        if (result.isNotEmpty()) { recCache = nowMs() to result; saveDisk(result) }
         return result
     }
 
@@ -188,34 +251,41 @@ internal object MasteryStore {
 
 // ───────────────────────── 「为你推荐」区块 ─────────────────────────
 
-/** B 站学习视频页顶部的「为你推荐」：结合最近提问 / 作业 / 错题，AI 提炼关键词后搜索。 */
+/**
+ * B 站学习视频页的「推荐」列表：先显示上次结果（落盘），再后台刷新、逐批替换。
+ * 结合最近提问 / 作业 / 错题，AI 提炼关键词后搜索。
+ */
 @Composable
 internal fun BiliRecommendSection(modifier: Modifier = Modifier) {
     val cs = COUITheme.colorScheme
-    var recs by remember { mutableStateOf<List<Pair<String, List<BilibiliVideoInfo>>>?>(null) }
+    var recs by remember { mutableStateOf<List<Pair<String, List<BilibiliVideoInfo>>>?>(BiliRecommend.diskRecommendations().ifEmpty { null }) }
+    var loading by remember { mutableStateOf(true) }
     var reload by remember { mutableStateOf(0) }
     LaunchedEffect(reload) {
-        recs = null
-        recs = BiliRecommend.recommendations(force = reload > 0)
+        loading = true
+        if (reload > 0) recs = null
+        // 没有旧结果就逐批出；有上次的结果先留着，新结果全部到齐再整体替换（免得列表先缩后涨）
+        val progressive = recs == null
+        val r = BiliRecommend.recommendations(force = reload > 0) { if (progressive) recs = it }
+        if (r.isNotEmpty() || recs == null) recs = r
+        loading = false
     }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Column(Modifier.fillMaxWidth().padding(top = 4.dp)) {
-            Text("为你推荐", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text("小悟根据你最近问的问题、老师布置的作业和错题挑的", color = cs.onSurfaceSecondary, fontSize = 11.5.sp)
-        }
         val list = recs
         when {
-            list == null -> Text("小悟正在分析你的学习情况并搜索视频，可能需要十几秒…", color = cs.onSurfaceSecondary, fontSize = 13.sp,
-                modifier = Modifier.padding(vertical = 12.dp))
-            list.isEmpty() -> Text("暂时没有可推荐的视频：多问问小悟、做几份作业后再来看看，也可以直接在上面搜索", color = cs.onSurfaceSecondary,
-                fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(vertical = 12.dp))
+            list == null -> Text("正在挑选视频…", color = cs.onSurfaceSecondary, fontSize = 13.sp,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp))
+            list.isEmpty() -> Text("暂无推荐，试试上方搜索", color = cs.onSurfaceSecondary,
+                fontSize = 13.sp, modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp))
             else -> list.forEach { (kw, videos) ->
-                Text("# $kw", color = Color(0xFFFB7299), fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 4.dp))
-                videos.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
+                androidx.compose.runtime.key(kw) {
+                    Text("# $kw", color = Color(0xFFFB7299), fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+                    videos.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
+                }
             }
         }
-        if (recs != null) {
-            KewuSecondaryButton("换一批推荐", { reload++ }, Modifier.fillMaxWidth())
+        if (recs != null && !loading) {
+            KewuSecondaryButton("换一批推荐", { haptic(HapticKind.Tick); reload++ }, Modifier.fillMaxWidth())
         }
     }
 }
@@ -245,22 +315,23 @@ internal fun KnowledgeVideoDialog(
     OverlayDialog(
         show = show,
         title = point.ifBlank { "知识点" },
-        summary = if (mastered) "已掌握 · 可以随时回看相关视频" else "当前掌握度 $percent% · 看完视频后告诉小悟你掌握了多少",
+        summary = if (mastered) "已掌握" else "掌握度 $percent%",
         onDismissRequest = onDismiss,
         onDismissFinished = { },
     ) {
         Column(Modifier.fillMaxWidth()) {
         Column(
-            Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState()).padding(bottom = 4.dp),
+            // 2026-11-02：coui 弹窗内容区不自带左右边距，进度条 / 提示语 / 卡片统一留 24dp
+            Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 4.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             MasteryBar(percent / 100f, mastered)
             Spacer(Modifier.height(4.dp))
             val list = videos
             when {
-                list == null -> Text("小悟正在提炼关键词并搜索 B 站视频…", color = cs.onSurfaceSecondary, fontSize = 13.sp,
+                list == null -> Text("正在搜索视频…", color = cs.onSurfaceSecondary, fontSize = 13.sp,
                     modifier = Modifier.padding(vertical = 16.dp))
-                list.isEmpty() -> Text("暂时没搜到相关视频，稍后再试试", color = cs.onSurfaceSecondary, fontSize = 13.sp,
+                list.isEmpty() -> Text("暂时没搜到相关视频", color = cs.onSurfaceSecondary, fontSize = 13.sp,
                     modifier = Modifier.padding(vertical = 16.dp))
                 else -> list.forEachIndexed { i, v -> BilibiliVideoCard(v, onClick = { onPlay(v) }, index = i) }
             }
@@ -294,7 +365,7 @@ internal fun MasteryBar(fraction: Float, mastered: Boolean, modifier: Modifier =
 }
 
 /**
- * 看完视频后的掌握度自评（coui 弹窗 + Slider）：范围 [currentPercent]–100%，只能升不能降。
+ * 看完视频后的掌握度自评（coui 弹窗 + Slider）：范围 [currentPercent]–100%，只能升不能降；100% 算掌握（进度条变绿）。
  */
 @Composable
 internal fun MasteryRateDialog(
@@ -310,14 +381,14 @@ internal fun MasteryRateDialog(
     val value = (min + (100 - min) * frac).toInt().coerceIn(min, 100)
     KewuConfirmDialog(
         show = show,
-        title = "看完了，现在掌握了多少？",
-        summary = "「$point」原来是 $min%，只能往上调；调到 100% 就算掌握，进度条会变绿",
+        title = "现在掌握了多少？",
+        summary = "「$point」· 只能往上调",
         confirmText = "记录 $value%",
         cancelText = "稍后再说",
         onConfirm = { onConfirm(value) },
         onDismiss = onDismiss,
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp)) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
             Text("$value%", color = if (value == 100) KewuGreen else cs.onSurface, fontSize = 28.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(6.dp))
             Slider(value = frac, onValueChange = { frac = it }, modifier = Modifier.fillMaxWidth())

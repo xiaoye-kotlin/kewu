@@ -53,6 +53,16 @@ fun Routing.userRoutes(userService: UserService) {
                 )
             }
 
+            // 课程任课老师名片（学生「我的课程」⋯，2026-11-02）
+            get("/course-teacher/{courseId}") {
+                val card = userService.courseTeacher(call.parameters["courseId"].orEmpty())
+                if (card == null) call.respond(HttpStatusCode.NotFound, ApiResponse<String>(1, "暂无老师信息"))
+                else call.respond(ApiResponse(0, "ok", card))
+            }
+
+            // 会话探活：App 回到前台时调一下，被同类设备挤下线会走 401 KICKED（2026-11-02）
+            get("/session") { call.respond(ApiResponse(0, "ok", "alive")) }
+
             get("/me") {
                 val principal = call.principal<JWTPrincipal>()!!
                 val userId = principal.payload.getClaim(JwtConfig.CLAIM_USER_ID).asString()

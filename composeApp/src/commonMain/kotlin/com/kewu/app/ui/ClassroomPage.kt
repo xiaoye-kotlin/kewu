@@ -95,6 +95,10 @@ import com.kewu.app.haptic
 import com.kewu.app.platformActivity
 import com.kewu.app.requestAudioPermission
 import com.kewu.app.todayCn
+import com.kewu.app.ClassNoteProgress
+import io.github.suqi8.coui.kmp.basic.ProgressIndicatorDefaults
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.basic.ButtonDefaults
@@ -721,6 +725,15 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                                 onHomework = { onGoToTab(2) },
                             )
                         }
+                        // 2026-11-02：下课后纪要生成进度（有正在生成的才出现），放在课前预习上方
+                        ClassNoteProgressSection(
+                            backdrop = pageBackdrop,
+                            courses = courseInfos.orEmpty().map { it.id to it.name },
+                            onOpen = { target ->
+                                classNoteTarget = target
+                                drill = ClassroomDrill.CLASS_NOTE
+                            },
+                        )
                         // 2026-10-26 AI 学习中心：课前预习卡 + 错题本 / 学习规划入口
                         AiPreviewCard(pageBackdrop, Modifier.padding(bottom = 12.dp))
                         AiStudyEntryRow(
@@ -1125,7 +1138,7 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                     if (collabOn) {
                         Spacer(Modifier.height(2.dp))
                         Text(
-                            "已加入课堂协同录音 · 老师端优先融合",
+                            "已加入课堂录音",
                             color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1,
                         )
                     }
@@ -1619,5 +1632,137 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
                 )
             }
         }
+    }
+}
+
+// ───────────────────────── 课堂纪要生成进度（2026-11-02） ─────────────────────────
+
+/** 进程级：本次运行里见过「生成中」的节次；它们转为 DONE 时在首页留一条「已生成」直到点开。 */
+private object ClassNoteWatch {
+    val seenRunning = mutableSetOf<String>()
+    val dismissed = androidx.compose.runtime.mutableStateListOf<String>()
+    /** 本地首次看到某节次处于某状态的时刻（老后端没有 progress 时用来估算进度）。 */
+    val firstSeen = mutableMapOf<String, Long>()
+}
+
+private val NOTE_FINAL = setOf("DONE", "FAILED", "EMPTY", "NO_AUDIO", "")
+
+/**
+ * 首页「课堂纪要生成进度」：下课后到纪要出来要十几分钟，旧版期间什么都看不到。
+ * 有正在生成的节次就显示（多门课多节都列出），每条 = 课程名 + 阶段 + coui 进度条；生成完变「已生成」，点开看纪要。
+ * 学生端课堂页、教师端控制台共用；每 20 秒轮询一次，离开首页随组合停止。
+ */
+@Composable
+internal fun ClassNoteProgressSection(
+    backdrop: LayerBackdrop,
+    courses: List<Pair<String, String>>,
+    onOpen: (ClassNoteTarget) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val cs = COUITheme.colorScheme
+    var items by remember { mutableStateOf<List<ClassNoteProgress>>(emptyList()) }
+    var nowMs by remember { mutableStateOf(kotlin.time.Clock.System.now().toEpochMilliseconds()) }
+    val courseKey = courses.joinToString(",") { it.first }
+    LaunchedEffect(courseKey) {
+        while (true) {
+            val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            val recent = setOf(todayCn(now), todayCn(now - 86_400_000L))
+            val all = courses.map { (id, _) -> async { KewuApi.getClassNoteProgress(id) } }.awaitAll()
+            if (all.any { it != null }) {
+                items = all.filterNotNull().flatten().filter { p ->
+                    val running = p.status !in NOTE_FINAL
+                    if (running) {
+                        ClassNoteWatch.seenRunning += p.sessionId
+                        ClassNoteWatch.firstSeen.getOrPut(p.sessionId + "#" + p.status) { now }
+                    }
+                    p.date in recent && (running ||
+                        (p.status == "DONE" && p.sessionId in ClassNoteWatch.seenRunning && p.sessionId !in ClassNoteWatch.dismissed))
+                }.sortedBy { it.sessionId }
+            }
+            // 有生成中的节次每 20 秒刷新；都没有就放慢到 60 秒
+            val wait = if (items.any { it.status !in NOTE_FINAL }) 20_000L else 60_000L
+            var waited = 0L
+            while (waited < wait) {
+                kotlinx.coroutines.delay(1_000)
+                waited += 1_000
+                nowMs = kotlin.time.Clock.System.now().toEpochMilliseconds()
+            }
+        }
+    }
+    val shown = items.filter { it.sessionId !in ClassNoteWatch.dismissed }
+    if (shown.isEmpty()) return
+
+    val names = courses.toMap()
+    val p = rememberEnterProgress(0, baseDelayMs = 120L)
+    KewuGlassCard(
+        backdrop = backdrop,
+        shape = RoundedCornerShape(20.dp),
+        blurRadius = glassCondenseBlur(p, 22f),
+        tintAlpha = 0.28f * p,
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 12.dp).glassEnter(p),
+    ) {
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Text("课堂纪要", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            shown.forEach { item ->
+                Spacer(Modifier.height(12.dp))
+                ClassNoteProgressRow(item, names[item.courseId] ?: item.courseId, nowMs) {
+                    ClassNoteWatch.dismissed += item.sessionId
+                    onOpen(ClassNoteTarget(item.courseId, item.date))
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ClassNoteProgressRow(item: ClassNoteProgress, courseName: String, nowMs: Long, onOpen: () -> Unit) {
+    val cs = COUITheme.colorScheme
+    val done = item.status == "DONE"
+    // 老后端没有 progress：排队 10%，转写按本地已等时长 15% → 85% 缓慢爬升（约 12 分钟），不会到头
+    val target = when {
+        done -> 1f
+        item.progress != null -> item.progress
+        item.status == "PENDING_ASR" -> 0.1f
+        else -> {
+            val since = ClassNoteWatch.firstSeen[item.sessionId + "#" + item.status] ?: nowMs
+            val t = ((nowMs - since) / 720_000f).coerceIn(0f, 1f)
+            0.15f + 0.7f * (1f - (1f - t) * (1f - t))
+        }
+    }.coerceIn(0f, 1f)
+    // 进度只进不退（轮询间后端阶段文字变化时也不回跳）
+    var shownMax by remember(item.sessionId) { mutableStateOf(0f) }
+    if (target > shownMax) shownMax = target
+    val anim by animateFloatAsState(shownMax, spring(dampingRatio = 0.9f, stiffness = 60f), label = "noteProgress")
+    val stage = when {
+        done -> "已生成"
+        item.stage != null -> item.stage
+        item.status == "PENDING_ASR" -> "排队中"
+        item.status == "TRANSCRIBING" -> "转写中"
+        else -> "生成中"
+    }
+    Column(
+        Modifier.fillMaxWidth().then(
+            if (done) Modifier.clip(RoundedCornerShape(12.dp)).clickable { haptic(HapticKind.Tick); onOpen() } else Modifier,
+        ),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(courseName, color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                maxLines = 1, modifier = Modifier.weight(1f, fill = false))
+            Spacer(Modifier.width(6.dp))
+            Text(item.date.takeLast(5).replace('-', '/'), color = cs.onSurfaceSecondary, fontSize = 12.sp)
+            Spacer(Modifier.weight(1f))
+            Text(
+                if (done) stage else "$stage · ${(anim * 100).toInt()}%",
+                color = if (done) KewuGreen else cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1,
+            )
+            if (done) Icon(COUIIcons.ChevronForward, contentDescription = null, tint = KewuGreen, modifier = Modifier.size(14.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        LinearProgressIndicator(
+            progress = anim,
+            modifier = Modifier.fillMaxWidth(),
+            colors = ProgressIndicatorDefaults.progressIndicatorColors(foregroundColor = KewuGreen),
+            height = 6.dp,
+        )
     }
 }

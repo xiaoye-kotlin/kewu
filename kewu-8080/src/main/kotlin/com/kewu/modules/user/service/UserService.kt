@@ -44,7 +44,11 @@ class UserService(private val repository: UserRepository, private val courseRepo
         val ok = BCrypt.verifyer().verify(req.password.toCharArray(), user.passwordHash).verified
         if (!ok) return Result.failure(IllegalArgumentException("用户名或密码不对"))
         runCatching { com.kewu.modules.schedule.ScheduleService.autoBindTeacher(user.id) }
-        val token = JwtConfig.createToken(user.id, user.username)
+        // 单设备登录：同类平台换新 sid，旧设备的 token 随即失效；不传 platform 的旧版客户端不参与
+        val token = if (req.platform.isNullOrBlank()) JwtConfig.createToken(user.id, user.username) else {
+            val plat = com.kewu.modules.user.repository.UserSessionStore.normalize(req.platform)
+            JwtConfig.createToken(user.id, user.username, com.kewu.modules.user.repository.UserSessionStore.newSession(user.id, plat), plat)
+        }
         return Result.success(LoginResponse(token, user.toInfo(), user.role))
     }
 
@@ -86,16 +90,46 @@ class UserService(private val repository: UserRepository, private val courseRepo
         repository.updateProfile(
             userId,
             req.nickname?.trim()?.take(64)?.ifBlank { null },
-            req.school?.trim()?.take(128),
+            // 学校注册后不可改（2026-11-02）：只有原来没填的才允许补填
+            req.school?.trim()?.take(128)?.takeIf { u.school.isNullOrBlank() && it.isNotBlank() },
             // 学生的班级以加入的教学班为准，不接受自己改（2026-10-26）
             if (u.role == UserRole.TEACHER) req.className?.trim()?.take(128) else null,
             phone?.take(32),
-            email?.take(128)
+            email?.take(128),
+            req.subject?.trim()?.take(64),
+            req.bio?.trim()?.take(512)
         )
         // 改了姓名 / 学校后再认领一次课表
         runCatching { com.kewu.modules.schedule.ScheduleService.autoBindTeacher(userId) }
         return Result.success(repository.findUserById(userId)!!.toInfo())
     }
 
-    private fun User.toInfo() = UserInfo(id, username, nickname, role, school, className, phone, email)
+    /**
+     * 课程任课老师名片（2026-11-02）：教学班的老师 → 课表里的任课老师 → 课程表上的老师名；
+     * 能对上注册账号就带上手机号 / 科目 / 简介，对不上只给名字。
+     */
+    fun courseTeacher(courseId: String): TeacherCard? = org.jetbrains.exposed.sql.transactions.transaction {
+        val course = com.kewu.db.Courses.selectAll().where { com.kewu.db.Courses.id eq courseId }.firstOrNull()
+        val cls = com.kewu.db.Classes.selectAll().where { com.kewu.db.Classes.courseId eq courseId }.firstOrNull()
+        val sch = com.kewu.db.CourseSchedules.selectAll().where { com.kewu.db.CourseSchedules.courseId eq courseId }.firstOrNull()
+        val teacherId = cls?.get(com.kewu.db.Classes.teacherId)?.ifBlank { null } ?: sch?.get(com.kewu.db.CourseSchedules.teacherId)?.ifBlank { null }
+        val name = cls?.get(com.kewu.db.Classes.teacherName)?.ifBlank { null }
+            ?: sch?.get(com.kewu.db.CourseSchedules.teacherName)?.ifBlank { null }
+            ?: course?.get(com.kewu.db.Courses.teacher)?.ifBlank { null }
+        val courseName = course?.get(com.kewu.db.Courses.name) ?: cls?.get(com.kewu.db.Classes.courseName)
+        val u = teacherId?.let { repository.findUserById(it) ?: repository.findByUsername(it) }
+            ?: name?.let { n ->
+                com.kewu.db.Users.selectAll().where { com.kewu.db.Users.nickname eq n }
+                    .firstOrNull { it[com.kewu.db.Users.role] == UserRole.TEACHER }?.get(com.kewu.db.Users.id)
+                    ?.let { repository.findUserById(it) }
+            }
+        if (u == null && name == null) return@transaction null
+        TeacherCard(
+            id = u?.id, name = u?.nickname?.ifBlank { null } ?: name ?: u?.username.orEmpty(),
+            subject = u?.subject ?: courseName, phone = u?.phone, email = u?.email,
+            school = u?.school, bio = u?.bio, courseName = courseName,
+        )
+    }
+
+    private fun User.toInfo() = UserInfo(id, username, nickname, role, school, className, phone, email, subject, bio)
 }

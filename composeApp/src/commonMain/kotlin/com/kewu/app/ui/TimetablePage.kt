@@ -250,7 +250,7 @@ private fun TimetableHeader(onBack: () -> Unit) {
     KewuTopBar(
         title = "课表",
         // 2026-10-26：后端还没有排课数据，本页为示例课表；旧版写死「第 7 周 · 10月12日-10月18日」像真实数据
-        subtitle = "本周课表 · 由任课老师导入",
+        subtitle = "本周课表",
         onBack = onBack,
         actions = {
             Box(

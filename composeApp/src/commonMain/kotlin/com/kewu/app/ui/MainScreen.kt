@@ -117,6 +117,7 @@ internal val NAV_ITEMS = listOf(
 
 /** 助教页在 NAV_ITEMS 中的下标（该页禁用内容区横滑切页）。 */
 private const val ASSISTANT_TAB = 1
+private const val TASK_TAB = 2
 
 @Composable
 fun MainScreen(
@@ -135,6 +136,9 @@ fun MainScreen(
     // 2026-10-26：未读数改由 AssistantHub 统一维护（在助教页里看着回答的不算未读；切走后才到的、
     // 以及小悟主动发来的消息才算）。每分钟重算一次，跨天时教师端「今日简报未读」能自动出现。
     val assistantUnread by AssistantHub.unread(ChatHistory.KEY_STUDENT).collectAsState()
+    // 2026-11-02：「任务」tab 红点 = 未交且没截止的作业数（新作业到达 / 被打回都会 +1，交完 -1）
+    val taskItems by com.kewu.app.AssignmentRepo.items.collectAsState()
+    val taskPending = pendingTaskCount(taskItems)
     LaunchedEffect(Unit) {
         ChatHistory.seedWelcomeIfEmpty(ChatHistory.KEY_STUDENT)
         AssistantHub.refreshUnread(ChatHistory.KEY_STUDENT)
@@ -148,7 +152,7 @@ fun MainScreen(
         launch {
             while (true) {
                 AssistantHub.checkReturnedAssignments()
-                delay(180_000)
+                delay(90_000)
             }
         }
     }
@@ -388,7 +392,7 @@ fun MainScreen(
             },
             backdrop = backdrop,
             hidden = navHidden,
-            badges = mapOf(ASSISTANT_TAB to assistantUnread),
+            badges = mapOf(ASSISTANT_TAB to assistantUnread, TASK_TAB to taskPending),
             tabW = tabW,
             centerAnim = centerAnim,
             onSlideTo = slideBubbleTo,

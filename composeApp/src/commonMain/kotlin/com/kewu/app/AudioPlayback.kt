@@ -48,6 +48,7 @@ object AudioPlayback {
     private const val LOAD_TIMEOUT_MS = 20_000L
     private var player: PlatformAudioPlayer? = null
     private var ticker: Job? = null
+    private var pendingSeekMs: Long? = null
 
     /** 点播放键：同一条在播 → 暂停；暂停中 → 继续；否则从头播放 [source]。 */
     fun toggle(key: String, source: String) {
@@ -68,9 +69,23 @@ object AudioPlayback {
     fun seek(key: String, ms: Long) {
         val p = player ?: return
         if (_state.value.key != key) return
-        val target = ms.coerceIn(0, _state.value.durationMs.coerceAtLeast(0))
+        // 2026-11-02：流式 WAV 的时长常拿不到（=0），旧版按 0 夹紧 → 永远跳回开头，表现为「拖不动进度」
+        val dur = _state.value.durationMs
+        val target = if (dur > 0) ms.coerceIn(0, dur) else ms.coerceAtLeast(0)
         p.seekTo(target)
         _state.update { it.copy(positionMs = target) }
+    }
+
+    /** 拖进度：这一条已就绪就直接跳；还没播（或已停）就从 [ms] 处开始播。 */
+    fun seekOrStart(key: String, source: String, ms: Long) {
+        val s = _state.value
+        if (s.key == key && player != null && (s.phase == Phase.PLAYING || s.phase == Phase.PAUSED)) {
+            seek(key, ms)
+            return
+        }
+        if (s.key == key && s.phase == Phase.LOADING) { pendingSeekMs = ms; return }
+        start(key, source)
+        pendingSeekMs = ms
     }
 
     /** 停止并清空（退出登录、开始录音时调用）。 */
@@ -91,6 +106,7 @@ object AudioPlayback {
 
     private fun start(key: String, source: String) {
         releasePlayer()
+        pendingSeekMs = null
         _state.value = State(key = key, phase = Phase.LOADING)
         val p = try { PlatformAudioPlayer() } catch (_: Throwable) {
             _state.value = State(key = key, phase = Phase.ERROR, error = "当前设备不支持播放")
@@ -110,7 +126,10 @@ object AudioPlayback {
             source = source,
             onReady = { dur ->
                 if (player === p) {
-                    _state.update { it.copy(phase = Phase.PLAYING, durationMs = dur.coerceAtLeast(0), positionMs = 0) }
+                    val at = pendingSeekMs?.coerceAtLeast(0) ?: 0L
+                    pendingSeekMs = null
+                    if (at > 0) p.seekTo(at)
+                    _state.update { it.copy(phase = Phase.PLAYING, durationMs = dur.coerceAtLeast(0), positionMs = at) }
                     p.play()
                     startTicker(p)
                 }

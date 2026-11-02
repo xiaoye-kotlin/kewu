@@ -59,10 +59,23 @@ class MaasAiService : AiService {
                 "请输出结构化课堂纪要，用中文、不用 Markdown 符号，按以下小标题分段：" +
                 "【本节主题】一句话；【知识点】3-8 条，每条一句话讲清概念或结论；【例题与方法】老师讲过的例题、解题方法；" +
                 "【重点难点】老师强调的易错点；【课后安排】作业、预习、考试提醒（没有就写无）。不要编造转写稿里没有的内容。",
-            user = transcript.take(12000),
+            user = transcript.take(20000),
             maxTokens = 2048
         )
     }
+
+    /**
+     * 课堂专注分析（2026-11-02）：学生手机录到的是「老师讲课（远） + 自己和同桌说话（近）」。
+     * 对照本节课内容判断这位学生录音里有没有与课程无关的闲聊。返回模型原文（应为一行 JSON），解析交给调用方。
+     */
+    suspend fun focusAnalysis(courseName: String, lecture: String, studentText: String): String = chat(
+        system = "你是课堂专注度分析助手。给你两段文字：①本节「$courseName」课的内容概要；②某位学生手机在座位上录到的语音转写" +
+            "（里面既有远处老师讲课，也有学生本人和周围同学的说话）。判断这位学生上课时有没有讲与课程无关的话、和同学闲聊、开小差。" +
+            "只输出一行 JSON，不要其他文字：{\"verdict\":\"认真\"或\"疑似开小差\"或\"疑似聊天\",\"evidence\":\"不超过30字的依据，可引用原话\",\"confidence\":0到100的整数}。" +
+            "转写里绝大部分是课程内容时判「认真」；不要因为识别错字误判。",
+        user = "【课程内容概要】\n${lecture.take(3000)}\n\n【学生录音转写】\n${studentText.take(9000)}",
+        maxTokens = 512
+    )
 
     override suspend fun answer(question: String, context: String, maxTokens: Int): String {
         if (question.isBlank()) return "（问题为空）"

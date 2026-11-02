@@ -434,7 +434,7 @@ private fun TeacherAssignmentList(
                 KewuSecondaryButton("重新加载", onRetry, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
             }
             assignments == null -> KewuLoading()
-            assignments.isEmpty() -> KewuEmpty("暂无作业，点上方「发布新作业」开始")
+            assignments.isEmpty() -> KewuEmpty("暂无作业")
             else -> assignments.sortedForDisplay { it }.forEachIndexed { i, a ->
                 val p = rememberEnterProgress(3 + i, stepMs = 50L)
                 TeacherAssignmentRow(a, courseNames[a.courseId] ?: a.courseId, p) { onOpen(a.id) }
@@ -568,7 +568,7 @@ private fun PendingReviewScreen(
                         )
                     } else {
                         Spacer(Modifier.height(2.dp))
-                        Text("服务端汇总暂不可用，以下为本地汇总（无优先级与积压数据）",
+                        Text("本地汇总",
                             color = cs.onSurfaceVariantSummary, fontSize = 12.sp)
                     }
                 }
@@ -754,23 +754,28 @@ private fun TeacherAssignmentDetail(
                     }
                     Spacer(Modifier.height(6.dp))
 
+                    // 2026-11-02：单独发给 1 位同学的作业（补救练习等）不显示「已交 1 人」、批阅统计、查重、分层补救这些
+                    // 面向全班的统计——只看这位同学交没交、得几分
+                    val solo = a.targetStudents.size == 1
                     // 2026-10-26：按学生看作业（每人一行，点进看用时 / 正确率 / 逐题 / AI 总结）
-                    KewuSectionTitle("学生作业（${submissions?.size ?: 0} 人已交）")
+                    KewuSectionTitle(
+                        when {
+                            solo && submissions.isNullOrEmpty() -> "学生作业 · 未提交"
+                            solo -> "学生作业"
+                            else -> "学生作业（${submissions?.size ?: 0} 人已交）"
+                        },
+                    )
                     StudentWorkList(submissions, a.totalScore) { onOpenStudent(it.id) }
-                    if (!submissions.isNullOrEmpty() && a.questions.isNotEmpty()) {
+                    if (!solo && !submissions.isNullOrEmpty() && a.questions.isNotEmpty()) {
                         Spacer(Modifier.height(10.dp))
                         // 2026-10-26 AI 分层补救：按掌握程度分层，给每层出针对性练习、只发给该层
-                        KewuPrimaryButton(
-                            "AI 分层补救 · 按掌握程度给每层同学出针对性练习",
-                            onRemedial,
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                        )
+                        KewuPrimaryButton("AI分层补救", onRemedial, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
                     }
                     Spacer(Modifier.height(6.dp))
 
                     // 2026-10-26：老师也能看到自己布置的题（只读，选择 / 判断题高亮正确答案；填空 / 简答显示参考答案）
                     if (a.questions.isNotEmpty()) {
-                        KewuSectionTitle("题目（共 ${a.questions.size} 题 · 已标出正确答案）")
+                        KewuSectionTitle("题目（${a.questions.size} 题）")
                         a.questions.forEachIndexed { qi, q ->
                             QuestionAnswerCard(
                                 q = q, index = qi + 1, value = q.answer, onValue = {},
@@ -779,19 +784,20 @@ private fun TeacherAssignmentDetail(
                             Spacer(Modifier.height(10.dp))
                         }
                     }
-                    // 批阅统计
-                    KewuSectionTitle("批阅统计")
-                    TeacherStatsCard(pageBackdrop, stats)
-                    Spacer(Modifier.height(6.dp))
+                    if (!solo) {
+                        KewuSectionTitle("批阅统计")
+                        TeacherStatsCard(pageBackdrop, stats)
+                        Spacer(Modifier.height(6.dp))
+                    }
 
-                    // 智能批阅队列（点进批阅详情）
-                    KewuSectionTitle("智能批阅队列（AI 按优先级排序）")
+                    KewuSectionTitle("批阅队列")
                     TeacherQueueCard(pageBackdrop, queue, onReview)
                     Spacer(Modifier.height(6.dp))
 
-                    // 相似度查重
-                    KewuSectionTitle("相似片段检测")
-                    TeacherSimilarityCard(pageBackdrop, similarity)
+                    if (!solo) {
+                        KewuSectionTitle("相似检测")
+                        TeacherSimilarityCard(pageBackdrop, similarity)
+                    }
                     Spacer(Modifier.height(24.dp))
                 } ?: KewuEmpty("未找到该作业")
             }
@@ -1129,7 +1135,7 @@ private fun ReviewSubmissionScreen(
                         val a = ai
                         if (a == null) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text("让 AI 先给一份初步评价，老师只需确认或修改",
+                                Text("AI 初评",
                                     color = cs.onSurfaceSecondary, fontSize = 13.sp, modifier = Modifier.weight(1f))
                                 if (aiLoading) InfiniteProgressIndicator(size = 18.dp)
                             }
@@ -1258,7 +1264,7 @@ private fun ReviewSubmissionScreen(
         KewuConfirmDialog(
             show = confirmReturn,
             title = "打回这份作业？",
-            summary = "学生会收到打回通知和你的修改意见，修改后可重新提交。",
+            summary = "学生修改后可重新提交",
             confirmText = "打回",
             onConfirm = { returnConfirmed = true; confirmReturn = false },
             onDismiss = { confirmReturn = false },

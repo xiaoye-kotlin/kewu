@@ -69,7 +69,14 @@ fun App() {
         LaunchedEffect(expired) {
             if (expired > 0 && loggedIn) {
                 clearSession(keepAccount = true)
-                snackbar.toast("登录已过期，请重新登录")
+                snackbar.toast(if (KewuApi.kickedByOtherDevice) "账号已在其他设备登录" else "登录已过期，请重新登录")
+            }
+        }
+        // 单设备登录：登录态下每分钟探活一次，被同类设备挤下线时尽快回登录页（2026-11-02）
+        LaunchedEffect(loggedIn) {
+            while (loggedIn) {
+                KewuApi.checkSession()
+                kotlinx.coroutines.delay(60_000)
             }
         }
         if (loggedIn) {

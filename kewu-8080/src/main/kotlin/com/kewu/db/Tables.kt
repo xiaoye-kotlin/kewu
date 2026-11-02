@@ -14,6 +14,8 @@ object Users : Table("users") {
     val className = varchar("class_name", 128).nullable() // 班级（教师用；学生以加入的教学班为准）
     val phone = varchar("phone", 32).nullable()           // 联系方式：只给任课老师看（2026-10-26）
     val email = varchar("email", 128).nullable()
+    val subject = varchar("subject", 64).nullable()      // 所教科目（教师资料，2026-11-02）
+    val bio = varchar("bio", 512).nullable()             // 个人简介（2026-11-02）
     // 账户状态：active / disabled（总控端可禁用，2026-10-28 移植 admin 时加）
     val status = varchar("status", 16).default("active")
     override val primaryKey = PrimaryKey(id)
@@ -219,6 +221,8 @@ object ClassRecordings : Table("class_recordings") {
     val transcript = text("transcript").nullable()
     val summary = text("summary").nullable()      // AI 课堂纪要（转写后由 MaaS 生成，小悟辅导学生时引用）
     val asrError = text("asr_error").nullable()   // 转写失败原因
+    val stage = varchar("stage", 64).nullable()   // 进度文案：等待上传 / 转写中 2/5 / 合并中 / 生成纪要 / 完成（2026-11-02）
+    val progress = integer("progress").nullable() // 0-100
     override val primaryKey = PrimaryKey(sessionId)
 }
 
@@ -307,5 +311,35 @@ val allTables = arrayOf(
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
     Questions,
     Uploads, CourseMaterials, ClassRecordings, CourseSchedules, CrashReports,
-    Recordings, RecordingSessions, BilibiliNotes
+    Recordings, RecordingSessions, BilibiliNotes, UserSessions, RecordingTranscripts
 )
+
+// 单设备登录（2026-11-02）：每个账号每类平台（android / desktop / ios）只认最新一次登录的 sid，
+// 同类设备后登录会把先登录的挤掉；不同类平台互不影响。
+object UserSessions : Table("user_sessions") {
+    val userId = varchar("user_id", 36)
+    val platform = varchar("platform", 16)
+    val sid = varchar("sid", 36)
+    val updatedAt = varchar("updated_at", 32)
+    override val primaryKey = PrimaryKey(userId, platform)
+}
+
+// 单份录音的转写 + 课堂专注分析（2026-11-02）：下课后每端录音各自转写，按时间互补合并成完整课堂文本；
+// 学生端录音再交给 MaaS 判断有没有闲聊 / 开小差，教师端「录音管理」查看
+object RecordingTranscripts : Table("recording_transcripts") {
+    val recordingId = varchar("recording_id", 64)
+    val sessionId = varchar("session_id", 96).index()
+    val courseId = varchar("course_id", 64).index()
+    val role = varchar("role", 16)
+    val username = varchar("username", 64).nullable()
+    val displayName = varchar("display_name", 128).nullable()
+    val url = varchar("url", 1024)
+    val status = varchar("status", 16)                       // DONE / FAILED
+    val transcript = text("transcript").nullable()
+    val segments = text("segments").nullable()               // JSON [[startMs,endMs,"text"],...]
+    val focusVerdict = varchar("focus_verdict", 16).nullable() // 认真 / 疑似开小差 / 疑似聊天
+    val focusEvidence = varchar("focus_evidence", 512).nullable()
+    val focusConfidence = integer("focus_confidence").nullable()
+    val updatedAt = varchar("updated_at", 32)
+    override val primaryKey = PrimaryKey(recordingId)
+}

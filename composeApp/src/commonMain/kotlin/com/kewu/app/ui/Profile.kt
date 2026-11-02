@@ -32,6 +32,9 @@ data class UserProfile(
     val className: String,
     val phone: String,
     val email: String,
+    /** 所教科目（教师）/ 个人简介（2026-11-02）。 */
+    val subject: String = "",
+    val bio: String = "",
 )
 
 /**
@@ -55,12 +58,12 @@ internal object ProfileStore {
         val raw = com.kewu.app.kvGet(key(user)) ?: return null
         val f = raw.split(SEP)
         if (f.size < 6) return null
-        return UserProfile(f[0], f[1], f[2], f[3], f[4], f[5])
+        return UserProfile(f[0], f[1], f[2], f[3], f[4], f[5], f.getOrElse(6) { "" }, f.getOrElse(7) { "" })
     }
 
     fun save(user: String, p: UserProfile) {
         if (user.isBlank()) return
-        com.kewu.app.kvSet(key(user), listOf(p.name, p.studentId, p.school, p.className, p.phone, p.email)
+        com.kewu.app.kvSet(key(user), listOf(p.name, p.studentId, p.school, p.className, p.phone, p.email, p.subject, p.bio)
             .joinToString(SEP) { it.replace(SEP, "") })
     }
 

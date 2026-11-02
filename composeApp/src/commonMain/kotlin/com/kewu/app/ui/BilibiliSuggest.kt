@@ -146,11 +146,6 @@ internal fun BilibiliVideoCard(
                     video.title, color = cs.onSurface, fontSize = 13.sp,
                     fontWeight = FontWeight.Medium, lineHeight = 18.sp, maxLines = 2,
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "在课悟内直接播放",
-                    color = BILI_PINK, fontSize = 11.sp,
-                )
             }
             Icon(
                 COUIIcons.ChevronForward, contentDescription = null,
@@ -203,18 +198,21 @@ internal fun BilibiliSuggestRow(keyword: String, modifier: Modifier = Modifier) 
             Text("B站", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.width(8.dp))
-        Text("暂时没找到「$keyword」的相关视频，可在助教页「B站视频」里换个词搜", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+        Text("没找到「$keyword」相关视频", color = cs.onSurfaceSecondary, fontSize = 12.sp)
     }
 }
 
 // ───────────────────────── 手动浏览面板 ─────────────────────────
+
+/** 顶部标签的「推荐」项（选中时显示为你推荐列表）。 */
+private const val BILI_TAB_REC = "推荐"
 
 private val BILI_SUBJECTS = listOf(
     "高等数学", "线性代数", "概率论", "大学物理", "C 语言", "数据结构", "英语四级", "思修", "近代史",
 )
 
 /**
- * 「B 站学习视频」全屏面板（2026-11-02 重做）：液态玻璃搜索栏 + 学科快捷词 + 「为你推荐」/ 搜索结果。
+ * 「B 站学习视频」全屏面板（2026-11-02 重做）：液态玻璃搜索栏 + 顶部标签（「推荐」+ 学科）+ 推荐列表 / 搜索结果。
  * 视频卡错峰上浮入场；底部留出导航栏空间（[KewuNavClearance]），最后的按钮不会被挡。
  */
 @Composable
@@ -227,18 +225,30 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
     var results by remember { mutableStateOf<List<BilibiliVideoInfo>?>(null) }
     var searching by remember { mutableStateOf(false) }
     var searchSeq by remember { mutableStateOf(0) }
+    // 当前选中的顶部标签：「推荐」/ 某学科 / ""（搜索框自定义搜索）
+    var tab by remember { mutableStateOf(BILI_TAB_REC) }
 
+    // 切标签 / 再搜时取消上一次搜索，免得旧结果晚到盖掉当前标签
+    var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     fun search(subject: String) {
         val s = subject.trim()
-        if (s.isEmpty() || searching) return
+        if (s.isEmpty()) return
         haptic(HapticKind.Light)
+        searchJob?.cancel()
         searching = true
         results = null
-        scope.launch {
+        searchJob = scope.launch {
             results = KewuApi.getBilibiliVideos(s).orEmpty()
             searching = false
             searchSeq++
         }
+    }
+    fun showRecommend() {
+        searchJob?.cancel()
+        searching = false
+        results = null
+        query = ""
+        tab = BILI_TAB_REC
     }
 
     BackHandler { onDismiss() }
@@ -270,7 +280,7 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                             textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
                             cursorBrush = SolidColor(cs.primary),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(onSearch = { search(query) }),
+                            keyboardActions = KeyboardActions(onSearch = { if (query.isNotBlank()) tab = ""; search(query) }),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
@@ -279,17 +289,17 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                         enter = scaleIn(spring(dampingRatio = 0.6f, stiffness = 500f)) + fadeIn(),
                         exit = scaleOut(tween(120)) + fadeOut(tween(120)),
                     ) {
-                        IconButton(onClick = { haptic(HapticKind.Tick); query = ""; results = null }, minWidth = 32.dp, minHeight = 32.dp, cornerRadius = 16.dp) {
+                        IconButton(onClick = { haptic(HapticKind.Tick); showRecommend() }, minWidth = 32.dp, minHeight = 32.dp, cornerRadius = 16.dp) {
                             Icon(COUIIcons.Close, contentDescription = "清空", tint = cs.onSurfaceSecondary, modifier = Modifier.size(14.dp))
                         }
                     }
                     Spacer(Modifier.width(4.dp))
                     // 绿芯搜索钮（与发送钮同语言）：有输入才亮
-                    val active = query.isNotBlank() && !searching
+                    val active = query.isNotBlank()
                     Box(
                         Modifier.size(42.dp).clip(CircleShape)
                             .background(if (active) KewuGreen else cs.onSurface.copy(alpha = 0.08f))
-                            .clickable(enabled = active) { search(query) },
+                            .clickable(enabled = active) { tab = ""; search(query) },
                         contentAlignment = Alignment.Center,
                     ) {
                         if (searching) InfiniteProgressIndicator(Modifier.size(18.dp))
@@ -303,10 +313,15 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                Chip(
+                    selected = tab == BILI_TAB_REC,
+                    onClick = { haptic(HapticKind.Tick); showRecommend() },
+                    label = BILI_TAB_REC,
+                )
                 BILI_SUBJECTS.forEach { s ->
                     Chip(
-                        selected = query == s,
-                        onClick = { haptic(HapticKind.Tick); query = s; search(s) },
+                        selected = tab == s,
+                        onClick = { haptic(HapticKind.Tick); tab = s; query = s; search(s) },
                         label = s,
                     )
                 }
@@ -326,16 +341,15 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                     searching -> Row(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         InfiniteProgressIndicator(Modifier.size(18.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text("正在搜索，可能需要十几秒…", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                        Text("正在搜索…", color = cs.onSurfaceSecondary, fontSize = 13.sp)
                     }
-                    results!!.isEmpty() -> KewuEmpty("暂时没有相关视频，换个关键词试试")
+                    results!!.isEmpty() -> KewuEmpty("没有相关视频，换个词试试")
                     else -> {
                         Text("「${query.trim()}」的搜索结果", color = cs.onSurfaceSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(start = 4.dp))
                         // key 跟随搜索次数：每次新结果都重新播一遍错峰入场
                         androidx.compose.runtime.key(searchSeq) {
                             results!!.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
                         }
-                        KewuSecondaryButton("回到为你推荐", { haptic(HapticKind.Tick); results = null; query = "" }, Modifier.fillMaxWidth())
                     }
                 }
                 // 底部给悬浮导航栏让位（2026-11-02 用户报「换一批推荐」被导航栏挡住点不到）

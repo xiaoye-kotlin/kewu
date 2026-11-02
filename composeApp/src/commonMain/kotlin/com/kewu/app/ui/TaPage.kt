@@ -95,6 +95,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.HapticKind
@@ -498,6 +499,12 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         if (available.y < 0) pullAcc = 0f
                         return Offset.Zero
                     }
+
+                    // 松手即归零：旧版松手后 pullAcc 留在半路，提示文字在两种状态间来回跳
+                    override suspend fun onPreFling(available: Velocity): Velocity {
+                        pullAcc = 0f
+                        return Velocity.Zero
+                    }
                 }
             }
             LazyColumn(
@@ -506,19 +513,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item(key = "history-tip") {
-                    Text(
-                        when {
-                            pullAcc > 10f -> "松开加载更早的对话…"
-                            hasMoreHistory -> "下拉加载更早的对话"
-                            else -> ""
-                        },
-                        color = cs.onSurfaceSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
                 item(key = "date-divider") {
                     Text(
                         "今天",
@@ -879,5 +874,33 @@ private fun VoiceWave(active: Boolean) {
                     .background(color),
             )
         }
+    }
+}
+
+/**
+ * 对话列表顶部「下拉查看更早对话」提示（2026-11-02 重做）：文字固定不变，只用一个小进度环跟手表示下拉量，
+ * 越过阈值直接加载。旧版在「下拉… / 松开…」两句之间随手指抖动来回切换，看起来一直在闪。
+ */
+@Composable
+internal fun PullHistoryHint(hasMore: Boolean, pull: Float) {
+    val cs = COUITheme.colorScheme
+    if (!hasMore) {
+        Spacer(Modifier.height(4.dp))
+        return
+    }
+    val p by androidx.compose.animation.core.animateFloatAsState(pull.coerceIn(0f, 1f), tween(90), label = "pullHint")
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        io.github.suqi8.coui.kmp.basic.CircularProgressIndicator(
+            progress = p,
+            colors = io.github.suqi8.coui.kmp.basic.ProgressIndicatorDefaults.circularProgressIndicatorColors(foregroundColor = KewuGreen),
+            strokeWidth = 1.8.dp,
+            size = 13.dp,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("下拉查看更早对话", color = cs.onSurfaceSecondary, fontSize = 11.sp)
     }
 }

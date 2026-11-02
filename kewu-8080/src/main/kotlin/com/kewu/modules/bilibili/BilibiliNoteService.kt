@@ -35,8 +35,22 @@ class BilibiliNoteService(
 ) {
     private val log = LoggerFactory.getLogger(BilibiliNoteService::class.java)
 
+    /** 正在跑流水线的视频：重复点击不重复起任务。 */
+    private val running: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    /**
+     * 受理一次生成：同一视频正在跑就返回 false（不重复起）；受理时**同步**写 PROCESSING，
+     * 免得 App 第一次轮询还读到上次的 FAILED，表现成「点了没反应」。
+     */
+    suspend fun tryStart(bvid: String): Boolean {
+        if (!running.add(bvid)) return false
+        setStatus(bvid, statusJson("PROCESSING", stage = "获取视频信息"))
+        return true
+    }
+
     /** 后台协程跑整条流水线：B站抓取 → 下载 → OBS → SIS 转写 → 盘古笔记 → 落库 → 更新状态。 */
     suspend fun generate(bvid: String) {
+        running.add(bvid)
         setStatus(bvid, statusJson("PROCESSING", stage = "获取视频信息"))
         try {
             // 第一步：B站 API 拿标题 + 音频直链（内部带 UA/Referer，防 412）
@@ -61,6 +75,8 @@ class BilibiliNoteService(
             // 任何失败（B站解析失败 / 下载失败 / SIS 超时 / 大模型异常）都只记 FAILED，不抛 500
             log.error("B站笔记生成失败 bvid=$bvid：${e.message}")
             setStatus(bvid, statusJson("FAILED", e.message ?: e.javaClass.simpleName))
+        } finally {
+            running.remove(bvid)
         }
     }
 

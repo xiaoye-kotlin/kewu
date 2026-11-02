@@ -230,7 +230,7 @@ private fun StorageOverview(onBack: () -> Unit, onOpenChat: () -> Unit) {
                     val chat = r?.get(Category.CHAT)
                     StorageRow(
                         category = Category.CHAT,
-                        summary = if (chat == null) "正在统计…" else "与小悟的对话 · ${chat.count} 条 · 可按天删除",
+                        summary = if (chat == null) "正在统计…" else "${chat.count} 条对话",
                         bytes = chat?.bytes,
                         approx = true,
                         onClick = { haptic(HapticKind.Tick); onOpenChat() },
@@ -305,8 +305,8 @@ private fun StorageOverview(onBack: () -> Unit, onOpenChat: () -> Unit) {
         title = "清理${target?.title() ?: ""}？",
         summary = when (target) {
             Category.IMAGE -> "下次查看图片会重新下载"
-            Category.ATTACH -> "正在填写的作业里已经选好的附件需要重新选择"
-            Category.REC_TEMP -> "只删除中断或已上传的录音临时文件，待重传的录音不受影响"
+            Category.ATTACH -> "已选的附件需重新选择"
+            Category.REC_TEMP -> "待传录音不受影响"
             else -> "清理后不影响账号数据与已上传内容"
         },
         confirmText = "清理",
@@ -316,7 +316,7 @@ private fun StorageOverview(onBack: () -> Unit, onOpenChat: () -> Unit) {
     KewuConfirmDialog(
         show = confirmAll,
         title = "一键清理缓存？",
-        summary = "将清理图片缓存、附件临时文件、录音残留和其他缓存。聊天记录与待重传录音不受影响",
+        summary = "不影响聊天记录和待传录音",
         confirmText = "清理",
         onConfirm = { clean(QuickCats); confirmAll = false },
         onDismiss = { confirmAll = false },
@@ -656,7 +656,7 @@ private fun ChatHistoryManager(onBack: () -> Unit) {
             null -> ""
         },
         summary = if (op is ChatDelete.One) "「${op.entry.text.take(40)}${if (op.entry.text.length > 40) "…" else ""}」"
-        else "将删除 $affected 条消息，删除后无法恢复（只删本机记录，不影响小悟的回答能力）",
+        else "将删除 $affected 条，无法恢复",
         confirmText = "删除",
         onConfirm = { op?.let { perform(it) }; pending = null },
         onDismiss = { pending = null },

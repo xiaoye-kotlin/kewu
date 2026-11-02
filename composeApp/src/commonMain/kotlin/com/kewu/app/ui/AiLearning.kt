@@ -190,7 +190,7 @@ private fun MistakeCard(m: Mistake, onMastered: () -> Unit) {
                 Text(m.result.standardAnswer.ifBlank { m.question.answer }, color = KewuGreen, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
             Spacer(Modifier.height(10.dp))
-            KewuSecondaryButton(if (open) "收起" else "小悟讲错因 · 举一反三", { open = !open }, Modifier.fillMaxWidth())
+            KewuSecondaryButton(if (open) "收起" else "讲错因", { open = !open }, Modifier.fillMaxWidth())
             AnimatedVisibility(
                 visible = open,
                 enter = expandVertically(spring(dampingRatio = 0.86f, stiffness = 380f)) + fadeIn(),
@@ -403,7 +403,7 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(14.dp))
-            KewuSectionTitle("知识点掌握度 · 点知识点看 B 站讲解视频")
+            KewuSectionTitle("知识点掌握度")
             KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
                 Column(Modifier.padding(vertical = 8.dp)) {
                     if (mastery.isEmpty()) Text(

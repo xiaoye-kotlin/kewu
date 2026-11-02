@@ -265,7 +265,7 @@ fun QuestionEditorCard(
     val latest by rememberUpdatedState(questions)
     val latestOnChange by rememberUpdatedState(onChange)
     Column(Modifier.fillMaxWidth()) {
-        KewuSectionTitle("题目（可选 · 留空则发布纯文本作业）")
+        KewuSectionTitle("题目（可选）")
 
         ManualQuestionBlock { t ->
             val q = defaultQuestion(t)
@@ -276,7 +276,7 @@ fun QuestionEditorCard(
         Spacer(Modifier.height(10.dp))
 
         if (questions.isEmpty()) {
-            Text("还没有题目：在上方选题型生成模板，或在下方让 AI 按知识点出题。",
+            Text("还没有题目",
                 color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
             Spacer(Modifier.height(6.dp))
@@ -388,7 +388,7 @@ private fun ManualQuestionBlock(onAdd: (QuestionType) -> Unit) {
         ) {
             Column {
                 Spacer(Modifier.height(8.dp))
-                Text("选择题型，自动生成该题型的模板，再逐项填写题干、选项和答案",
+                Text("选择题型生成模板",
                     color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp, lineHeight = 17.sp)
                 Spacer(Modifier.height(10.dp))
                 Row(
@@ -718,8 +718,8 @@ private fun AiGenerateBlock(
             }
             Spacer(Modifier.height(6.dp))
             Text(
-                if (running) "正在并行生成，每道约 20–40 秒，出好一道就追加一道到题目末尾，可继续编辑其它题…"
-                else "生成的题会追加在已有题目后面，不会覆盖你出的题。",
+                if (running) "生成中，每道约 20–40 秒…"
+                else "追加在已有题目后",
                 color = cs.onSurfaceVariantSummary, fontSize = 12.5.sp, lineHeight = 17.sp,
             )
             Spacer(Modifier.height(10.dp))

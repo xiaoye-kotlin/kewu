@@ -6,6 +6,23 @@ import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.Slider
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Pause
+import io.github.suqi8.coui.kmp.icon.extended.Play
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -50,7 +67,9 @@ import com.kewu.app.DashVideoSources
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
+import com.kewu.app.VideoControls
 import com.kewu.app.VideoFullscreen
+import com.kewu.app.formatPlayTime
 import com.kewu.app.VideoPlayerView
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
@@ -67,8 +86,8 @@ import kotlinx.coroutines.launch
  *
  * - **全 App 只挂一个宿主**（App 根部 [BilibiliPlayerHost]）：旧版助教页根部和它里面的 B 站面板各挂一个，
  *   同一个视频被建了两个 ExoPlayer 同时播 → 用户听到「回音」。页面里不要再调用宿主。
- * - 全屏：播放器控制条右下角的全屏键 → 横屏 + 隐藏系统栏（Android 实现见 VideoPlayer.android.kt），
- *   返回键先退出全屏。
+ * - 控制条自绘（[VideoControlsLayer]）：液态玻璃播放 / 全屏键 + coui 进度条，画面上左右滑动快进快退；
+ *   全屏 = 横屏 + 隐藏系统栏（Android 实现见 VideoPlayer.android.kt），返回键先退出全屏。
  * - 播放器下方：「AI 视频总结」——后端把视频音频交给华为云 SIS 转写、大模型总结；
  *   完成后「问小悟这个视频」进入全 App 统一的对话界面 [KewuAiChatScreen]。
  */
@@ -139,6 +158,7 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                         onError = { error = it },
                         modifier = Modifier.fillMaxSize(),
                     )
+                    if (VideoControls.available) VideoControlsLayer(fullscreen)
                 } else {
                     Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -160,7 +180,6 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                 ) {
                     Text(video.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp,
                         modifier = Modifier.padding(horizontal = 4.dp))
-                    Text("点播放器右下角的全屏键横屏观看", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 4.dp))
                     VideoSummaryCard(backdrop, video.bvid, onNote = { note = it }, onAsk = { asking = true })
                     Spacer(Modifier.height(12.dp))
                 }
@@ -185,6 +204,9 @@ private fun VideoSummaryCard(
     var note by remember(bvid) { mutableStateOf<BiliVideoNote?>(null) }
     var loaded by remember(bvid) { mutableStateOf(false) }
     var polling by remember(bvid) { mutableStateOf(false) }
+    // 点了「AI 总结」到服务器受理之间的即时反馈；受理失败给一句短提示
+    var starting by remember(bvid) { mutableStateOf(false) }
+    var startError by remember(bvid) { mutableStateOf<String?>(null) }
     val p = rememberEnterProgress(0, baseDelayMs = 120L)
 
     suspend fun refresh() {
@@ -214,7 +236,6 @@ private fun VideoSummaryCard(
                 Box(Modifier.size(8.dp).clip(CircleShape).background(KewuGreen))
                 Spacer(Modifier.width(8.dp))
                 Text("AI 视频总结", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                Text("华为云语音转写", color = cs.onSurfaceSecondary, fontSize = 11.5.sp)
             }
             Spacer(Modifier.height(10.dp))
             val n = note
@@ -225,32 +246,38 @@ private fun VideoSummaryCard(
                     Spacer(Modifier.height(14.dp))
                     KewuPrimaryButton("问小悟这个视频", { haptic(HapticKind.Light); onAsk() }, Modifier.fillMaxWidth())
                 }
-                polling || n?.status == "PROCESSING" -> {
+                starting || polling || n?.status == "PROCESSING" -> {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         InfiniteProgressIndicator(Modifier.size(18.dp))
                         Spacer(Modifier.width(10.dp))
-                        Text("正在${n?.stage ?: "处理"}…", color = cs.onSurface, fontSize = 13.5.sp)
+                        Text(if (starting) "正在开始…" else "正在${n?.stage ?: "处理"}…", color = cs.onSurface, fontSize = 13.5.sp)
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text("视频越长越久，一般 1–3 分钟。可以边看视频边等，好了会自动显示。", color = cs.onSurfaceSecondary, fontSize = 12.sp, lineHeight = 17.sp)
+                    Text("一般 1–3 分钟，可以边看边等", color = cs.onSurfaceSecondary, fontSize = 12.sp)
                 }
                 else -> {
-                    if (n?.status == "FAILED") {
-                        Text("上次生成失败：${n.reason.orEmpty().take(80)}", color = cs.error, fontSize = 12.5.sp, lineHeight = 18.sp)
+                    val failed = n?.status == "FAILED"
+                    val err = startError ?: if (failed) "上次没生成成功，再试一次" else null
+                    if (err != null) {
+                        Text(err, color = cs.error, fontSize = 12.5.sp)
                         Spacer(Modifier.height(8.dp))
+                    } else {
+                        Text("转写视频语音，提炼知识点和大纲", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+                        Spacer(Modifier.height(12.dp))
                     }
-                    Text(
-                        "提取这个视频的音频交给华为云转写成文字，再由小悟总结出核心知识点和大纲；生成后可以针对视频内容向小悟提问。",
-                        color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    KewuPrimaryButton(if (n?.status == "FAILED") "重新生成" else "AI 总结这个视频", {
+                    KewuPrimaryButton(if (failed || startError != null) "重新生成" else "AI 总结这个视频", {
+                        if (starting) return@KewuPrimaryButton
                         haptic(HapticKind.Light)
+                        starting = true
+                        startError = null
                         scope.launch {
                             if (KewuApi.generateBilibiliNote(bvid)) {
                                 note = BiliVideoNote("PROCESSING", "获取视频信息", null, "", "")
                                 polling = true
+                            } else {
+                                startError = "网络不太好，没能开始，请重试"
                             }
+                            starting = false
                         }
                     }, Modifier.fillMaxWidth())
                 }
@@ -312,5 +339,145 @@ private fun VideoTutorChat(title: String, summary: String, transcript: String, o
                 }
             },
         )
+    }
+}
+
+/**
+ * 自绘播放控制层（2026-11-02 用户：自带控制条太高太长）：
+ * - 底部紧凑一行：液态玻璃播放键 + 时间 + coui [Slider] 进度（可拖）+ 总时长 + 液态玻璃全屏键；
+ * - 单击画面显示 / 隐藏控制条（播放中 3 秒自动隐藏），双击暂停 / 播放；
+ * - 画面上左右滑动快进快退（满屏宽 ≈ 90 秒），中间提示「+15 秒」。
+ * 玻璃键采样的是控制条自己的暗色渐变层（视频是 SurfaceView，采不到）；进出场只做位移，不做淡入（玻璃祖先禁 alpha）。
+ */
+@Composable
+private fun VideoControlsLayer(fullscreen: Boolean) {
+    val c = VideoControls
+    var shown by remember { mutableStateOf(true) }
+    var poke by remember { mutableStateOf(0) }
+    var dragFrac by remember { mutableStateOf<Float?>(null) }
+    var swipeDelta by remember { mutableStateOf<Long?>(null) }
+    var widthPx by remember { mutableStateOf(1) }
+    LaunchedEffect(shown, c.playing, poke, dragFrac) {
+        if (shown && c.playing && dragFrac == null) { delay(3_000); shown = false }
+    }
+    Box(
+        Modifier.fillMaxSize()
+            .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onTap = { shown = !shown; poke++ },
+                    onDoubleTap = { haptic(HapticKind.Tick); c.toggle(); shown = true; poke++ },
+                )
+            }
+            .pointerInput(Unit) {
+                var acc = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { acc = 0f; swipeDelta = 0L },
+                    onDragEnd = {
+                        swipeDelta?.let { d -> if (d != 0L) { haptic(HapticKind.Tick); c.seekTo(c.positionMs + d) } }
+                        swipeDelta = null; shown = true; poke++
+                    },
+                    onDragCancel = { swipeDelta = null },
+                ) { _, dx ->
+                    acc += dx
+                    swipeDelta = (acc / widthPx * 90_000f).toLong()
+                }
+            },
+    ) {
+        // 中间：滑动快进提示 / 缓冲转圈
+        val sd = swipeDelta
+        if (sd != null && sd != 0L) {
+            val target = (c.positionMs + sd).coerceIn(0L, c.durationMs.coerceAtLeast(0L))
+            Text(
+                (if (sd > 0) "+" else "-") + "${kotlin.math.abs(sd) / 1000} 秒  " + formatPlayTime(target),
+                color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.align(Alignment.Center).clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black.copy(alpha = 0.55f)).padding(horizontal = 14.dp, vertical = 8.dp),
+            )
+        } else if (c.buffering) {
+            InfiniteProgressIndicator(Modifier.align(Alignment.Center).size(28.dp))
+        }
+        // 底部控制条：只做位移进出
+        Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(if (fullscreen) 72.dp else 58.dp).clipToBounds()) {
+            AnimatedVisibility(
+                visible = shown || c.durationMs <= 0L,
+                enter = slideInVertically(spring(dampingRatio = 0.85f, stiffness = 500f)) { it },
+                exit = slideOutVertically(tween(180)) { it },
+                modifier = Modifier.fillMaxSize(),
+            ) {
+                val backdrop = rememberGlassBackdrop()
+                Box(Modifier.fillMaxSize()) {
+                    Box(
+                        Modifier.matchParentSize().layerBackdrop(backdrop)
+                            .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.62f)))),
+                    )
+                    val total = c.durationMs
+                    val frac = dragFrac ?: if (total > 0) (c.positionMs.toFloat() / total).coerceIn(0f, 1f) else 0f
+                    Row(
+                        Modifier.fillMaxSize().padding(horizontal = 10.dp).padding(bottom = if (fullscreen) 14.dp else 8.dp),
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
+                        VideoGlassBtn(backdrop, if (c.playing) "暂停" else "播放", onClick = { c.toggle(); poke++ }) {
+                            Icon(if (c.playing) COUIIcons.Pause else COUIIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
+                        Row(Modifier.weight(1f).height(36.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(formatPlayTime(if (dragFrac != null) (frac * total).toLong() else c.positionMs), color = Color.White, fontSize = 11.sp, maxLines = 1)
+                            Slider(
+                                value = frac,
+                                onValueChange = { dragFrac = it; poke++ },
+                                onValueChangeFinished = {
+                                    dragFrac?.let { c.seekTo((it * total).toLong()) }
+                                    dragFrac = null
+                                },
+                                enabled = total > 0,
+                                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                            )
+                            Text(if (total > 0) formatPlayTime(total) else "--:--", color = Color.White.copy(alpha = 0.8f), fontSize = 11.sp, maxLines = 1)
+                        }
+                        VideoGlassBtn(backdrop, if (fullscreen) "退出全屏" else "全屏", onClick = { VideoFullscreen.on = !fullscreen; poke++ }) {
+                            FullscreenGlyph(exit = fullscreen)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 视频控制条上的液态玻璃圆钮（36dp）。 */
+@Composable
+private fun VideoGlassBtn(
+    backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop,
+    desc: String,
+    onClick: () -> Unit,
+    glyph: @Composable () -> Unit,
+) {
+    Box(Modifier.size(36.dp).border(0.8.dp, Color.White.copy(alpha = 0.28f), CircleShape)) {
+        KewuGlassCard(
+            backdrop = backdrop, shape = CircleShape, blurRadius = 10.dp, tintAlpha = 0.10f,
+            refractionHeight = 10.dp, refractionAmount = 14.dp, depthEffect = 0.5f,
+            modifier = Modifier.fillMaxSize(),
+            onClick = { haptic(HapticKind.Tick); onClick() },
+        ) {
+            Box(Modifier.fillMaxSize().semantics { contentDescription = desc }, contentAlignment = Alignment.Center) { glyph() }
+        }
+    }
+}
+
+/** 全屏 / 退出全屏图标：四角折线（coui 图标库没有全屏图标，这里自绘）。[exit] = 角朝内。 */
+@Composable
+private fun FullscreenGlyph(exit: Boolean) {
+    Canvas(Modifier.size(14.dp)) {
+        val w = size.width
+        val l = w * 0.36f
+        val sw = 1.8.dp.toPx()
+        val corners = listOf(Offset(0f, 0f) to Offset(1f, 1f), Offset(w, 0f) to Offset(-1f, 1f), Offset(0f, w) to Offset(1f, -1f), Offset(w, w) to Offset(-1f, -1f))
+        corners.forEach { (o, d) ->
+            val p = if (exit) Offset(o.x + d.x * l, o.y + d.y * l) else o
+            val dx = if (exit) -d.x else d.x
+            val dy = if (exit) -d.y else d.y
+            drawLine(Color.White, p, Offset(p.x + dx * l, p.y), sw, cap = StrokeCap.Round)
+            drawLine(Color.White, p, Offset(p.x, p.y + dy * l), sw, cap = StrokeCap.Round)
+        }
     }
 }

@@ -62,6 +62,7 @@ import com.kewu.app.BackHandler
 import com.kewu.app.CourseInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
+import com.kewu.app.ClassNoteTarget
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.RecordingManager
@@ -291,6 +292,7 @@ fun TeacherConsolePage(
                         reload()
                     },
                     onOpenCourse = { drill = ConsoleDrill.SESSIONS(it) },
+                    onOpenNote = { drill = ConsoleDrill.CLASS_NOTE(it.courseId, it.date) },
                 )
                 is ConsoleDrill.SESSIONS -> CourseSessionsScreen(
                     course = d.course,
@@ -358,6 +360,7 @@ private fun ConsoleHome(
     onStarted: (AttendanceSession) -> Unit,
     onClosed: () -> Unit,
     onOpenCourse: (CourseInfo) -> Unit,
+    onOpenNote: (ClassNoteTarget) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     Column(
@@ -398,6 +401,13 @@ private fun ConsoleHome(
             )
         }
 
+        // 2026-11-02：下课后纪要生成进度（有正在生成的才出现）
+        ClassNoteProgressSection(
+            backdrop = backdrop,
+            courses = courses.orEmpty().map { it.id to it.name },
+            onOpen = onOpenNote,
+        )
+
         // ── 一键开课 / 上课中面板（coui 白卡，非玻璃） ──
         // （2026-10-26：原「跨课程待批阅」联调测试块已移除——正式入口在「作业」tab 顶部的待批阅卡）
         val p1 = rememberEnterProgress(1, baseDelayMs = 200L)
@@ -416,7 +426,7 @@ private fun ConsoleHome(
         KewuSectionTitle("我的课程", Modifier.riseEnter(p4))
         when {
             courses == null -> KewuLoading()
-            courses.isEmpty() -> KewuEmpty("暂无课程，可先到「我的 → 新建课程」创建")
+            courses.isEmpty() -> KewuEmpty("暂无课程")
             else -> courses.forEachIndexed { i, c ->
                 val pc = rememberEnterProgress(5 + i, baseDelayMs = 440L, stepMs = 50L)
                 // ★ 控制台聚合富信息：班级名 / 学生数 / 上课状态 / 今日签到率（文档 5.11 建议的课程卡片）
@@ -696,7 +706,7 @@ private fun QuickStartCard(
         Column(Modifier.padding(start = 18.dp, end = 18.dp, top = 18.dp)) {
             Text("一键开课", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text("发起签到即开课，学生扫码 / 暗号打卡", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+            Text("发起签到即开课", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             Spacer(Modifier.height(14.dp))
         }
         // 2026-10-26：「开始上课」→ 选课面板改为动画过渡（旧版瞬间跳变）：高度弹簧展开 + 内容淡入，
@@ -914,7 +924,7 @@ private fun LiveSessionCard(
     KewuConfirmDialog(
         show = confirmClose,
         title = "结束本节课？",
-        summary = "将关闭签到并同步下课状态；若课堂录音仍在进行，会先停止并上传。",
+        summary = "将关闭签到，录音会自动停止并上传",
         confirmText = "确认结束",
         cancelText = "再想想",
         onConfirm = {
@@ -1017,9 +1027,9 @@ private fun TeacherRecordingPanel(courseId: String) {
                     val sub = when (st) {
                         is RecordingStatus.Recording -> "录音中 ${fmtTime(st.elapsedSec)}"
                         is RecordingStatus.Uploading -> "录音完成，正在上传"
-                        is RecordingStatus.Success -> "已上传，下课后自动参与多端融合"
+                        is RecordingStatus.Success -> "已上传"
                         is RecordingStatus.Error -> "录音未完成"
-                        RecordingStatus.Idle -> "教师端录音融合时优先采用"
+                        RecordingStatus.Idle -> "点击开始录音"
                     }
                     Text(sub, color = if (recording) cs.error else cs.onSurfaceSecondary,
                         fontSize = 12.5.sp, maxLines = 1)
@@ -1049,7 +1059,7 @@ private fun TeacherRecordingPanel(courseId: String) {
                 }
                 is RecordingStatus.Success -> {
                     Spacer(Modifier.height(10.dp))
-                    KewuTag("已上传 · ${st.recordingId}", KewuGreen.copy(alpha = 0.18f), KewuGreen)
+                    KewuTag("已上传", KewuGreen.copy(alpha = 0.18f), KewuGreen)
                 }
                 is RecordingStatus.Error -> {
                     Spacer(Modifier.height(10.dp))
@@ -1126,7 +1136,7 @@ private fun AnalyticsSummaryCard(backdrop: LayerBackdrop, analytics: Analytics?)
             Text("知识点掌握度", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(8.dp))
             if (analytics == null) {
-                Text("暂无学情数据（发布作业并批阅后生成）", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                Text("暂无学情数据", color = cs.onSurfaceSecondary, fontSize = 13.sp)
             } else {
                 if (analytics.weakPoints.isNotEmpty()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1177,8 +1187,7 @@ private fun AiSummaryCard(backdrop: LayerBackdrop, hasLive: Boolean) {
                 Text("AI 课堂纪要", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    if (hasLive) "正在进行多源录音采集，结束后自动生成纪要"
-                    else "下课结束后，AI 自动融合多端录音生成纪要",
+                    if (hasLive) "录音中" else "下课后自动生成",
                     color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp,
                 )
             }

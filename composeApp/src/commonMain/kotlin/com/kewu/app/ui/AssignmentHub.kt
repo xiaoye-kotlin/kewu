@@ -321,7 +321,7 @@ fun AssignmentDetailScreen(
         KewuConfirmDialog(
             show = showConfirm,
             title = "还有 $confirmUnanswered 题未作答",
-            summary = "未作答的题目将按 0 分处理，确定现在提交吗？",
+            summary = "未作答的题按 0 分处理",
             confirmText = "仍然提交",
             cancelText = "继续作答",
             onConfirm = { submitAfterConfirm = true; showConfirm = false },
@@ -434,7 +434,7 @@ private fun MySubmissionCard(sub: SubmissionInfo, totalScore: Int) {
             if (sub.status == "RETURNED") {
                 Surface(shape = RoundedCornerShape(12.dp), color = cs.error.copy(alpha = 0.10f),
                     modifier = Modifier.fillMaxWidth()) {
-                    Text("老师已将本次作业打回，请根据评语修改后重新提交。（助教小悟也给你发了修改建议）",
+                    Text("已打回，请按评语修改后重新提交",
                         color = cs.error, fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(12.dp))
                 }
                 Spacer(Modifier.height(12.dp))

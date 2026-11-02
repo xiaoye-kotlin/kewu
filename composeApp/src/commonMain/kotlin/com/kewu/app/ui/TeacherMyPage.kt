@@ -28,6 +28,14 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import com.kewu.app.kvGet
+import com.kewu.app.kvSet
+import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.IconButton
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Edit
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -60,7 +68,8 @@ import io.github.suqi8.coui.kmp.theme.COUITheme
 
 @Composable
 fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
-    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们 8=内存管理（编号与学生端对齐）
+    // 0=主页 1=课程绑定 2=发起签到 3=发布笔记 4=新建课程 5=班级管理 6=通知设置 7=关于我们 8=内存管理
+    // 9=同学管理 10=编辑资料 11=录音管理（2026-11-02）
     var screen by remember { mutableStateOf(0) }
     LockTabSwipe(screen != 0)
 
@@ -75,12 +84,40 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     val pageBackdrop = rememberGlassBackdrop()
     val scrollState = rememberScrollState()
 
-    var name by remember { mutableStateOf(KewuApi.displayName("")) }
-    var account by remember { mutableStateOf(KewuApi.username ?: "") }
-    LaunchedEffect(Unit) {
-        if (KewuApi.currentUser == null) KewuApi.me()
-        name = KewuApi.displayName(name)
-        account = KewuApi.username ?: account
+    val profileScope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
+    // 资料头与学生端一致（2026-11-02）：工号 + 学校 + 所教班级；先显示本地缓存，再拉云端，失败不清空
+    val classesKey = "kewu_tclasses_" + KewuApi.username.orEmpty()
+    var profile by remember {
+        KewuApi.primeFromCache()
+        val uname = KewuApi.username.orEmpty()
+        val stored = ProfileStore.load(uname) ?: defaultProfile
+        val u = KewuApi.currentUser?.user
+        mutableStateOf(stored.copy(
+            name = u?.nickname ?: stored.name.ifBlank { KewuApi.displayName("") },
+            studentId = uname.ifBlank { stored.studentId },
+            school = u?.school?.ifBlank { null } ?: stored.school,
+            className = kvGet(classesKey) ?: stored.className,
+        ))
+    }
+    LaunchedEffect(screen == 0) {
+        if (screen != 0) return@LaunchedEffect
+        KewuApi.me(force = true)
+        val classes = KewuApi.getTeacherClasses()?.classes?.map { it.name }?.filter { it.isNotBlank() }?.distinct()
+        if (classes != null) kvSet(classesKey, classes.joinToString("、"))
+        val u = KewuApi.currentUser?.user
+        val uname = KewuApi.username.orEmpty()
+        profile = profile.copy(
+            name = u?.nickname?.ifBlank { null } ?: profile.name,
+            studentId = uname.ifBlank { profile.studentId },
+            school = u?.school?.ifBlank { null } ?: profile.school,
+            className = classes?.joinToString("、") ?: profile.className,
+            phone = u?.phone ?: profile.phone,
+            email = u?.email ?: profile.email,
+            subject = u?.subject ?: profile.subject,
+            bio = u?.bio ?: profile.bio,
+        )
+        ProfileStore.save(uname, profile)
     }
 
     BackHandler(enabled = screen != 0) { screen = 0 }
@@ -110,13 +147,15 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
             targetState = screen,
             modifier = Modifier.fillMaxSize(),
             isForward = { a, b -> b > a },
-            swipeEnabled = screen == 1 || screen >= 5,
+            swipeEnabled = screen == 1 || (screen in 5..9),
             swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
             onSwipeCommit = { screen = it },
         ) { s ->
             when (s) {
                 0 -> TeacherMyHome(
-                    name = name, account = account, backdrop = pageBackdrop, scrollState = scrollState,
+                    profile = profile, backdrop = pageBackdrop, scrollState = scrollState,
+                    onEdit = { screen = 10 },
+                    onRecording = { screen = 11 },
                     onBindCourse = { screen = 1 },
                     onCreateAttendance = { screen = 2 },
                     onPostNote = { screen = 3 },
@@ -137,6 +176,23 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
                 7 -> AboutPage(pageBackdrop, onBack = { screen = 0 })
                 8 -> StorageManagePage(onBack = { screen = 0 })
                 9 -> StudentDirectoryScreen(onBack = { screen = 0 })
+                10 -> EditProfilePage(
+                    profile, pageBackdrop, teacher = true,
+                    onBack = { screen = 0 },
+                    onSave = {
+                        profile = it
+                        ProfileStore.save(KewuApi.username.orEmpty(), it)
+                        val edited = it
+                        profileScope.launch {
+                            KewuApi.updateProfile(
+                                edited.name, edited.school.ifBlank { null }, null, edited.phone, edited.email,
+                                subject = edited.subject, bio = edited.bio,
+                            )?.let { err -> snackbar.toast("同步失败：$err") }
+                        }
+                        screen = 0
+                    },
+                )
+                11 -> TeacherRecordingScreen(onBack = { screen = 0 })
             }
         }
     }
@@ -144,10 +200,11 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
 
 @Composable
 private fun TeacherMyHome(
-    name: String,
-    account: String,
+    profile: UserProfile,
     backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop,
     scrollState: androidx.compose.foundation.ScrollState,
+    onEdit: () -> Unit,
+    onRecording: () -> Unit,
     onBindCourse: () -> Unit,
     onCreateAttendance: () -> Unit,
     onPostNote: () -> Unit,
@@ -196,19 +253,45 @@ private fun TeacherMyHome(
                         .background(cs.tertiaryContainer),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(name.firstOrNull()?.toString() ?: "师", color = cs.onTertiaryContainer,
+                    Text(profile.name.firstOrNull()?.toString() ?: "师", color = cs.onTertiaryContainer,
                         fontSize = 26.sp, fontWeight = FontWeight.Bold)
                 }
                 Spacer(Modifier.width(14.dp))
+                // 与学生端资料头同一结构（2026-11-02）：姓名 / 工号胶囊 / 学校 / 所教班级（多个逐行）
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(name.ifBlank { "老师" }, color = cs.onSurface, fontSize = 20.sp,
-                            fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Text(profile.name.ifBlank { "老师" }, color = cs.onSurface, fontSize = 20.sp,
+                            fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.weight(1f, fill = false))
                         Spacer(Modifier.width(8.dp))
                         KewuTag("教师", KewuBlue.copy(alpha = 0.12f), KewuBlue)
                     }
                     Spacer(Modifier.height(4.dp))
-                    Text("账号 $account", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        KewuTag("工号", cs.secondaryContainer, cs.onSecondaryVariant)
+                        Spacer(Modifier.width(7.dp))
+                        Text(profile.studentId, color = cs.onSurface, fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium, letterSpacing = 0.4.sp, maxLines = 1)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(profile.school.ifBlank { "未填写学校" }, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    val classes = profile.className.split("、").filter { it.isNotBlank() }
+                    if (classes.isEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text("暂无班级", color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    } else classes.forEach {
+                        Spacer(Modifier.height(4.dp))
+                        Text(it, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    }
+                }
+                IconButton(
+                    onClick = { haptic(HapticKind.Tick); onEdit() },
+                    backgroundColor = cs.secondaryContainer,
+                    cornerRadius = 17.dp,
+                    minWidth = 34.dp,
+                    minHeight = 34.dp,
+                ) {
+                    Icon(COUIIcons.Edit, contentDescription = "编辑资料", tint = cs.onSurfaceSecondary,
+                        modifier = Modifier.size(18.dp))
                 }
             }
         }
@@ -216,19 +299,20 @@ private fun TeacherMyHome(
         // 教学管理：五行并成一张 coui 分组卡（ArrowPreference），整组错峰入场
         GroupLabel("教学管理", Modifier.riseEnter(rememberEnterProgress(1)))
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(2))) {
-            FuncRow(6, "新建课程", "创建课程后即可开课、建班、发布作业", backdrop, onClick = onCreateCourse)
-            FuncRow(5, "班级管理", "开设班级，邀请码发给学生加入", backdrop, onClick = onClasses)
-            FuncRow(5, "同学管理", "查看同学信息，管理班级成员", backdrop, onClick = onDirectory)
-            FuncRow(0, "课程绑定", "绑定已有课程，同步作业与签到", backdrop, onClick = onBindCourse)
-            FuncRow(7, "发起签到", "创建签到会话，学生扫码 / 暗号打卡", backdrop, onClick = onCreateAttendance)
-            FuncRow(8, "发布笔记", "记录课堂要点，学生端即时可见", backdrop, onClick = onPostNote)
+            FuncRow(6, "新建课程", "开课、建班、发作业", backdrop, onClick = onCreateCourse)
+            FuncRow(5, "班级管理", "建班与邀请码", backdrop, onClick = onClasses)
+            FuncRow(5, "同学管理", "班级成员", backdrop, onClick = onDirectory)
+            FuncRow(0, "课程绑定", "绑定已有课程", backdrop, onClick = onBindCourse)
+            FuncRow(7, "发起签到", "扫码 / 暗号签到", backdrop, onClick = onCreateAttendance)
+            FuncRow(8, "发布笔记", "课堂要点", backdrop, onClick = onPostNote)
+            FuncRow(1, "录音管理", "课堂录音回放", backdrop, onClick = onRecording)
         }
 
         GroupLabel("通用", Modifier.riseEnter(rememberEnterProgress(5)))
         KewuCardGroup(Modifier.riseEnter(rememberEnterProgress(6))) {
-            FuncRow(2, "通知设置", "签到提醒、作业提醒与权限管理", backdrop, onClick = onNotification)
-            FuncRow(9, "内存管理", "清理聊天记录、图片与缓存文件", backdrop, onClick = onStorage)
-            FuncRow(3, "关于我们", "课悟 · 基于华为云的多端协同 AI 课堂", backdrop, onClick = onAbout)
+            FuncRow(2, "通知设置", "提醒与权限", backdrop, onClick = onNotification)
+            FuncRow(9, "内存管理", "清理缓存", backdrop, onClick = onStorage)
+            FuncRow(3, "关于我们", "版本与服务状态", backdrop, onClick = onAbout)
         }
 
         Spacer(Modifier.height(2.dp))
@@ -263,7 +347,7 @@ private fun TeacherMyHome(
     KewuConfirmDialog(
         show = confirmLogout,
         title = "退出登录",
-        summary = "退出后需要重新登录才能发起签到、批阅作业和管理班级",
+        summary = "退出后需重新登录",
         confirmText = "退出登录",
         onConfirm = { logoutConfirmed = true; confirmLogout = false },
         onDismiss = { confirmLogout = false },

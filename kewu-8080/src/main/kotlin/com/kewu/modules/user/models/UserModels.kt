@@ -33,11 +33,14 @@ data class UpdateProfileRequest(
     val school: String? = null,
     val className: String? = null, // 学生忽略：班级以加入的教学班为准
     val phone: String? = null,
-    val email: String? = null
+    val email: String? = null,
+    val subject: String? = null, // 所教科目（教师）
+    val bio: String? = null      // 个人简介
 )
 
+// platform：android / desktop / ios（2026-11-02 单设备登录；旧版客户端不传 = 不参与互斥）
 @Serializable
-data class LoginRequest(val username: String, val password: String)
+data class LoginRequest(val username: String, val password: String, val platform: String? = null)
 
 @Serializable
 data class LoginResponse(val token: String, val user: UserInfo, val role: String = UserRole.STUDENT)
@@ -51,7 +54,22 @@ data class UserInfo(
     val school: String? = null,
     val className: String? = null,
     val phone: String? = null,   // 只在 /me（本人）里返回
-    val email: String? = null
+    val email: String? = null,
+    val subject: String? = null,
+    val bio: String? = null
+)
+
+// 课程任课老师名片（学生「我的课程」⋯ 弹层，2026-11-02）
+@Serializable
+data class TeacherCard(
+    val id: String? = null,
+    val name: String,
+    val subject: String? = null,
+    val phone: String? = null,
+    val email: String? = null,
+    val school: String? = null,
+    val bio: String? = null,
+    val courseName: String? = null
 )
 
 @Serializable
@@ -72,5 +90,7 @@ data class User(
     val school: String? = null,
     val className: String? = null,
     val phone: String? = null,
-    val email: String? = null
+    val email: String? = null,
+    val subject: String? = null,
+    val bio: String? = null
 )

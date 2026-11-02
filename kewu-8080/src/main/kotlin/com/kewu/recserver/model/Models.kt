@@ -16,7 +16,10 @@ data class RecordingMeta(
     val sizeBytes: Long? = null,
     val avgLevelDb: Double? = null, // 平均音量电平（dBFS），-20 左右是正常说话音量
     val snrDb: Double? = null,      // 信噪比估计（dB），越高越干净
-    val storedUrl: String? = null
+    val storedUrl: String? = null,
+    val username: String? = null,      // 上传账号（2026-11-02：教师端按人查看录音 / 课堂专注）
+    val displayName: String? = null,   // 上传人姓名
+    val endedAtMs: Long? = null        // 录音结束时刻（客户端时间戳），多端转写按时间对齐用
 )
 
 // 质量打分结果，分数越高说明这段录音越值得留作主音源

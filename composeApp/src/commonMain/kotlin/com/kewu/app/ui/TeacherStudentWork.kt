@@ -186,13 +186,13 @@ internal fun StudentWorkScreen(
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 120.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
             KewuTopBar(sub?.studentName?.ifBlank { null }?.let { "$it 的作业" } ?: "学生作业", onBack = onBack)
             Spacer(Modifier.height(4.dp))
             val a = assignment
             when {
                 loading -> KewuLoading(text = "正在加载…")
-                a == null || sub == null -> KewuEmpty("没有找到这份提交，请返回刷新")
+                a == null || sub == null -> KewuEmpty("没有找到这份提交")
                 else -> StudentWorkBody(a, sub, all.orEmpty(), pageBackdrop, onReview)
             }
         }
@@ -244,21 +244,27 @@ private fun StudentWorkBody(
 
     // ── 全班对比 ──
     Spacer(Modifier.height(14.dp))
-    KewuSectionTitle("全班对比（${all.size} 人已交）")
+    // 2026-11-02：单独发给这位同学（或只有他交了）时没有「全班」可比，不显示排名 / 全班平均 / 中位用时
+    val solo = a.targetStudents.size == 1 || all.size <= 1
+    KewuSectionTitle(if (solo) "作答情况" else "全班对比（${all.size} 人已交）")
     KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
         Column(Modifier.padding(16.dp)) {
-            CompareLine("正确率排名", rank?.let { "第 $it / ${classAcc.size} 名" } ?: "暂无可判定的题")
-            CompareLine("全班平均正确率", fmtPct(classAcc.takeIf { it.isNotEmpty() }?.average()))
-            CompareLine(
-                "作答速度",
-                when {
-                    m.durationSec == null || median == null -> "用时未记录"
-                    m.durationSec < median * 0.6 -> "明显快于全班（中位 ${fmtDuration(median)}）"
-                    m.durationSec > median * 1.5 -> "明显慢于全班（中位 ${fmtDuration(median)}）"
-                    else -> "与全班接近（中位 ${fmtDuration(median)}）"
-                },
-            )
-            if (sub.version > 1) CompareLine("修改次数", "共提交 ${sub.version} 版，学习投入度较高")
+            if (!solo) {
+                CompareLine("正确率排名", rank?.let { "第 $it / ${classAcc.size} 名" } ?: "暂无可判定的题")
+                CompareLine("全班平均正确率", fmtPct(classAcc.takeIf { it.isNotEmpty() }?.average()))
+                CompareLine(
+                    "作答速度",
+                    when {
+                        m.durationSec == null || median == null -> "用时未记录"
+                        m.durationSec < median * 0.6 -> "明显快于全班（中位 ${fmtDuration(median)}）"
+                        m.durationSec > median * 1.5 -> "明显慢于全班（中位 ${fmtDuration(median)}）"
+                        else -> "与全班接近（中位 ${fmtDuration(median)}）"
+                    },
+                )
+            } else {
+                CompareLine("用时", fmtDuration(m.durationSec))
+            }
+            if (sub.version > 1) CompareLine("修改次数", "共 ${sub.version} 版")
             // 「小悟一题一辅」求助记录：学生在哪几题向 AI 求助了几次（老师据此看出卡点）
             val helpTotal = sub.aiHelp.values.sum()
             CompareLine(
@@ -433,7 +439,7 @@ private fun AiWorkSummaryCard(
     KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
         Column(Modifier.padding(16.dp)) {
             when {
-                running -> Text("小悟正在分析这份作业，约 10–30 秒…", color = KewuBlue, fontSize = 13.5.sp)
+                running -> Text("分析中…", color = KewuBlue, fontSize = 13.5.sp)
                 failed && summary == null -> Text("AI 分析失败，请检查网络后重试", color = cs.error, fontSize = 13.5.sp)
                 summary != null -> Text(summary.orEmpty(), color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp)
             }

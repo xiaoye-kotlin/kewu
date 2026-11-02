@@ -53,3 +53,25 @@ expect fun VideoPlayerView(
 object VideoFullscreen {
     var on by androidx.compose.runtime.mutableStateOf(false)
 }
+
+/**
+ * 播放控制状态（2026-11-02 重做控制条）：平台播放器关掉自带 controller，把进度 / 播放态写到这里，
+ * 公共层用 coui Slider + 液态玻璃按钮自绘紧凑控制条，并支持画面上左右滑动快进快退。
+ * 全 App 只有一个播放宿主，所以用单例即可。[available] = false（桌面占位实现）时公共层不画控制条。
+ */
+object VideoControls {
+    var available by androidx.compose.runtime.mutableStateOf(false)
+    var playing by androidx.compose.runtime.mutableStateOf(false)
+    var buffering by androidx.compose.runtime.mutableStateOf(false)
+    var positionMs by androidx.compose.runtime.mutableStateOf(0L)
+    var durationMs by androidx.compose.runtime.mutableStateOf(0L)
+    var onToggle: (() -> Unit)? = null
+    var onSeek: ((Long) -> Unit)? = null
+    fun toggle() { onToggle?.invoke() }
+    fun seekTo(ms: Long) {
+        val d = durationMs
+        val t = if (d > 0) ms.coerceIn(0L, d) else ms.coerceAtLeast(0L)
+        positionMs = t
+        onSeek?.invoke(t)
+    }
+}

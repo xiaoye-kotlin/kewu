@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -33,6 +34,7 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Pause
 import io.github.suqi8.coui.kmp.icon.extended.Play
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.delay
 
 /**
  * App 内录音播放条（2026-10-26，coui 原生件）：圆形播放 / 暂停键 + coui [Slider] 进度 + 已播 / 总时长。
@@ -52,7 +54,7 @@ fun AudioPlayerBar(
     source: String?,
     durationHintSec: Int,
     modifier: Modifier = Modifier,
-    unavailableText: String = "本机文件已清理，无法播放",
+    unavailableText: String = "无法播放",
     stopOnDispose: Boolean = true,
 ) {
     val cs = COUITheme.colorScheme
@@ -61,9 +63,18 @@ fun AudioPlayerBar(
     DisposableEffect(key, stopOnDispose) { onDispose { if (stopOnDispose) AudioPlayback.stopIf(key) } }
 
     val totalMs = if (active && st.durationMs > 0) st.durationMs else durationHintSec * 1000L
-    // 拖动中先只改本地值，松手再 seek（避免每帧都让播放器跳转）
+    // 拖动中先只改本地值，松手再 seek（避免每帧都让播放器跳转）。
+    // 2026-11-02：没播时也能拖（拖完从该处开始播）；松手回调不可靠时，停手 300ms 自动提交
     var dragging by remember { mutableStateOf<Float?>(null) }
     val fraction = dragging ?: if (active && totalMs > 0) (st.positionMs.toFloat() / totalMs).coerceIn(0f, 1f) else 0f
+    fun commit() {
+        val f = dragging ?: return
+        dragging = null
+        if (source != null && totalMs > 0) AudioPlayback.seekOrStart(key, source, (f * totalMs).toLong())
+    }
+    LaunchedEffect(dragging) {
+        if (dragging != null) { delay(300); commit() }
+    }
 
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         PlayPauseButton(
@@ -77,11 +88,8 @@ fun AudioPlayerBar(
             Slider(
                 value = fraction,
                 onValueChange = { dragging = it },
-                onValueChangeFinished = {
-                    dragging?.let { AudioPlayback.seek(key, (it * totalMs).toLong()) }
-                    dragging = null
-                },
-                enabled = active && totalMs > 0 && st.phase != AudioPlayback.Phase.LOADING && st.phase != AudioPlayback.Phase.ERROR,
+                onValueChangeFinished = { commit() },
+                enabled = source != null && totalMs > 0,
                 modifier = Modifier.fillMaxWidth(),
             )
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {

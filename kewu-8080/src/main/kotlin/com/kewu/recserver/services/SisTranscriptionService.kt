@@ -52,7 +52,26 @@ class SisTranscriptionService(private val cfg: SisConfig) {
     }
 
     /** 对外入口：传入 OBS 上的音频 URL，返回转写文本。任何失败都抛 TranscriptionException，绝不把 500 细节抛给上层。 */
-    suspend fun transcribe(dataUrl: String, audioFormat: String): String {
+    suspend fun transcribe(dataUrl: String, audioFormat: String): String =
+        extractText(transcribeRaw(dataUrl, audioFormat))
+
+    /** 一句话一段：相对录音开头的起止毫秒 + 文本（2026-11-02 多端录音按时间互补合并用）。 */
+    data class Segment(val startMs: Long, val endMs: Long, val text: String)
+
+    suspend fun transcribeSegments(dataUrl: String, audioFormat: String): List<Segment> {
+        val el = transcribeRaw(dataUrl, audioFormat)
+        val segments = el["segments"] as? JsonArray ?: return emptyList()
+        return segments.mapNotNull { seg ->
+            val o = seg as? JsonObject ?: return@mapNotNull null
+            val text = ((o["result"] as? JsonObject)?.get("text") as? JsonPrimitive)?.content?.trim().orEmpty()
+            if (text.isEmpty()) return@mapNotNull null
+            val st = (o["start_time"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong() ?: 0L
+            val et = (o["end_time"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong() ?: st
+            Segment(st, et, text)
+        }
+    }
+
+    private suspend fun transcribeRaw(dataUrl: String, audioFormat: String): JsonObject {
         if (cfg.ak.isNullOrBlank() || cfg.sk.isNullOrBlank()) {
             throw TranscriptionException("转写失败，请重试（SIS 未配置 AK/SK，请检查 SIS_AK/SIS_SK 或 OBS_AK/OBS_SK）")
         }
@@ -116,9 +135,10 @@ class SisTranscriptionService(private val cfg: SisConfig) {
     }
 
     // 步骤3：轮询任务状态，每 10s 一次
-    private suspend fun pollJob(host: String, jobId: String): String {
+    private suspend fun pollJob(host: String, jobId: String): JsonObject {
         val uri = "/v1/${cfg.projectId}/asr/transcriber/jobs/$jobId"
-        val maxAttempts = 60 // 60 * 10s = 最多等 10 分钟（SIS 长语音识别上限内）
+        // 2026-11-02：一节课 1 小时以上的录音 10 分钟常转不完 → 放到 40 分钟
+        val maxAttempts = 240
         repeat(maxAttempts) { attempt ->
             // 每次轮询都重新算时间和签名：X-Sdk-Date 必须在请求时间 15 分钟内，轮询久了会过期
             val date = nowUtc()
@@ -133,9 +153,8 @@ class SisTranscriptionService(private val cfg: SisConfig) {
                 val el = Json.parseToJsonElement(raw).jsonObject
                 when (val status = (el["status"] as? JsonPrimitive)?.content) {
                     "FINISHED" -> {
-                        val text = extractText(el)
-                        log.info("SIS 转写完成 job_id=$jobId，文本长度=${text.length}")
-                        return text
+                        log.info("SIS 转写完成 job_id=$jobId，文本长度=${extractText(el).length}")
+                        return el
                     }
                     "ERROR" -> {
                         val code = (el["error_code"] as? JsonPrimitive)?.content
@@ -165,7 +184,7 @@ class SisTranscriptionService(private val cfg: SisConfig) {
             }
         }
         log.error("SIS 转写轮询超时 job_id=$jobId（超过 ${maxAttempts * 10} 秒）")
-        throw TranscriptionException("转写超时，请稍后重试（任务处理超过 10 分钟）")
+        throw TranscriptionException("转写超时，请稍后重试（任务处理超过 40 分钟）")
     }
 
     // 从 FINISHED 响应里把所有句子的 result.text 拼成完整文本（按返回顺序）

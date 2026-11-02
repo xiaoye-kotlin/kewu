@@ -135,7 +135,7 @@ private fun ContactList(cls: ClassRoomInfo, reloadTick: Int, onBack: () -> Unit,
             error != null -> KewuEmpty(error.orEmpty())
             l.isEmpty() -> KewuEmpty("班里还没有学生，把邀请码 ${cls.inviteCode} 发给学生即可加入")
             else -> {
-                KewuSectionTitle("共 ${l.size} 人 · 点击查看个人主页")
+                KewuSectionTitle("共 ${l.size} 人")
                 KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
                     l.forEach { s ->
                         ArrowPreference(

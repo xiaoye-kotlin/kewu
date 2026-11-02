@@ -22,6 +22,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.content.PartData
 import io.ktor.http.contentType
 import io.ktor.http.URLBuilder
+import io.ktor.http.encodeURLPathPart
 import io.ktor.utils.io.core.ByteReadPacket
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -55,6 +56,14 @@ data class UserInfo(
     val school: String? = null, val className: String? = null,
     /** 联系方式（只在本人 /me 里返回；老师在班级通讯录里能看到学生的）。 */
     val phone: String? = null, val email: String? = null,
+    /** 所教科目 / 个人简介（2026-11-02，教师资料；学生也可填简介）。 */
+    val subject: String? = null, val bio: String? = null,
+)
+
+/** 课程任课老师名片（学生「我的课程」⋯ 弹层）。 */
+data class TeacherCard(
+    val name: String, val subject: String? = null, val phone: String? = null, val email: String? = null,
+    val school: String? = null, val bio: String? = null, val courseName: String? = null,
 )
 data class CourseInfo(
     val id: String, val name: String, val description: String, val teacher: String,
@@ -74,6 +83,8 @@ data class ClassRecordingInfo(
     val durationSec: Int? = null,
     val teacherId: String? = null, val teacherName: String? = null,
     val transcript: String = "", val summary: String = "", val asrError: String? = null,
+    /** 生成进度文案（排队中 / 转写中 2/5 / 合并中 / 生成纪要 / 完成）与 0-100 百分比；老后端为 null。 */
+    val stage: String? = null, val progress: Int? = null,
 ) {
     /** sessionId 约定 `courseId-yyyyMMdd`；日期独立出来用于列表 / 通知定位。 */
     val date: String
@@ -81,6 +92,13 @@ data class ClassRecordingInfo(
             if (d.length == 8) "${d.take(4)}-${d.substring(4, 6)}-${d.takeLast(2)}" else d
         }
 }
+
+/** 一节课里某一端上传的录音 + 课堂专注结论（[focusVerdict]：认真 / 疑似开小差 / 疑似聊天；未分析为 null）。 */
+data class SessionRecordingInfo(
+    val recordingId: String, val role: String, val username: String?, val name: String?,
+    val url: String, val durationSec: Int?, val createdAt: String,
+    val transcriptStatus: String?, val focusVerdict: String?, val focusEvidence: String?, val focusConfidence: Int?,
+)
 
 /** 教师联系方式（受登录和课程关系保护；未公开字段为 null）。 */
 data class TeacherContactInfo(
@@ -401,6 +419,19 @@ object KewuApi {
     /** 登录失效事件（任一接口返回 401 时 +1）；App 根部监听后提示并回到登录页。 */
     val sessionExpired = kotlinx.coroutines.flow.MutableStateFlow(0)
 
+    /** 最近一次登录失效是否因为「同类设备在别处登录」（后端 401 message = KICKED，2026-11-02 单设备登录）。 */
+    var kickedByOtherDevice = false
+        private set
+
+    /** 本端平台类（后端按类互斥：安卓挤安卓，桌面与手机可同时在线）。不加 expect，按设备号前缀判断。 */
+    private fun platformKind(): String = platformDeviceId().let {
+        when {
+            it.startsWith("desktop-") -> "desktop"
+            it.startsWith("ios-") -> "ios"
+            else -> "android"
+        }
+    }
+
     /** 同一时刻只拉一次 /user/me，30s 内重复调用直接复用结果（8 个页面都会「没有就拉」）。 */
     private val meLock = kotlinx.coroutines.sync.Mutex()
     private var meFetchedAt = 0L
@@ -454,8 +485,9 @@ object KewuApi {
                 val text = resp.bodyAsText()
                 throw ApiException(parseError(text).ifBlank { "登录失败，请稍后重试" })
             }
-            onUnauthorized()
-            throw ApiException("登录已过期，请重新登录")
+            val kicked = runCatching { "KICKED" in resp.bodyAsText() }.getOrDefault(false)
+            onUnauthorized(kicked)
+            throw ApiException(if (kicked) "账号已在其他设备登录" else "登录已过期，请重新登录")
         }
         val text = resp.bodyAsText()
         return try {
@@ -467,8 +499,9 @@ object KewuApi {
         }
     }
 
-    private fun onUnauthorized() {
+    private fun onUnauthorized(kicked: Boolean = false) {
         if (token == null) return
+        kickedByOtherDevice = kicked
         token = null
         kvSet("kewu_token", null)
         sessionExpired.value = sessionExpired.value + 1
@@ -546,7 +579,7 @@ object KewuApi {
     suspend fun login(username: String, password: String): String? = try {
         val el = postJson(
             "$BASE_URL/api/user/login",
-            mapOf("username" to username, "password" to password),
+            mapOf("username" to username, "password" to password, "platform" to platformKind()),
             isAuthEndpoint = true,
         )
         val data = el.asDataOrThrow() as? JsonObject
@@ -555,6 +588,7 @@ object KewuApi {
         if (token == null) throw ApiException("登录状态异常，请稍后重试")
         this.username = username
         currentUser = null
+        kickedByOtherDevice = false
         kvSet("kewu_token", token)
         kvSet("kewu_username", username)
         // 服务端角色为准（登录页的角色选择只是注册默认值，见 5.1）
@@ -681,8 +715,11 @@ object KewuApi {
     suspend fun updateProfile(
         nickname: String? = null, school: String? = null, className: String? = null,
         phone: String? = null, email: String? = null,
+        subject: String? = null, bio: String? = null,
     ): String? = try {
         val body = mutableMapOf<String, Any?>()
+        if (subject != null) body["subject"] = subject
+        if (bio != null) body["bio"] = bio
         if (phone != null) body["phone"] = phone
         if (email != null) body["email"] = email
         if (nickname != null) body["nickname"] = nickname
@@ -704,24 +741,51 @@ object KewuApi {
     catch (e: CancellationException) { throw e }
     catch (_: Exception) { "网络异常，请稍后重试" }
 
-    /** 我的资料（需 token），填充 [currentUser]；失败返回 message。 */
-    suspend fun me(force: Boolean = false): String? = meLock.withLock { meLocked(force) }
+    /** 课程任课老师名片；拿不到返回 null。 */
+    suspend fun courseTeacher(courseId: String): TeacherCard? = try {
+        val o = getJson("$BASE_URL/api/user/course-teacher/${courseId.encodeURLPathPart()}", auth = true).asDataOrThrow() as? JsonObject
+        o?.let {
+            TeacherCard(
+                name = it["name"].str(), subject = it["subject"].strOrNull(), phone = it["phone"].strOrNull(),
+                email = it["email"].strOrNull(), school = it["school"].strOrNull(), bio = it["bio"].strOrNull(),
+                courseName = it["courseName"].strOrNull(),
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
-    private suspend fun meLocked(force: Boolean): String? = try {
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-        if (!force && currentUser != null && now - meFetchedAt < 30_000) return null
-        val el = getJson("$BASE_URL/api/user/me", auth = true)
-        val data = el.asDataOrThrow() as? JsonObject
-            ?: throw ApiException("服务器响应异常，请稍后重试")
+    /** 会话探活（App 回前台调用）：被同类设备挤下线时走 401 → [sessionExpired]。网络失败忽略。 */
+    suspend fun checkSession() {
+        if (token == null) return
+        try { getJson("$BASE_URL/api/user/session", auth = true) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { }
+    }
+
+    /** /user/me 本地缓存（按账号）：「我的」页先显示缓存，再拉云端，拉取失败也不清空（2026-11-02）。 */
+    private fun meCacheKey() = username?.let { "kewu_me_$it" }
+
+    /** 内存里还没有资料时，用本账号上次成功拉到的 /me 填上（立即可显示）。 */
+    fun primeFromCache() {
+        if (currentUser != null) return
+        val raw = meCacheKey()?.let { kvGet(it) } ?: return
+        runCatching { (json.parseToJsonElement(raw) as? JsonObject)?.let { currentUser = parseMe(it) } }
+    }
+
+    /** 我的资料（需 token），填充 [currentUser]；失败返回 message（失败时保留缓存资料）。 */
+    suspend fun me(force: Boolean = false): String? = meLock.withLock { meLocked(force) }.also { if (it != null) primeFromCache() }
+
+    private fun parseMe(data: JsonObject): UserMe {
         val u = data["user"] as? JsonObject
         val courses = (data["courses"] as? JsonArray)?.mapNotNull { c -> c as? JsonObject }.orEmpty()
             .map { CourseInfo(it["id"].str(), it["name"].str(), it["description"].str(), it["teacher"].str()) }
-        currentUser = UserMe(
+        return UserMe(
             user = u?.let {
                 UserInfo(
                     it["id"].str(), it["username"].str(), it["nickname"].strOrNull(), it["role"].str(),
                     school = it["school"].strOrNull(), className = it["className"].strOrNull(),
                     phone = it["phone"].strOrNull(), email = it["email"].strOrNull(),
+                    subject = it["subject"].strOrNull(), bio = it["bio"].strOrNull(),
                 )
             },
             classes = (data["classes"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }.map {
@@ -729,6 +793,16 @@ object KewuApi {
             },
             courses = courses,
         )
+    }
+
+    private suspend fun meLocked(force: Boolean): String? = try {
+        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
+        if (!force && currentUser != null && now - meFetchedAt < 30_000) return null
+        val el = getJson("$BASE_URL/api/user/me", auth = true)
+        val data = el.asDataOrThrow() as? JsonObject
+            ?: throw ApiException("服务器响应异常，请稍后重试")
+        currentUser = parseMe(data)
+        meCacheKey()?.let { kvSet(it, data.toString()) }
         meFetchedAt = kotlin.time.Clock.System.now().toEpochMilliseconds()
         cacheNickname(currentUser?.user?.nickname)
         null
@@ -969,6 +1043,25 @@ object KewuApi {
                 teacherId = o["teacherId"].strOrNull(), teacherName = o["teacherName"].strOrNull(),
                 transcript = o["transcript"].str(), summary = o["summary"].str(),
                 asrError = o["asrError"].strOrNull(),
+                stage = o["stage"].strOrNull(), progress = o["progress"].strOrNull()?.toIntOrNull(),
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 教师端：一节课所有端上传的录音 + 课堂专注结论（需教师 token）。失败返回 null。 */
+    suspend fun getSessionRecordings(sessionId: String): List<SessionRecordingInfo>? = try {
+        val el = getJson("$BASE_URL/api/class-recordings/${pathSegment(sessionId)}/recordings", auth = true)
+        el.asDataOrThrow()
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
+            SessionRecordingInfo(
+                recordingId = o["recordingId"].str(), role = o["role"].str(),
+                username = o["username"].strOrNull(), name = o["name"].strOrNull(),
+                url = o["url"].str(), durationSec = o["durationSec"].strOrNull()?.toDoubleOrNull()?.toInt(),
+                createdAt = o["createdAt"].str(),
+                transcriptStatus = o["transcriptStatus"].strOrNull(),
+                focusVerdict = o["focusVerdict"].strOrNull(), focusEvidence = o["focusEvidence"].strOrNull(),
+                focusConfidence = o["focusConfidence"].strOrNull()?.toDoubleOrNull()?.toInt(),
             )
         }
     } catch (e: CancellationException) { throw e }
@@ -1415,6 +1508,8 @@ object KewuApi {
         path: String, filename: String, classId: String, sessionId: String?, durationSec: Double?,
         role: String = if (kvGet("kewu_role") == ROLE_TEACHER) "teacher" else "student",
         avgLevel: Double? = null,
+        /** 录音结束时刻（epoch ms）：服务端多端转写按时间对齐互补用。 */
+        endedAt: Long? = null,
     ): RecordingUploadResult? = try {
         val content = MultiPartFormDataContent(formData {
             append("classId", classId)
@@ -1426,6 +1521,8 @@ object KewuApi {
             if (sessionId != null) append("sessionId", sessionId)
             if (durationSec != null) append("durationSec", durationSec.toString())
             if (avgLevel != null) append("avgLevel", avgLevel.toString())
+            username?.let { append("username", it) }
+            if (endedAt != null) append("endedAt", endedAt.toString())
             // ★ 2026-10-26：流式上传（ChannelProvider 按需读文件），不再把整段录音读进内存
             val size = platformFileSize(path)
             if (size <= 0) throw ApiException("录音文件不存在或为空")
@@ -1829,4 +1926,36 @@ object KewuApi {
             )
         }
     }
+    /**
+     * 首页「课堂纪要生成进度」（2026-11-02）：某门课各节课的纪要状态。
+     * `stage`（阶段文字）/ `progress`（0–100）是新后端字段，老后端没有时为 null，由界面按 transcriptStatus 估算。
+     */
+    suspend fun getClassNoteProgress(courseId: String): List<ClassNoteProgress>? = try {
+        val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/class-recordings")
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
+            ClassNoteProgress(
+                courseId = courseId,
+                sessionId = o["sessionId"].str(),
+                status = o["transcriptStatus"].str(),
+                stage = o["stage"].strOrNull()?.ifBlank { null },
+                progress = o["progress"].strOrNull()?.toFloatOrNull()?.let { if (it > 1f) it / 100f else it },
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+}
+
+/** 一节课的纪要生成状态（首页进度卡用）。 */
+data class ClassNoteProgress(
+    val courseId: String,
+    val sessionId: String,
+    val status: String,
+    val stage: String? = null,
+    /** 0..1；老后端为 null。 */
+    val progress: Float? = null,
+) {
+    val date: String
+        get() = sessionId.substringAfterLast('-').let { d ->
+            if (d.length == 8) "${d.take(4)}-${d.substring(4, 6)}-${d.takeLast(2)}" else d
+        }
 }

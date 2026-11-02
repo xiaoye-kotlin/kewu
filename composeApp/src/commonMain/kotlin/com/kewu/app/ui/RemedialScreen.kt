@@ -146,10 +146,15 @@ internal fun RemedialScreen(assignmentId: String, onBack: () -> Unit) {
         busy[t.name] = true
         scope.launch {
             val deadlineMs = kotlin.time.Clock.System.now().toEpochMilliseconds() + 3 * 86_400_000L
+            // 2026-11-02：标题不再层层套书名号（旧版对补救练习再补救 →「《《xx》补救练习 · 待加强》补救练习 · 待加强」）；
+            // 一律回到原作业名，同一层第 N 次补救编号为「补救练习二 / 三 …」
+            val root = remedialRoot(aa.title)
+            val sent = KewuApi.getAssignments(aa.courseId).orEmpty()
+                .count { it.title != root && remedialRoot(it.title) == root && it.title.endsWith(" · ${t.name}") }
             val r = KewuApi.publishAssignment(
                 courseId = aa.courseId,
-                title = "《${aa.title}》补救练习 · ${t.name}",
-                description = "小悟根据你在《${aa.title}》中的作答情况为你准备的针对性练习（${t.hint}）。",
+                title = "《$root》补救练习${if (sent > 0) cnOrdinal(sent + 1) else ""} · ${t.name}",
+                description = "小悟根据你在《$root》中的作答情况为你准备的针对性练习（${t.hint}）。",
                 deadline = todayCn(deadlineMs) + " 23:59",
                 totalScore = qs.sumOf { it.score },
                 knowledgePoints = aa.knowledgePoints,
@@ -161,7 +166,7 @@ internal fun RemedialScreen(assignmentId: String, onBack: () -> Unit) {
             if (r != null) {
                 published[t.name] = true
                 haptic(HapticKind.Light)
-                snackbar.toast("已发布给「${t.name}」层 ${t.students.size} 位同学，其他同学看不到")
+                snackbar.toast("已发布给 ${t.students.size} 位同学")
             } else snackbar.toast("发布失败，请稍后重试")
         }
     }
@@ -196,7 +201,7 @@ internal fun RemedialScreen(assignmentId: String, onBack: () -> Unit) {
                     }
                     tiers.filter { it.students.isNotEmpty() }.forEach { t ->
                         Spacer(Modifier.height(14.dp))
-                        KewuSectionTitle("${t.name}层 · ${t.students.size} 人 · ${t.hint}")
+                        KewuSectionTitle("${t.name}层 · ${t.students.size} 人")
                         KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
                             Column(Modifier.padding(16.dp)) {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -222,9 +227,9 @@ internal fun RemedialScreen(assignmentId: String, onBack: () -> Unit) {
                                         Spacer(Modifier.height(8.dp))
                                     }
                                     if (published[t.name] == true) {
-                                        Text("✓ 已发布，仅这 ${t.students.size} 位同学可见，3 天后截止", color = KewuGreen, fontSize = 13.5.sp)
+                                        Text("✓ 已发布 · 3 天后截止", color = KewuGreen, fontSize = 13.5.sp)
                                     } else {
-                                        KewuPrimaryButton(if (busy[t.name] == true) "发布中…" else "发布给这 ${t.students.size} 位同学",
+                                        KewuPrimaryButton(if (busy[t.name] == true) "发布中…" else "发布",
                                             { publish(t) }, Modifier.fillMaxWidth(), enabled = busy[t.name] != true)
                                         Spacer(Modifier.height(6.dp))
                                         KewuSecondaryButton("换一批", { generated.remove(t.name); generate(t) }, Modifier.fillMaxWidth())
@@ -236,5 +241,23 @@ internal fun RemedialScreen(assignmentId: String, onBack: () -> Unit) {
                 }
             }
         }
+    }
+}
+
+private val RemedialTitle = Regex("^《(.+)》补救练习[一二三四五六七八九十]*( · .+)?$")
+
+/** 补救练习标题 → 最初的原作业名（多次补救也只剥到底）。 */
+private fun remedialRoot(title: String): String {
+    var t = title.trim()
+    while (true) t = RemedialTitle.find(t)?.groupValues?.get(1) ?: return t
+}
+
+private fun cnOrdinal(n: Int): String {
+    val d = "零一二三四五六七八九"
+    return when {
+        n < 10 -> d[n].toString()
+        n == 10 -> "十"
+        n < 20 -> "十" + d[n % 10]
+        else -> n.toString()
     }
 }

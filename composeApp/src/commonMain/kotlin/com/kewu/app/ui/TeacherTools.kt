@@ -264,7 +264,7 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
         ToolButton(
             when {
                 loading -> "正在发起…"
-                started -> "签到进行中 · 可在控制台查看"
+                started -> "签到进行中"
                 else -> "发起签到"
             },
             enabled = selectedId != null && title.isNotBlank() && !loading && !started,

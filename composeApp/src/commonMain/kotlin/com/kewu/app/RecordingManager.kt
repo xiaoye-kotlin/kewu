@@ -65,6 +65,8 @@ data class RecordingRecord(
     val avgLevelDb: Double? = null,
     val snrDb: Double? = null,
     val filePath: String? = null,
+    /** 录音所属账号（2026-11-02：录音管理只显示本人的，切账号不串）。旧记录加载时归给当时登录的账号。 */
+    val owner: String = "",
 )
 
 /** 东八区当天日期 `yyyy-MM-dd`（commonMain 无 kotlinx-datetime，手算公历；课堂场景只在国内）。 */
@@ -93,6 +95,12 @@ object RecordingManager {
     private val _history = MutableStateFlow(loadHistory())
     /** 本地录音上传记录（新的在前）。 */
     val history: StateFlow<List<RecordingRecord>> = _history.asStateFlow()
+
+    /** 只取当前账号的录音。 */
+    fun mine(all: List<RecordingRecord> = _history.value): List<RecordingRecord> {
+        val me = KewuApi.username.orEmpty()
+        return all.filter { it.owner == me }
+    }
 
     /**
      * 单线程作用域：开始 / 停止 / 计时 / 上传全部串行执行，免锁免竞态
@@ -206,7 +214,7 @@ object RecordingManager {
             val sid = KewuApi.classSessionId(cid, todayCn(now))
             val role = if (kvGet("kewu_role") == ROLE_TEACHER) "teacher" else "student"
             val filename = "kewu_${cid}_$now.wav"
-            val res = KewuApi.uploadRecording(path, filename, cid, sid, durationSec.toDouble(), role)
+            val res = KewuApi.uploadRecording(path, filename, cid, sid, durationSec.toDouble(), role, endedAt = now)
             val record = RecordingRecord(
                 localId = path, classId = cid, sessionId = sid, role = role,
                 durationSec = durationSec, sizeBytes = size, at = now,
@@ -214,6 +222,7 @@ object RecordingManager {
                 recordingId = res?.recordingId.orEmpty(), url = res?.url.orEmpty(),
                 score = res?.score ?: 0.0, avgLevelDb = res?.avgLevelDb, snrDb = res?.snrDb,
                 filePath = if (res == null) path else null,
+                owner = KewuApi.username.orEmpty(),
             )
             putHistory(record)
             if (res != null) platformDeleteFile(path) // 已上传成功，清掉本地 WAV（旧版只增不删）
@@ -233,7 +242,7 @@ object RecordingManager {
             if (platformFileSize(path) <= 0) { onDone("本地录音文件已不存在"); return@launch }
             val res = KewuApi.uploadRecording(
                 path, "kewu_${record.classId}_${record.at}.wav", record.classId,
-                record.sessionId, record.durationSec.toDouble(), record.role,
+                record.sessionId, record.durationSec.toDouble(), record.role, endedAt = record.at,
             )
             if (res == null) { onDone("录音上传失败，请稍后重试"); return@launch }
             platformDeleteFile(path)
@@ -268,6 +277,7 @@ object RecordingManager {
                 r.avgLevelDb?.let { put("avgLevelDb", JsonPrimitive(it)) }
                 r.snrDb?.let { put("snrDb", JsonPrimitive(it)) }
                 r.filePath?.let { put("filePath", JsonPrimitive(it)) }
+                put("owner", JsonPrimitive(r.owner))
             })
         })
         // 存储失败（如 desktop kv 超限）只影响本地记录，绝不能把「已上传成功」误报成上传失败
@@ -286,6 +296,7 @@ object RecordingManager {
                 at = s("at").toLongOrNull() ?: 0L, uploaded = s("uploaded") == "true",
                 recordingId = s("recordingId"), url = s("url"), score = d("score") ?: 0.0,
                 avgLevelDb = d("avgLevelDb"), snrDb = d("snrDb"), filePath = o["filePath"]?.jsonPrimitive?.content,
+                owner = o["owner"]?.jsonPrimitive?.content ?: kvGet("kewu_username").orEmpty(),
             )
         }
     } catch (_: Exception) { emptyList() }
