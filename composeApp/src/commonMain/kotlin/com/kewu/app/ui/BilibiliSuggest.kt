@@ -45,7 +45,6 @@ import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.VideoPlayerView
 import com.kewu.app.haptic
-import com.kewu.app.openBilibiliSearch
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.IconButton
@@ -59,7 +58,7 @@ import kotlinx.coroutines.launch
  * B 站相关视频推荐（2026-11-02 重做）：后端学科搜索接口 `/api/bilibili/videos?subject=…`
  * （接口文档 14.6，裸数组无壳，最多 10 条）。
  *
- * - [BilibiliVideoSuggest]：AI 回答后自动用提问关键词拉视频，插在回答下方（最多 3 条）；
+ * - [BilibiliVideoSuggest]：AI 回答带 [[BILI:关键词]] 标记时（只在学生问不懂的知识点时，见 BILI_TAG_RULE）拉视频，插在回答下方（最多 3 条）；
  *   加载中给占位、没结果 / 失败回退成 [BilibiliSuggestRow] 深链卡（永不空窗）。
  * - [BilibiliSuggestRow]：兜底入口，直接跳 B 站 App 搜索页（未装 App 回退浏览器）。
  * - [BilibiliBrowsePanel]：助教页手动浏览面板（搜索框 + 学科快捷词 + 结果列表）。
@@ -90,14 +89,19 @@ internal fun biliKeywordOf(question: String, maxLen: Int = 30): String =
 // ───────────────────────── 单条视频卡 ─────────────────────────
 
 @Composable
-internal fun BilibiliVideoCard(video: BilibiliVideoInfo, modifier: Modifier = Modifier) {
+internal fun BilibiliVideoCard(
+    video: BilibiliVideoInfo,
+    modifier: Modifier = Modifier,
+    /** 自定义点击（如知识点弹窗：先关弹窗再播放）；为空时直接在页面根部播放 */
+    onClick: (() -> Unit)? = null,
+) {
     val cs = COUITheme.colorScheme
     Card(
         modifier = modifier.fillMaxWidth(),
         cornerRadius = 14.dp,
         insideMargin = PaddingValues(10.dp),
         colors = kewuCardColors(),
-        onClick = { haptic(HapticKind.Tick); VideoPlayerHub.current = video },
+        onClick = { haptic(HapticKind.Tick); onClick?.invoke() ?: run { VideoPlayerHub.current = video } },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // 封面（网络图走共享 ImageLoader；失败也给占位底）
@@ -158,40 +162,21 @@ internal fun BilibiliVideoSuggest(keyword: String, maxCount: Int = 3, modifier: 
     }
 }
 
-/** 兜底深链卡（无搜索结果时仍给学生一个入口）。 */
+/** 没搜到视频时的提示行（2026-11-02：不再跳 B 站 App / 浏览器，用户要求只在课悟内看）。 */
 @Composable
 internal fun BilibiliSuggestRow(keyword: String, modifier: Modifier = Modifier) {
     val cs = COUITheme.colorScheme
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        cornerRadius = 16.dp,
-        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
-        colors = kewuCardColors(),
-        onClick = { haptic(HapticKind.Tick); openBilibiliSearch(keyword) },
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            // B 站粉小徽标
-            Box(
-                Modifier
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(BILI_PINK)
-                    .padding(horizontal = 5.dp, vertical = 2.dp),
-            ) {
-                Text("B站", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text("去 B 站看相关视频", color = cs.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    keyword, color = cs.onSurfaceSecondary, fontSize = 11.sp, maxLines = 1,
-                )
-            }
-            Icon(
-                COUIIcons.ChevronForward, contentDescription = null,
-                tint = BILI_PINK, modifier = Modifier.size(16.dp),
-            )
+    Row(modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(
+            Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(BILI_PINK)
+                .padding(horizontal = 5.dp, vertical = 2.dp),
+        ) {
+            Text("B站", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold)
         }
+        Spacer(Modifier.width(8.dp))
+        Text("暂时没找到「$keyword」的相关视频，可在助教页「B站视频」里换个词搜", color = cs.onSurfaceSecondary, fontSize = 12.sp)
     }
 }
 
@@ -294,8 +279,10 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                 verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
             ) {
                 when {
+                    // 2026-11-02：没搜索时显示「为你推荐」（AI 结合最近提问 / 作业 / 错题提炼关键词后搜索）
+                    !searching && results == null -> BiliRecommendSection()
                     searching || results == null -> Text(
-                        if (searching) "正在搜索，可能需要十几秒…" else "搜一搜你想补的学科或知识点",
+                        "正在搜索，可能需要十几秒…",
                         color = cs.onSurfaceSecondary, fontSize = 13.sp,
                         modifier = Modifier.padding(vertical = 20.dp),
                     )
@@ -305,6 +292,9 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                         modifier = Modifier.padding(vertical = 20.dp),
                     )
                     else -> results!!.forEach { BilibiliVideoCard(it) }
+                }
+                if (!searching && results != null) {
+                    KewuSecondaryButton("回到为你推荐", { results = null; query = "" }, Modifier.fillMaxWidth())
                 }
                 Spacer(Modifier.height(24.dp))
             }
@@ -339,8 +329,16 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
     val cs = COUITheme.colorScheme
     var retryToken by remember { mutableStateOf(0) }
     var error by remember(retryToken) { mutableStateOf<String?>(null) }
-    val sources = remember(video) {
-        DashVideoSources(video.title, video.cover, video.videoUrl, video.audioUrl)
+    // B 站直链带过期参数：重试时按标题重新搜一次、取同一 bvid 的新直链（拿不到就沿用旧的）
+    var fresh by remember(video) { mutableStateOf(video) }
+    LaunchedEffect(retryToken) {
+        if (retryToken > 0) {
+            KewuApi.getBilibiliVideos(video.title.take(30))?.firstOrNull { it.bvid == video.bvid && it.videoUrl != null }
+                ?.let { fresh = it }
+        }
+    }
+    val sources = remember(fresh) {
+        DashVideoSources(fresh.title, fresh.cover, fresh.videoUrl, fresh.audioUrl)
     }
 
     BackHandler { onDismiss() }

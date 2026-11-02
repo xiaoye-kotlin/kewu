@@ -813,7 +813,7 @@ private fun TaBubble(
 
 // ───────────────────────── 输入框 ─────────────────────────
 
-/** 液态玻璃输入框 + 发送钮（学生端 TaPage 同款语言：常驻导航栏上方 bottom 118dp 兜底）。 */
+/** 输入栏：全 App 统一的 [ChatInputDock]（2026-11-02，与学生端助教 / 纪要问答 / 作业辅导同一外观与键盘间距）。 */
 @Composable
 private fun TaInputBar(
     backdrop: LayerBackdrop,
@@ -825,125 +825,16 @@ private fun TaInputBar(
     quote: String? = null,
     onCancelQuote: () -> Unit = {},
 ) {
-    val cs = COUITheme.colorScheme
-    Column(Modifier.fillMaxWidth()) {
-    // 引用预览条（学生端 QuotePreviewBar 同款；不是玻璃件，可以用带淡入的 AnimatedVisibility）
-    androidx.compose.animation.AnimatedVisibility(
-        visible = quote != null,
-        enter = androidx.compose.animation.fadeIn(androidx.compose.animation.core.tween(140)) +
-            androidx.compose.animation.slideInVertically(androidx.compose.animation.core.tween(180)) { it / 2 },
-        exit = androidx.compose.animation.fadeOut(androidx.compose.animation.core.tween(110)) +
-            androidx.compose.animation.slideOutVertically(androidx.compose.animation.core.tween(140)) { it / 2 },
-    ) {
-        // 记住最后一条引用：退场动画期间 quote 已被置空，仍显示原文
-        var last by remember { mutableStateOf("") }
-        if (quote != null) last = quote
-        Box(Modifier.padding(start = 14.dp, end = 70.dp, bottom = 6.dp)) {
-            QuotePreviewBar(text = last) { onCancelQuote() }
-        }
-    }
-    // ★ 2026-10-26：底部 118dp 是给底部导航让位的；键盘弹起时导航在键盘下面，这段留白就成了
-    //   「输入框离输入法很远」——键盘弹起时只留 8dp，收起再弹回 118dp
-    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    val bottomPad by animateDpAsState(if (imeVisible) 8.dp else 118.dp, spring(dampingRatio = 0.8f, stiffness = 420f),
-        label = "taDockPad")
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp)
-            .padding(bottom = bottomPad.coerceAtLeast(0.dp), top = 6.dp), // 弹簧可能轻微过冲，padding 不能为负（2026-10-26 小米闪退）
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 玻璃输入框
-        Box(Modifier.weight(1f)) {
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = RoundedCornerShape(26.dp),
-                blurRadius = 18.dp,
-                tintAlpha = 0.34f,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, cs.dividerLine, RoundedCornerShape(26.dp)),
-            ) {
-                Box(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-                    BasicTextField(
-                        value = input,
-                        onValueChange = onInput,
-                        singleLine = true,
-                        textStyle = TextStyle(color = cs.onSurface, fontSize = 14.5.sp),
-                        modifier = Modifier.fillMaxWidth(),
-                        // 2026-10-24：IME 发送键直接提问（与发送钮等效）；自动化/外接键盘也可用 Enter 发送
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { onSend() }),
-                        decorationBox = { inner ->
-                            Box(Modifier.fillMaxWidth()) {
-                                if (input.isEmpty()) {
-                                    Text("问小悟：谁退步了 / 作业质量 / 薄弱知识点…",
-                                        color = cs.onSurfaceSecondary.copy(alpha = 0.7f), fontSize = 14.sp)
-                                }
-                                inner()
-                            }
-                        },
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.width(10.dp))
-        TaSendBtn(backdrop = backdrop, enabled = enabled && (input.isNotBlank() || quote != null), onClick = onSend)
-    }
-    }
-}
-
-/** 发送钮：46dp 液态玻璃圆钮（magnify 透镜感 + 品牌绿芯 + 纸飞机），横向拉伸式按压回弹。 */
-@Composable
-private fun TaSendBtn(backdrop: LayerBackdrop, enabled: Boolean, onClick: () -> Unit) {
-    val cs = COUITheme.colorScheme
-    val onClickState = rememberUpdatedState(onClick)
-    // 2026-10-26：删掉包住玻璃钮的 .scale（违反「采样者祖先禁 scale」，且 pressed 从未置 true，本就无效果）
-    Box(
-        Modifier
-            .size(46.dp)
-            .pointerInput(enabled) {
-                detectTapGestures(
-                    onTap = { if (enabled) onClickState.value() },
-                )
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        KewuGlassCard(
-            backdrop = backdrop,
-            shape = CircleShape,
-            blurRadius = 14.dp,
-            tintAlpha = if (enabled) 0.30f else 0.18f,
-            magnify = 1.28f,
-            highlight = defaultKewuHighlight(false),
-            modifier = Modifier
-                .fillMaxSize()
-                .border(1.dp, cs.dividerLine, CircleShape),
-        ) {
-            // 绿芯（白图标在白底上不可见的修复，与学生端 SendBtn 同款思路）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .padding(5.dp)
-                    .background(if (enabled) KewuGreen else cs.secondaryContainer, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Canvas(Modifier.size(17.dp)) {
-                    val w = size.width
-                    val h = size.height
-                    val p = Path().apply {
-                        moveTo(w * 0.08f, h * 0.5f)
-                        lineTo(w * 0.92f, h * 0.12f)
-                        lineTo(w * 0.58f, h * 0.92f)
-                        lineTo(w * 0.42f, h * 0.58f)
-                        close()
-                    }
-                    drawPath(p, if (enabled) Color(0xFF0B3B26) else cs.onSurfaceSecondary)
-                }
-            }
-        }
-    }
+    ChatInputDock(
+        backdrop = backdrop,
+        input = input,
+        onInput = onInput,
+        onSend = onSend,
+        placeholder = "问小悟：谁退步了 / 作业质量 / 薄弱知识点…",
+        sendEnabled = enabled,
+        quote = quote,
+        onCancelQuote = onCancelQuote,
+    )
 }
 
 /** 当前 epoch 毫秒（2026-10-24 聊天记录持久化用）。 */

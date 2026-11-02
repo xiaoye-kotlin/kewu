@@ -45,6 +45,7 @@ object AudioPlayback {
     val state: StateFlow<State> = _state.asStateFlow()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private const val LOAD_TIMEOUT_MS = 20_000L
     private var player: PlatformAudioPlayer? = null
     private var ticker: Job? = null
 
@@ -96,6 +97,15 @@ object AudioPlayback {
             return
         }
         player = p
+        // 2026-11-02 加载看门狗：网络挂死时部分播放器既不回调就绪也不回调失败，UI 会一直转圈。
+        // 20 秒还没就绪就判失败，给「重试」而不是无限等待。
+        scope.launch {
+            delay(LOAD_TIMEOUT_MS)
+            if (player === p && _state.value.phase == Phase.LOADING) {
+                releasePlayer()
+                _state.value = State(key = key, phase = Phase.ERROR, error = "加载超时，请检查网络后重试")
+            }
+        }
         p.prepare(
             source = source,
             onReady = { dur ->

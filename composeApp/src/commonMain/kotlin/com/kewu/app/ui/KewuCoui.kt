@@ -1,5 +1,6 @@
 package com.kewu.app.ui
 
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -115,10 +117,17 @@ private fun m3FromCoui(c: Colors) = m3LightColorScheme(
 /** 全局提示条（coui Snackbar）。任何页面 `LocalKewuSnackbar.current.toast("…")` 即可。 */
 val LocalKewuSnackbar = staticCompositionLocalOf { SnackbarHostState() }
 
-/** 发一条短提示（coui Snackbar，自动消失）。 */
-suspend fun SnackbarHostState.toast(message: String) {
-    showSnackbar(message, duration = SnackbarDuration.Short)
+/**
+ * 发一条短提示（coui Snackbar，自动消失）。
+ * ★ 2026-11-02：不再挂起调用方。coui 的 showSnackbar 会一直挂起到提示条消失，旧版「toast 后 onBack()」
+ *   要等 4 秒提示结束才退页（用户报「提交作业后一直停在作答页」）；且页面退出会取消页面 scope，
+ *   提示可能根本不出。现在交给全局协程显示，调用方立即往下走。
+ */
+fun SnackbarHostState.toast(message: String) {
+    ToastScope.launch { showSnackbar(message, duration = SnackbarDuration.Short) }
 }
+
+private val ToastScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
 
 /** App 根主题：COUITheme + 对齐的 M3 色板 + 根 coui Scaffold（覆盖层宿主 + 全局 Snackbar）。 */
 @Composable
@@ -349,7 +358,9 @@ fun KewuBottomSheet(
         onDismissRequest = close,
         onDismissFinished = { if (!visible && shown) onDismiss() },
     ) {
-        Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) { content(close) }
+        // 2026-11-02 全局输入法避让：弹层挂在窗口覆盖层，不在主界面内容区 imePadding 之下，
+        // 弹层里的输入框会被键盘挡住；这里让内容整体抬到键盘上方（insets 已被上层消费时为 0，不会重复）。
+        Column(Modifier.fillMaxWidth().imePadding().padding(bottom = 12.dp)) { content(close) }
     }
 }
 

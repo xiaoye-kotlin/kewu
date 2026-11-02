@@ -1,8 +1,6 @@
 package com.kewu.app
 
 import android.graphics.BitmapFactory
-import android.media.AudioAttributes
-import android.media.MediaPlayer
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 
@@ -18,11 +16,14 @@ actual fun decodeImageBitmap(bytes: ByteArray, maxDim: Int): ImageBitmap? {
 }
 
 /**
- * MediaPlayer 实现：在主线程创建，prepareAsync 的回调回到主线程 Looper。
- * http 链接由 MediaPlayer 边下边播（Manifest 已开 usesCleartextTraffic，OBS / 8080 是明文 http）。
+ * 录音播放（2026-11-02 改用 media3 ExoPlayer，原 MediaPlayer 实现下线）。
+ * 用户报「不管在哪个界面播放录音都一直转圈」：MediaPlayer 的 prepareAsync 遇到网络异常（如 https 连接挂死）
+ * 既不回调 onPrepared 也不回调 onError，UI 停在 LOADING；且 iPhone 录的 WAV 带 JUNK / FLLR 块，部分机型解析失败。
+ * ExoPlayer：WavExtractor 跳过未知块、连接 / 读取有超时并回调 onPlayerError；本地路径与 http(s) 统一处理。
+ * 必须在主线程创建与调用（AudioPlayback 的回调都在主线程）。
  */
 actual class PlatformAudioPlayer actual constructor() {
-    private var mp: MediaPlayer? = MediaPlayer()
+    private var player: androidx.media3.exoplayer.ExoPlayer? = null
     private var prepared = false
 
     actual fun prepare(
@@ -31,50 +32,83 @@ actual class PlatformAudioPlayer actual constructor() {
         onComplete: () -> Unit,
         onError: (String) -> Unit,
     ) {
-        val p = mp ?: return
         try {
+            val ctx = platformAppContext() as android.content.Context
+            val http = androidx.media3.datasource.DefaultHttpDataSource.Factory()
+                .setConnectTimeoutMs(10_000)
+                .setReadTimeoutMs(15_000)
+                .setAllowCrossProtocolRedirects(true)
+            val dataSource = androidx.media3.datasource.DefaultDataSource.Factory(ctx, http)
+            val p = androidx.media3.exoplayer.ExoPlayer.Builder(ctx)
+                .setMediaSourceFactory(androidx.media3.exoplayer.source.DefaultMediaSourceFactory(dataSource))
+                .build()
+            player = p
             p.setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                androidx.media3.common.AudioAttributes.Builder()
+                    .setUsage(androidx.media3.common.C.USAGE_MEDIA)
+                    .setContentType(androidx.media3.common.C.AUDIO_CONTENT_TYPE_SPEECH)
                     .build(),
+                false,
             )
-            p.setOnPreparedListener {
-                prepared = true
-                onReady(it.duration.toLong().coerceAtLeast(0))
+            p.addListener(object : androidx.media3.common.Player.Listener {
+                override fun onPlaybackStateChanged(state: Int) {
+                    when (state) {
+                        androidx.media3.common.Player.STATE_READY -> if (!prepared) {
+                            prepared = true
+                            val d = p.duration
+                            onReady(if (d == androidx.media3.common.C.TIME_UNSET) 0L else d.coerceAtLeast(0))
+                        }
+                        // 播完先停（否则 playWhenReady 仍为 true，上层 seekTo(0) 后会自动重播）
+                        androidx.media3.common.Player.STATE_ENDED -> { p.pause(); onComplete() }
+                        else -> Unit
+                    }
+                }
+
+                override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+                    onError(
+                        when (error.errorCode) {
+                            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
+                            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+                            -> "网络连接失败，请检查网络后重试"
+                            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+                            androidx.media3.common.PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+                            -> "录音文件不存在或已被清理"
+                            else -> "录音加载失败，请稍后重试"
+                        },
+                    )
+                }
+            })
+            val uri = ImageLoader.resolve(source).let { s ->
+                if (s.startsWith("http://") || s.startsWith("https://") || s.startsWith("file:") || s.startsWith("content:")) s
+                else android.net.Uri.fromFile(java.io.File(s)).toString()
             }
-            p.setOnCompletionListener { onComplete() }
-            p.setOnErrorListener { _, what, _ ->
-                onError(if (what == MediaPlayer.MEDIA_ERROR_SERVER_DIED) "播放服务异常，请重试" else "录音加载失败，请检查网络后重试")
-                true
-            }
-            p.setDataSource(ImageLoader.resolve(source))
-            p.prepareAsync()
+            p.setMediaItem(androidx.media3.common.MediaItem.fromUri(uri))
+            p.playWhenReady = false
+            p.prepare()
         } catch (e: Exception) {
             onError("无法播放这段录音")
         }
     }
 
     actual fun play() {
-        if (prepared) runCatching { mp?.start() }
+        if (prepared) runCatching { player?.play() }
     }
 
     actual fun pause() {
-        if (prepared) runCatching { if (mp?.isPlaying == true) mp?.pause() }
+        if (prepared) runCatching { player?.pause() }
     }
 
     actual fun seekTo(ms: Long) {
-        if (prepared) runCatching { mp?.seekTo(ms.toInt()) }
+        if (prepared) runCatching { player?.seekTo(ms) }
     }
 
     actual fun positionMs(): Long =
-        if (prepared) runCatching { mp?.currentPosition?.toLong() ?: 0L }.getOrDefault(0L) else 0L
+        if (prepared) runCatching { player?.currentPosition ?: 0L }.getOrDefault(0L) else 0L
 
     actual fun release() {
-        val p = mp ?: return
-        mp = null
+        val p = player ?: return
+        player = null
         prepared = false
-        runCatching { p.reset() }
         runCatching { p.release() }
     }
 }

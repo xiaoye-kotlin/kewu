@@ -237,16 +237,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     val isRecording = panel == AssistantPanel.VOICE
 
     // ── 长按气泡的 QQ 式操作菜单 + 轻提示（复制/引用/分享） ──
-    var menuMsg by remember { mutableStateOf<ChatMsg?>(null) }
-    var menuIsUser by remember { mutableStateOf(false) }
-    // ★ 菜单贴气泡定位（2026-10-19）：长按的气泡把自己的窗口坐标矩形报上来，
-    //   菜单遮罩层拿它减去根盒原点 → 相对坐标，卡片贴在气泡正上方。
-    //   滚动时 onGloballyPositioned 持续上报 → 菜单跟着气泡走，不会脱节。
-    var menuAnchor by remember { mutableStateOf<Rect?>(null) } // 长按气泡的窗口坐标矩形
+    // 菜单状态与贴气泡定位见共用组件 ChatMenuState / ChatBubbleMenu（KewuAiChat.kt）
+    val menu = rememberChatMenuState()
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }  // 页面根盒的窗口原点
     // 轻提示走全局 coui Snackbar（原自建中央胶囊已下线）
     val snackbar = LocalKewuSnackbar.current
-    val clipboard = LocalClipboardManager.current
 
     // 上下文 chip + 建议提问：真实接口（/api/courses、/api/assignments），失败保留 mock
     LaunchedEffect(Unit) {
@@ -283,14 +278,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     // ── 入场动画（错峰触发） ──
     var enterPersona by remember { mutableStateOf(false) }
     var enterChips by remember { mutableStateOf(false) }
-    var enterDock by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         delay(60)
         enterPersona = true
         delay(150)
         enterChips = true
-        delay(170)
-        enterDock = true
     }
 
     // 发送：用户消息立即上屏并落盘；2026-10-24 起走真实大模型（AiClient），
@@ -342,6 +334,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     append(assignmentTitles.take(6).joinToString("、"))
                 }
                 append("\n\n")
+                append(BILI_TAG_RULE)
+                append("\n\n")
                 append(AiAgent.studentCapability())
             }
             // 2026-10-26：流式输出——回答边生成边上屏（打字机效果），不再干等整段
@@ -357,10 +351,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     val parsed = AiAgent.parse(reply)
                     // 执行软件操作指令（导航/代办），结果说明跟在后面一起展示
                     val note = parsed.action?.let { AiAgent.execute("student", it) }
-                    // 回答成功后随消息附一条 B 站相关视频推荐（AI 服务连不上时不推）
+                    // B 站视频只在模型判断「学生在问不懂的知识点」时才推（回答末尾的 [[BILI:关键词]] 标记）
+                    val (body, biliKw) = splitBiliTag(parsed.text)
                     AssistantHub.Reply(
-                        listOfNotNull(parsed.text.ifEmpty { null }, note).joinToString("\n"),
-                        payload = BiliSuggest(biliKeywordOf(text)),
+                        listOfNotNull(body.ifEmpty { null }, note).joinToString("\n"),
+                        payload = biliKw?.let { BiliSuggest(it) },
                     )
                 }
             }
@@ -388,37 +383,6 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         if (enterChips) 0.dp else 18.dp,
         spring(dampingRatio = 0.55f, stiffness = 320f),
         label = "chipsY",
-    )
-    val dockY by animateDpAsState(
-        if (enterDock) 0.dp else 84.dp,
-        spring(dampingRatio = 0.52f, stiffness = 330f),
-        label = "dockY",
-    )
-    val dockBlur by animateDpAsState(
-        if (enterDock) 22.dp else 4.dp,
-        spring(dampingRatio = 0.52f, stiffness = 330f),
-        label = "dockBlur",
-    )
-    val dockTint by animateFloatAsState(
-        if (enterDock) 0.38f else 0.04f,
-        spring(dampingRatio = 0.52f, stiffness = 330f, visibilityThreshold = 0.0005f),
-        label = "dockTint",
-    )
-    val dockCorner by animateDpAsState(
-        if (enterDock) 28.dp else 40.dp,
-        spring(dampingRatio = 0.52f, stiffness = 330f),
-        label = "dockCorner",
-    )
-
-    val dockBottomPad by animateDpAsState(
-        // 118 → 110：输入框整体下移 8dp（用户微调，仍安全避开底部导航托盘 ~90dp）
-        // 2026-10-26：键盘弹起时 14 → 8dp（用户反馈输入框离输入法太远）
-        if (imeVisible) 8.dp else 110.dp,
-        // ★ 2026-10-26 修「点输入框弹键盘即闪退」（小米 Android 13 崩溃上报）：旧版弹簧 dampingRatio=0.6
-        //   从 110 收到 8 会过冲约 10dp → padding 变成负数 → IllegalArgumentException: Padding must be non-negative。
-        //   改临界阻尼（不过冲），使用处再兜底 coerceAtLeast(0.dp)。
-        spring(dampingRatio = 1f, stiffness = 420f),
-        label = "dockBottomPad",
     )
 
     // 根盒原点：供长按菜单把「气泡窗口坐标」换算成「相对本页坐标」（贴气泡定位用）
@@ -569,40 +533,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     // 2026-10-24：稳定 key + animateItem —— 新消息滑入，聊天更丝滑
                     item(key = msg.id, contentType = msg.isUser) {
                         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
-                            if (msg.isUser) {
-                                UserBubble(
-                                    msg,
-                                    // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
-                                    reportBounds = msg == menuMsg,
-                                    onBounds = { menuAnchor = it },
-                                ) {
-                                    menuMsg = msg
-                                    menuIsUser = true
-                                    haptic(HapticKind.Medium)
-                                }
-                            } else {
-                                Column {
-                                    AiBubble(
-                                        msg,
-                                        pageBackdrop,
-                                        reportBounds = msg == menuMsg,
-                                        onBounds = { menuAnchor = it },
-                                    ) {
-                                        menuMsg = msg
-                                        menuIsUser = false
-                                        haptic(HapticKind.Medium)
-                                    }
-                                    // B 站相关视频推荐（2026-11-02）：随回答到达，真实视频卡，点击跳 B 站 App / 浏览器
-                                    msg.biliKeyword?.let { kw ->
-                                        Spacer(Modifier.height(6.dp))
-                                        BilibiliVideoSuggest(
-                                            kw,
-                                            // 与 AI 气泡同侧（左），留出气尾巴的缩进
-                                            modifier = Modifier.padding(end = 48.dp),
-                                        )
-                                    }
-                                }
-                            }
+                            ChatMessageItem(msg, pageBackdrop, menu)
                         }
                     }
                 }
@@ -610,10 +541,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 if (streamText != null) {
                     item(key = "ai-streaming") {
                         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
-                            AiBubble(
-                                ChatMsg(streamText.ifEmpty { "小悟正在思考…" }, isUser = false, id = -1L, ts = nowMs()),
-                                pageBackdrop, reportBounds = false, onBounds = {},
-                            ) {}
+                            ChatStreamingBubble(streamText, pageBackdrop)
                         }
                     }
                 }
@@ -697,119 +625,35 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 }
             }
 
-            // ── 液态玻璃输入框：常驻导航栏上方；键盘行为由 manifest adjustResize 负责
-            // （窗口整体收缩、weight 对话区自动让位；不要在此加 imePadding —— 会吃掉 weight 空间把对话区压没） ──
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .offset(y = dockY) // placement 位移（采样者安全）
-                    .padding(horizontal = 16.dp)
-                    // 底部留白：无键盘时为导航栏兜底（≈114dp）；键盘弹起导航已被键盘盖住，只需小边距
-                    .padding(bottom = dockBottomPad.coerceAtLeast(0.dp)),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.weight(1f)) {
-                    Column(Modifier.fillMaxWidth()) {
-                        // ★ 引用预览（12.8）：输入框**上方**单独一条灰色小条，× 可取消
-                        AnimatedVisibility(
-                            visible = quotePreview != null,
-                            enter = fadeIn(tween(140)) + slideInVertically(tween(180)) { -it / 2 },
-                            exit = fadeOut(tween(110)) + slideOutVertically(tween(140)) { -it / 2 },
-                        ) {
-                            QuotePreviewBar(text = quotePreview.orEmpty()) { quotePreview = null }
+            // ── 液态玻璃输入栏：共用组件（键盘间距 / 引用条 / 入场动画全 App 一致） ──
+            ChatInputDock(
+                backdrop = pageBackdrop,
+                input = input,
+                onInput = { input = it },
+                onSend = { doSend(input) },
+                quote = quotePreview,
+                onCancelQuote = { quotePreview = null },
+                leading = {
+                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                        panel = if (panel == AssistantPanel.ATTACH) AssistantPanel.NONE else AssistantPanel.ATTACH
+                    }) { ChatGlyphIcon(COUIIcons.Add) }
+                },
+                trailing = {
+                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                        if (panel == AssistantPanel.VOICE) {
+                            panel = AssistantPanel.NONE
+                        } else {
+                            voiceSecs = 0
+                            panel = AssistantPanel.VOICE
                         }
-                        KewuGlassCard(
-                            backdrop = pageBackdrop,
-                            shape = RoundedCornerShape(dockCorner),
-                            blurRadius = dockBlur,
-                            tintAlpha = dockTint,
-                            modifier = Modifier.height(56.dp).fillMaxWidth(),
-                        ) {
-                            // 描边 + 内容（浅色底上拓玻璃边界的关键）
-                            DockStroke(RoundedCornerShape(28.dp))
-                            Row(
-                                Modifier.fillMaxSize().padding(horizontal = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                RoundIconBtn(backdrop = pageBackdrop, onClick = {
-                                    panel = if (panel == AssistantPanel.ATTACH) {
-                                        AssistantPanel.NONE
-                                    } else {
-                                        AssistantPanel.ATTACH
-                                    }
-                                }) { GlyphIcon(COUIIcons.Add) }
-                                Box(
-                                    Modifier.weight(1f).padding(horizontal = 9.dp),
-                                    contentAlignment = Alignment.CenterStart,
-                                ) {
-                                    if (input.isEmpty()) {
-                                        Text("问点什么…", color = cs.onSurfaceSecondary, fontSize = 14.sp)
-                                    }
-                                    BasicTextField(
-                                        value = input,
-                                        onValueChange = { input = it },
-                                        textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
-                                        cursorBrush = SolidColor(cs.primary),
-                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                                        keyboardActions = KeyboardActions(onSend = { doSend(input) }),
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                }
-                                RoundIconBtn(backdrop = pageBackdrop, onClick = {
-                                    if (panel == AssistantPanel.VOICE) {
-                                        panel = AssistantPanel.NONE
-                                    } else {
-                                        voiceSecs = 0
-                                        panel = AssistantPanel.VOICE
-                                    }
-                                }) { GlyphIcon(COUIIcons.Mic) }
-                                Spacer(Modifier.width(4.dp))
-                                SendBtn(
-                                    backdrop = pageBackdrop,
-                                    // 有输入或有待发引用时都可发送（仅吐槽字的灰态仍由兄弟逻辑控制）
-                                    enabled = input.isNotBlank() || quotePreview != null,
-                                    onSend = { doSend(input) },
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+                    }) { ChatGlyphIcon(COUIIcons.Mic) }
+                },
+            )
             Spacer(Modifier.height(6.dp))
         }
 
         // ── 长按气泡的 QQ 式操作菜单（液态玻璃 + coui Card 选项） ──
-        val activeMenuMsg = menuMsg
-        if (activeMenuMsg != null) {
-            // 气泡窗口坐标 → 相对本页根盒的坐标（菜单遮罩是根盒的 fillMaxSize 子节点，同坐标系）
-            val relRect = menuAnchor?.let { r ->
-                Rect(
-                    r.left - rootOrigin.x, r.top - rootOrigin.y,
-                    r.right - rootOrigin.x, r.bottom - rootOrigin.y,
-                )
-            }
-            LiquidGlassActionMenu(
-                visible = true,
-                anchor = if (menuIsUser) GlassMenuAnchor.TopEnd else GlassMenuAnchor.TopStart,
-                // 贴气泡正上方（用户 2026-10-19：菜单离气泡太远，要贴着气泡）
-                anchorRect = relRect,
-                actions = listOf(
-                    GlassMenuAction("复制", MenuGlyphKind.Copy) {
-                        clipboard.setText(AnnotatedString(activeMenuMsg.displayText))
-                        scope.launch { snackbar.toast("已复制") }
-                    },
-                    GlassMenuAction("引用", MenuGlyphKind.Quote) {
-                        // ★ 引用（12.8）：不再把原文塞进输入框，改为在输入框上方单独显示引用条
-                        quotePreview = activeMenuMsg.displayText
-                    },
-                    GlassMenuAction("分享", MenuGlyphKind.Share) {
-                        // ★ 分享（12.8）：不再复制内容，直接调系统分享面板（可分享到任意 App）
-                        shareText(activeMenuMsg.displayText)
-                    },
-                ),
-                onDismiss = { menuMsg = null },
-            )
-        }
+        ChatBubbleMenu(menu, rootOrigin) { quotePreview = it }
 
         // ── B 站学习视频浏览面板（2026-11-02）：页内全屏覆盖层，自带 BackHandler ──
         if (showBiliPanel) {
@@ -823,31 +667,12 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
 // ───────────────────────── 数据与常量 ─────────────────────────
 
+/** 消息模型已抽到共用对话组件（KewuAiChat.kt），本页沿用旧名。 */
+private typealias ChatMsg = AiChatMsg
+
 /** B 站粉浅底（「B站视频」入口 chip 用）。 */
 private val BILI_PINK_SOFT = Color(0xFFFB7299).copy(alpha = 0.14f)
 
-private data class ChatMsg(
-    val text: String,
-    val isUser: Boolean,
-    val isVoice: Boolean = false,
-    val voiceSecs: Int = 0,
-    val formula: String? = null,
-    /** 稳定 id：列表动画 key 与聊天记录持久化用（2026-10-24）。 */
-    val id: Long = 0L,
-    /** 发送时刻 epoch 毫秒；恢复的历史带原值。 */
-    val ts: Long = 0L,
-    /**
-     * 被引用的原文（第三轮 12.8）：QQ 式引用 —— 发送时随消息带上，
-     * 气泡顶部渲染一块灰色引用小条；null 表示这条消息没有引用。
-     */
-    val quote: String? = null,
-    /** B 站相关视频推荐（2026-11-02）：仅 AI 回答气泡可能携带，渲染在气泡下方的推荐卡。 */
-    val biliKeyword: String? = null,
-) {
-    /** 复制/引用/分享用的纯文本（语音消息给可读描述）。 */
-    val displayText: String
-        get() = if (isVoice) "语音消息 · ${fmtClock(voiceSecs)}" else text
-}
 
 /** 手写 mm:ss（commonMain 禁 String.format）。 */
 private fun two(n: Int) = if (n < 10) "0$n" else "$n"
@@ -856,102 +681,9 @@ private fun two(n: Int) = if (n < 10) "0$n" else "$n"
 private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 private fun fmtClock(totalSec: Int) = "${two(totalSec / 60)}:${two(totalSec % 60)}"
 
-// ───────────────────────── 通用按压 Q 弹 ─────────────────────────
-
-/**
- * 按压回弹：按下 1→0.88，低阻尼弹簧带回冲 —— 全组件统一的「液态玻璃 Q 弹」。
- * ⚠️ 只能用于**非采样者**节点；玻璃件请把本修饰符加在玻璃**内部**内容上。
- */
-@Composable
-private fun Modifier.pressBounce(onClick: () -> Unit): Modifier {
-    val pressed = remember { mutableStateOf(false) }
-    // ★ 稳定手势：onClick 内联 lambda 每次重组身份都变，用 pointerInput(Unit) + rememberUpdatedState
-    //   避免快速点击时手势监听被反复 dispose/recreate 导致掉帧、手势被吞（第三轮 12.5 修复①）。
-    val onClickState = rememberUpdatedState(onClick)
-    val scaleV by animateFloatAsState(
-        targetValue = if (pressed.value) 0.88f else 1f,
-        animationSpec = spring(dampingRatio = 0.32f, stiffness = 480f, visibilityThreshold = 0.0005f),
-        label = "pressBounce",
-    )
-    return this
-        .scale(scaleV)
-        .pointerInput(Unit) {
-            detectTapGestures(
-                onPress = {
-                    pressed.value = true
-                    haptic(HapticKind.Tick)
-                    tryAwaitRelease()
-                    pressed.value = false
-                },
-                onTap = { onClickState.value() },
-            )
-        }
-}
-
-/**
- * 气泡按压 + 长按：按下 Q 弹缩放（0.90，低阻尼弹簧），长按触发 QQ 式操作菜单。
- * 单一 detectTapGestures 同时承载 onTap/onLongPress，避免 pressBounce 与 combinedClickable 抢手势。
- */
-@Composable
-internal fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
-    val pressed = remember { mutableStateOf(false) }
-    // ★ 稳定手势：onLongPress 内联 lambda 每次重组身份都变，用 pointerInput(Unit) + rememberUpdatedState
-    //   避免快速交互时手势监听被反复重建（第三轮 12.5 修复①）。
-    val onLongPressState = rememberUpdatedState(onLongPress)
-    val scaleV by animateFloatAsState(
-        targetValue = if (pressed.value) 0.90f else 1f,
-        animationSpec = spring(dampingRatio = 0.32f, stiffness = 480f, visibilityThreshold = 0.0005f),
-        label = "bubblePress",
-    )
-    return this
-        .scale(scaleV)
-        .pointerInput(Unit) {
-            detectTapGestures(
-                onPress = {
-                    pressed.value = true
-                    haptic(HapticKind.Tick)
-                    tryAwaitRelease()
-                    pressed.value = false
-                },
-                onLongPress = { onLongPressState.value() },
-            )
-        }
-}
 
 // ───────────────────────── 子组件 ─────────────────────────
 
-/**
- * 浅色底玻璃描边：外面看得到的「框」。
- * 外圈极淡暗轮廓 + 内圈白高光（SrcOver；Screen 在浅色 M3 底会被洗白 —— 导航托盘同款结论）。
- */
-@Composable
-private fun DockStroke(shape: RoundedCornerShape) {
-    val cs = COUITheme.colorScheme
-    Canvas(
-        Modifier
-            .fillMaxSize()
-            .border(1.dp, cs.dividerLine, shape),
-    ) {
-        val w = size.width
-        val h = size.height
-        val edge = h * 0.018f
-        drawRoundRect(
-            Color.Black.copy(alpha = 0.05f),
-            topLeft = Offset(edge / 2f, edge / 2f),
-            size = Size(w - edge, h - edge),
-            cornerRadius = CornerRadius(h / 2f),
-            style = Stroke(width = edge),
-        )
-        val rimW = h * 0.035f
-        drawRoundRect(
-            Color.White.copy(alpha = 0.30f),
-            topLeft = Offset(rimW, rimW),
-            size = Size(w - rimW * 2f, h - rimW * 2f),
-            cornerRadius = CornerRadius(h / 2f - rimW),
-            style = Stroke(width = rimW),
-        )
-    }
-}
 
 /**
  * 顶部上下文 chip：小玻璃胶囊（描边 + 圆点 + 文字，内容可 Q 弹按压）。
@@ -988,242 +720,7 @@ private fun ContextChip(
     }
 }
 
-/**
- * AI 气泡（2026-10-18 强化）：**整颗液态玻璃包裹** —— 足够大的圆角（尾部小角 + 22dp）、
- * 22dp 毛玻璃 blur + 奶白磨砂 tint + outlineVariant 描边，透出身后列表内容。
- * 长按 → QQ 式操作菜单（复制/引用/分享，LiquidGlassActionMenu）。
- * 入场 = 玻璃凝结（tint/blur 从近零插值）+ placement 上浮 + 内容透明 —— 采样者安全。
- */
-@Composable
-private fun AiBubble(
-    msg: ChatMsg,
-    backdrop: LayerBackdrop,
-    /** 被长按选中：持续上报气泡矩形（窗口坐标）供菜单贴脸定位；滚动时也跟着上报 */
-    reportBounds: Boolean,
-    onBounds: (Rect) -> Unit,
-    onLongPress: () -> Unit,
-) {
-    val cs = COUITheme.colorScheme
-    val shape = RoundedCornerShape(topStart = 8.dp, topEnd = 22.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
-    val p = rememberEnterProgress(0, baseDelayMs = 60L)
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-        Box(
-            Modifier
-                .border(1.dp, cs.dividerLine, shape)
-                .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
-        ) {
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = shape,
-                blurRadius = glassCondenseBlur(p, 22f),
-                tintAlpha = 0.36f * p,
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .glassEnter(p, 30f),
-            ) {
-                Column(
-                    Modifier
-                        .alpha(p)
-                        .bubblePress(onLongPress)
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Canvas(Modifier.size(6.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
-                        Spacer(Modifier.width(5.dp))
-                        Text("小悟", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Spacer(Modifier.height(5.dp))
-                    Text(msg.text, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
-                    msg.formula?.let { f ->
-                        Spacer(Modifier.height(7.dp))
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = cs.secondaryContainer,
-                            border = BorderStroke(1.dp, KewuGreen.copy(alpha = 0.4f)),
-                        ) {
-                            Text(
-                                f, color = cs.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
 
-/** 用户气泡：coui Surface 品牌色实心填充 / 语音气泡带 mic + 时长，右对齐；同支持长按菜单。 */
-@Composable
-private fun UserBubble(
-    msg: ChatMsg,
-    /** 被长按选中：持续上报气泡矩形（窗口坐标）供菜单贴脸定位；滚动时也跟着上报 */
-    reportBounds: Boolean,
-    onBounds: (Rect) -> Unit,
-    onLongPress: () -> Unit,
-) {
-    val cs = COUITheme.colorScheme
-    val shape = RoundedCornerShape(topStart = 22.dp, topEnd = 8.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
-    val p = rememberEnterProgress(0, baseDelayMs = 60L)
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        // Surface 承担 clip + 品牌色底；按压缩放仍只作用于内部内容（与改造前一致）
-        Surface(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .riseEnter(p, 26f)
-                .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
-            shape = shape,
-            color = cs.primary,
-            contentColor = cs.onPrimary,
-        ) {
-        Column(
-            Modifier
-                .bubblePress(onLongPress)
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-        ) {
-            // ★ 引用（12.8）：气泡顶部渲染一块半透明引用小条（被引用原文）
-            msg.quote?.let { quoted ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(cs.onPrimary.copy(alpha = 0.16f))
-                        .padding(horizontal = 9.dp, vertical = 6.dp),
-                ) {
-                    // 左侧竖条：一眼认出是"引用"而非正文
-                    Box(
-                        Modifier
-                            .width(2.5.dp)
-                            .heightIn(min = 22.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(cs.onPrimary.copy(alpha = 0.5f)),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        quoted,
-                        color = cs.onPrimary.copy(alpha = 0.72f),
-                        fontSize = 11.sp, lineHeight = 15.sp,
-                        maxLines = 3, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Spacer(Modifier.height(7.dp))
-            }
-            if (msg.isVoice) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(COUIIcons.Mic, contentDescription = null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "语音消息 · ${fmtClock(msg.voiceSecs)}",
-                        color = cs.onPrimary,
-                        fontSize = 13.sp,
-                    )
-                }
-            } else {
-                Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
-            }
-        }
-        }
-    }
-}
-
-/**
- * QQ 式引用预览条（第三轮 12.8）：输入框**上方**单独显示「引用了什么」，
- * 灰色填充质地 + 小字 + 左侧品牌色竖条，右侧 × 一键取消引用。
- * （旧版是把原文包「」塞进输入框，效果差且污染输入内容。）
- */
-@Composable
-internal fun QuotePreviewBar(text: String, onCancel: () -> Unit) {
-    val cs = COUITheme.colorScheme
-    // coui Surface 承载底色 + 描边；× 换 coui IconButton + Close 图标
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = cs.surfaceContainer,
-        border = BorderStroke(1.dp, cs.dividerLine),
-    ) {
-        Row(
-            Modifier.padding(start = 11.dp, top = 7.dp, bottom = 7.dp, end = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .width(3.dp)
-                    .height(26.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(KewuGreen),
-            )
-            Spacer(Modifier.width(9.dp))
-            Column(Modifier.weight(1f)) {
-                Text("引用", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
-                Text(
-                    text, color = cs.onSurfaceSecondary,
-                    fontSize = 11.5.sp, lineHeight = 15.sp,
-                    maxLines = 2, overflow = TextOverflow.Ellipsis,
-                )
-            }
-            // × 取消（带轻震动）
-            IconButton(
-                onClick = { haptic(HapticKind.Tick); onCancel() },
-                minWidth = 32.dp,
-                minHeight = 32.dp,
-                cornerRadius = 16.dp,
-            ) {
-                Icon(COUIIcons.Close, contentDescription = "取消引用", tint = cs.onSurfaceSecondary, modifier = Modifier.size(14.dp))
-            }
-        }
-    }
-}
-
-/** 输入框内圆形玻璃小钮（照片/文件、语音共用；外圈 Q 弹 + 描边）。 */
-@Composable
-private fun RoundIconBtn(
-    backdrop: LayerBackdrop,
-    onClick: () -> Unit,
-    glyph: @Composable () -> Unit,
-) {
-    val cs = COUITheme.colorScheme
-    // ★ 第三轮 12.5：按压缩放只加在**内部图标**（非采样者），玻璃件保持静止
-    // —— 否则外层 scale 裹住玻璃采样者，快速点击触发反复重采样卡顿（且踩 coui 硬约束）。
-    // 手势用 pointerInput(Unit)+rememberUpdatedState，稳定不重建。
-    val pressed = remember { mutableStateOf(false) }
-    val iconScale by animateFloatAsState(
-        targetValue = if (pressed.value) 0.82f else 1f,
-        animationSpec = spring(dampingRatio = 0.32f, stiffness = 480f, visibilityThreshold = 0.0005f),
-        label = "roundBtnIcon",
-    )
-    val onClickState = rememberUpdatedState(onClick)
-    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().border(1.dp, cs.dividerLine, CircleShape)) {
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = CircleShape,
-                blurRadius = 12.dp,
-                tintAlpha = 0.24f,
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                // 玻璃件保持静止，仅内部图标随按压 Q 弹
-                Box(Modifier.fillMaxSize().scale(iconScale), contentAlignment = Alignment.Center) { glyph() }
-            }
-        }
-        // 稳定的手势监听层（盖在最上，吞掉点击不干扰内部静态玻璃）
-        Box(
-            Modifier
-                .matchParentSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = {
-                            pressed.value = true
-                            haptic(HapticKind.Tick)
-                            tryAwaitRelease()
-                            pressed.value = false
-                        },
-                        onTap = { onClickState.value() },
-                    )
-                },
-        )
-    }
-}
 
 /** 人物 icon（头 + 肩，实心白） —— AI 头像同款。 */
 @Composable
@@ -1242,125 +739,7 @@ private fun PersonGlyph(modifier: Modifier = Modifier, color: Color) {
     }
 }
 
-/** 输入框内小钮的 coui 图标（原自绘 Plus / Mic 已换 coui-icons）。 */
-@Composable
-private fun GlyphIcon(icon: ImageVector) {
-    Icon(icon, contentDescription = null, tint = COUITheme.colorScheme.onSurfaceSecondary, modifier = Modifier.size(20.dp))
-}
 
-/**
- * 发送钮：绿芯液态玻璃圆钮（KewuGreen 径向渐变芯 —— 白图标在浅色底上才看得见）
- * + 导航泡泡同款 spectralBrush 彩虹双带 + 描边。
- * ★ 2026-10-19 定稿：按压反馈 = **内部箭头放大一圈再回缩** + **外层彩虹镶边明显外扩**。
- *   不再做整钮横向拉宽（用户明确不要）：外壳保持不动，动的是"里面的箭头"和"外面那层彩虹"。
- *   低阻尼 spring + 显式小阈值 → 松手回缩带过冲，Q 弹。玻璃件只在交互时变换（非首次组合），
- *   规避 coui 首帧 SIGSEGV。
- */
-@Composable
-private fun SendBtn(
-    backdrop: LayerBackdrop,
-    /** 可发送（有输入内容或有待发引用）；不可发送时罩一层白纱示意置灰。 */
-    enabled: Boolean,
-    onSend: () -> Unit,
-) {
-    val pressed = remember { mutableStateOf(false) }
-    // ① 内部箭头：按下放大一圈（×1.34），松手回缩 —— 低阻尼 spring 带回弹过冲
-    val iconScale by animateFloatAsState(
-        targetValue = if (pressed.value) 1.34f else 1f,
-        animationSpec = spring(dampingRatio = 0.30f, stiffness = 380f, visibilityThreshold = 0.0005f),
-        label = "sendIconScale",
-    )
-    // ② 外层彩虹镶边：按下明显外扩 + 加粗（主要按压反馈在这里，比箭头变化更抢眼）
-    val rimGrow by animateFloatAsState(
-        targetValue = if (pressed.value) 1f else 0f,
-        animationSpec = spring(dampingRatio = 0.34f, stiffness = 320f, visibilityThreshold = 0.0005f),
-        label = "sendRimGrow",
-    )
-    val rainbow = if (pressed.value) 0.85f else 0.55f
-
-    // 外壳不再整体缩放 —— 只动内部箭头与彩虹镶边
-    Box(Modifier.size(46.dp)) {
-        Box(Modifier.fillMaxSize().border(1.dp, KewuGreen.copy(alpha = 0.55f), CircleShape)) {
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = CircleShape,
-                blurRadius = 14.dp,
-                tintAlpha = if (pressed.value) 0.10f else 0.14f,
-                magnify = 1.28f, // 导航泡泡同款"内容透过来还被放大"的透镜感
-                modifier = Modifier.fillMaxSize(),
-            ) {
-                // 绿芯 + 棱边 + 彩虹双带（复刻导航泡泡 Canvas 画法；彩虹 SrcOver 不用 Screen——浅色底会洗白）
-                Canvas(Modifier.fillMaxSize()) {
-                    val h = size.height
-                    val r = h / 2f
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            0.0f to Color(0xFF2BFF9E).copy(alpha = if (pressed.value) 1f else 0.92f),
-                            0.72f to KewuGreen.copy(alpha = if (pressed.value) 0.85f else 0.70f),
-                            1.0f to KewuGreen.copy(alpha = 0.18f),
-                            center = center,
-                            radius = r,
-                        ),
-                        radius = r,
-                    )
-                    // 外圈：极淡暗轮廓（浅色 M3 背景上给玻璃一个边界）
-                    val edge = h * 0.012f
-                    drawCircle(Color.Black.copy(alpha = 0.06f), radius = r - edge / 2f, style = Stroke(width = edge))
-                    // 内圈：白高光（棱边反光；浅色底用 SrcOver 低透明度）
-                    val rimW = h * 0.040f
-                    drawCircle(Color.White.copy(alpha = 0.35f), radius = r - rimW, style = Stroke(width = rimW))
-                    // 彩虹主带：贴白高光内侧、细而亮。★ 按下时 inset 变小 → 半径外扩，同时加粗
-                    val mainInset = h * (0.058f - 0.032f * rimGrow)
-                    drawCircle(
-                        brush = spectralBrush(alpha = 0.55f * rainbow),
-                        radius = r - mainInset,
-                        style = Stroke(width = h * (0.026f + 0.012f * rimGrow)),
-                    )
-                    // 彩虹次带：稍靠内、宽而柔。同样随 rimGrow 外扩加粗
-                    val softInset = h * (0.095f - 0.040f * rimGrow)
-                    drawCircle(
-                        brush = spectralBrush(alpha = 0.26f * rainbow),
-                        radius = r - softInset,
-                        style = Stroke(width = h * (0.030f + 0.014f * rimGrow)),
-                    )
-                }
-            }
-        }
-        // 手势层 + 内部箭头（★ 箭头随按压放大一圈再回缩；外壳不缩放）
-        Box(
-            Modifier
-                .matchParentSize()
-                .pointerInput(Unit) {
-                    detectTapGestures(
-                        onPress = {
-                            pressed.value = true
-                            haptic(HapticKind.Tick)
-                            tryAwaitRelease()
-                            pressed.value = false
-                        },
-                        onTap = { onSend() },
-                    )
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Canvas(Modifier.size(19.dp).scale(iconScale)) {
-                val s = size.minDimension
-                val plane = Path().apply {
-                    moveTo(s * 0.08f, s * 0.50f)
-                    lineTo(s * 0.92f, s * 0.10f)
-                    lineTo(s * 0.58f, s * 0.90f)
-                    lineTo(s * 0.44f, s * 0.60f)
-                    close()
-                }
-                drawPath(plane, Color.White)
-            }
-        }
-        // 不可发送时罩一层白纱示意置灰（真正的空串拦截在 doSend 里）
-        if (!enabled) {
-            Box(Modifier.matchParentSize().clip(CircleShape).background(Color.White.copy(alpha = 0.25f)))
-        }
-    }
-}
 
 // ───────────────────────── 附件 / 录音面板 ─────────────────────────
 

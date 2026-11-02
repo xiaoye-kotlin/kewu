@@ -1,47 +1,41 @@
 package com.kewu.app.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.AiClient
 import com.kewu.app.HapticKind
-import com.kewu.app.KewuBlue
-import com.kewu.app.KewuGreen
+import com.kewu.app.KewuApi
 import com.kewu.app.Question
 import com.kewu.app.QuestionType
 import com.kewu.app.haptic
+import com.kewu.app.kvGet
+import com.kewu.app.kvSet
 import io.github.suqi8.coui.kmp.basic.Chip
 import io.github.suqi8.coui.kmp.basic.Text
-import io.github.suqi8.coui.kmp.basic.TextField
-import io.github.suqi8.coui.kmp.basic.TextFieldMode
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 
 /*
  * 「小悟一题一辅」苏格拉底式作业辅导（2026-10-26，ICT 创新赛 AI 智能体功能）。
@@ -49,16 +43,42 @@ import kotlinx.coroutines.launch
  * 学生作答时，每道题都可以叫小悟；小悟按「提示阶梯」引导：
  *   ① 思路点拨（这题考什么、从哪下手）→ ② 关键一步（给出关键公式 / 概念，不算出结果）→ ③ 方向检查（看学生写的答案方向对不对，只说哪里有问题）。
  * 提交前绝不给出最终答案或正确选项（防代写）；每题求助次数随提交上报，老师在「学生作业详情」里看到学生卡在哪。
- * 对话按题保存在内存里，关掉面板再打开还在。
+ *
+ * 2026-11-02：
+ *   - 界面改用全 App 统一的 [KewuAiChatScreen]（原底部弹层输入框会被输入法挡住）；
+ *   - 对话按「作业 id#题目 id」落盘保存（[TutorSessions]），AI 错题本分析错因时把这段对话一起交给 AI，
+ *     让它知道学生当时是怎么想的、卡在哪一步。
  */
 
 /** 一条辅导消息。 */
 internal data class TutorMsg(val fromAi: Boolean, val text: String)
 
-/** 按「作业 id + 题目 id」保存的辅导对话（进程内）。 */
+/** 按「作业 id#题目 id」保存的辅导对话（按账号落盘，换账号互不可见）。 */
 internal object TutorSessions {
-    private val map = mutableMapOf<String, SnapshotStateList<TutorMsg>>()
-    fun of(key: String): SnapshotStateList<TutorMsg> = map.getOrPut(key) { mutableStateListOf() }
+    private val cache = mutableMapOf<String, List<TutorMsg>>()
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private fun storeKey(key: String) = "kewu_tutor_" + KewuApi.username.orEmpty() + "_" + key
+
+    fun of(key: String): List<TutorMsg> = cache.getOrPut(key) {
+        runCatching {
+            (json.parseToJsonElement(kvGet(storeKey(key)) ?: return@getOrPut emptyList()) as JsonArray).map {
+                val o = it.jsonObject
+                TutorMsg(o["ai"]?.jsonPrimitive?.booleanOrNull == true, (o["t"] as? JsonPrimitive)?.content.orEmpty())
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    fun save(key: String, msgs: List<TutorMsg>) {
+        cache[key] = msgs
+        kvSet(storeKey(key), buildJsonArray {
+            msgs.takeLast(60).forEach { m -> add(buildJsonObject { put("ai", m.fromAi); put("t", m.text) }) }
+        }.toString())
+    }
+
+    /** 给错题本用的对话文本（无对话返回空串）。 */
+    fun transcript(key: String, maxChars: Int = 2500): String =
+        of(key).joinToString("\n") { (if (it.fromAi) "小悟：" else "学生：") + it.text }.takeLast(maxChars)
 
     /** 课程 id → 最近课堂纪要（SIS 转写 + AI 整理），进程内缓存。 */
     val classNotes = mutableMapOf<String, String>()
@@ -71,6 +91,10 @@ private val TUTOR_SYSTEM = """你是课悟 App 的 AI 助教「小悟」，正�
 3. 按学生请求的提示等级回应：「思路点拨」只说考查点和切入方向；「关键一步」给出关键概念 / 公式 / 第一步，但不算出结果；「检查方向」只评价学生答案的思路对不对、哪里可能有问题，不说正确答案是什么。
 4. 结尾用一个引导性小问题，让学生自己往下想。"""
 
+/**
+ * 作业里某道题的「问小悟」整页对话（统一对话界面）。[show] 为 false 时不渲染。
+ * 放在作答页根 Box 的最后，盖住整页；返回键 / 顶栏返回关闭。
+ */
 @Composable
 internal fun AiTutorSheet(
     show: Boolean,
@@ -83,39 +107,27 @@ internal fun AiTutorSheet(
     onUsed: () -> Unit,
     courseId: String = "",
 ) {
-    KewuBottomSheet(show = show, onDismiss = onDismiss, title = "小悟 · 第 $index 题辅导") { _ ->
-        TutorBody(sessionKey, question, courseName, currentAnswer, onUsed, courseId)
-    }
-}
-
-@Composable
-private fun TutorBody(
-    sessionKey: String,
-    question: Question,
-    courseName: String,
-    currentAnswer: String,
-    onUsed: () -> Unit,
-    courseId: String,
-) {
+    if (!show) return
     val cs = COUITheme.colorScheme
+    val scope = rememberCoroutineScope()
     // 这门课最近的课堂纪要（下课后录音经华为云 SIS 转写 + AI 整理）：小悟按老师课上讲的方法来提示
     LaunchedEffect(courseId) {
         if (courseId.isNotBlank() && courseId !in TutorSessions.classNotes) {
-            TutorSessions.classNotes[courseId] = com.kewu.app.KewuApi.getClassNotes(courseId, 2)
+            TutorSessions.classNotes[courseId] = KewuApi.getClassNotes(courseId, 2)
                 .joinToString("\n") { (d, t) -> "$d：" + t.take(1200) }
         }
     }
-    val scope = rememberCoroutineScope()
-    val msgs = remember(sessionKey) { TutorSessions.of(sessionKey) }
+    var msgs by remember(sessionKey) { mutableStateOf(TutorSessions.of(sessionKey)) }
     var streaming by remember { mutableStateOf<String?>(null) }
-    var input by remember { mutableStateOf("") }
-    val scroll = rememberScrollState()
-    LaunchedEffect(msgs.size, streaming?.length) { scroll.animateScrollTo(scroll.maxValue) }
+    val welcome = remember { newChatId() }
+    // 每条消息的稳定 id（列表 key）：按下标派生，消息只追加不删除
+    val baseId = remember(sessionKey) { newChatId() * 10 }
 
-    fun ask(level: String, text: String) {
+    fun ask(level: String, text: String, quote: String? = null) {
         if (streaming != null) return
-        haptic(HapticKind.Light)
-        msgs += TutorMsg(false, text)
+        val shown = if (quote != null) "（引用：$quote）$text" else text
+        msgs = msgs + TutorMsg(false, shown)
+        TutorSessions.save(sessionKey, msgs)
         onUsed()
         streaming = ""
         val questionText = buildString {
@@ -136,63 +148,46 @@ private fun TutorBody(
                 listOf(AiClient.Msg("system", "$TUTOR_SYSTEM\n\n$questionText\n本次学生请求的提示等级：$level")) + history,
                 maxTokens = 1024,
             ) { piece -> streaming = (streaming ?: "") + piece }
-            msgs += TutorMsg(true, reply?.trim()?.ifBlank { null } ?: "小悟暂时连不上 AI 服务，请稍后再试～")
+            msgs = msgs + TutorMsg(true, reply?.trim()?.ifBlank { null } ?: "小悟暂时连不上 AI 服务，请稍后再试～")
+            TutorSessions.save(sessionKey, msgs)
             streaming = null
         }
     }
 
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-        Text(
-            "小悟只给提示、不给答案；你每次求助都会记录在作业里，老师能看到你在哪一步卡住。",
-            color = cs.onSurfaceVariantSummary, fontSize = 12.sp, lineHeight = 17.sp,
-        )
-        Spacer(Modifier.height(10.dp))
-        Column(
-            Modifier.fillMaxWidth().heightIn(min = 120.dp, max = 340.dp).verticalScroll(scroll),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            if (msgs.isEmpty() && streaming == null) {
-                Bubble(true, "这道题你目前想到哪一步了？可以先点下面的「思路点拨」，我陪你一步步想。")
+    val chatMsgs = buildList {
+        if (msgs.isEmpty()) add(AiChatMsg("这道题你目前想到哪一步了？可以先点下面的「思路点拨」，我陪你一步步想。", isUser = false, id = welcome))
+        msgs.forEachIndexed { i, m -> add(AiChatMsg(m.text, isUser = !m.fromAi, id = baseId + i)) }
+    }
+    KewuAiChatScreen(
+        title = "小悟 · 第 $index 题辅导",
+        onBack = onDismiss,
+        messages = chatMsgs,
+        streamText = streaming,
+        placeholder = "说说你卡在哪…",
+        thinkingText = "小悟正在想怎么提示你…",
+        onSend = { text, quote -> ask("学生追问", text.ifBlank { "帮我看看这段" }, quote) },
+        header = {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+                Text(
+                    "第 $index 题 · ${question.type.label}：${question.stem}",
+                    color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp, maxLines = 4,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "小悟只给提示、不给答案；你每次求助都会记录在作业里，老师能看到你在哪一步卡住。这段对话会保存，作业批改后 AI 错题本会结合它分析你的错因。",
+                    color = cs.onSurfaceVariantSummary, fontSize = 12.sp, lineHeight = 17.sp,
+                )
             }
-            msgs.forEach { Bubble(it.fromAi, it.text) }
-            streaming?.let { Bubble(true, it.ifEmpty { "小悟正在想怎么提示你…" }) }
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip(selected = false, onClick = { ask("思路点拨", "给我一点思路") }, label = "① 思路点拨")
-            Chip(selected = false, onClick = { ask("关键一步", "提示一下关键的一步") }, label = "② 关键一步")
+        },
+        chips = {
+            Chip(selected = false, onClick = { haptic(HapticKind.Tick); ask("思路点拨", "给我一点思路") }, label = "① 思路点拨")
+            Chip(selected = false, onClick = { haptic(HapticKind.Tick); ask("关键一步", "提示一下关键的一步") }, label = "② 关键一步")
             Chip(selected = false, onClick = {
+                haptic(HapticKind.Tick)
                 ask("检查方向", "我现在的答案是「${currentAnswer.ifBlank { "还没写" }}」，帮我看看方向对不对")
             }, label = "③ 检查方向")
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TextField(
-                input, { input = it }, Modifier.weight(1f),
-                backgroundMode = TextFieldMode.Rectangle, singleLine = true, label = "说说你卡在哪…",
-            )
-            Spacer(Modifier.padding(4.dp))
-            KewuPrimaryButton("发送", {
-                val t = input.trim()
-                if (t.isNotEmpty()) { input = ""; ask("学生追问", t) }
-            }, enabled = input.isNotBlank() && streaming == null)
-        }
-        Spacer(Modifier.height(12.dp))
-    }
-}
-
-@Composable
-private fun Bubble(fromAi: Boolean, text: String) {
-    val cs = COUITheme.colorScheme
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (fromAi) Arrangement.Start else Arrangement.End) {
-        Box(
-            Modifier.widthIn(max = 300.dp).clip(RoundedCornerShape(14.dp))
-                .background(if (fromAi) KewuGreen.copy(alpha = 0.12f) else KewuBlue.copy(alpha = 0.14f))
-                .padding(horizontal = 12.dp, vertical = 9.dp),
-        ) {
-            Text(text, color = cs.onSurface, fontSize = 14.sp, lineHeight = 20.sp)
-        }
-    }
+        },
+    )
 }
 
 /** 题型名（错题本 / 规划等共用）。 */

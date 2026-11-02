@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -201,9 +202,15 @@ private fun MistakeCard(m: Mistake, onMastered: () -> Unit) {
                         AiClient.chatStream(
                             listOf(
                                 AiClient.Msg("system", "你是课悟的 AI 助教小悟，帮学生分析一道错题。用中文、不用 Markdown 符号，分三段：" +
-                                    "【错因】学生为什么会选 / 写错（结合他的答案推测思维误区）；【正解】这道题的正确思路；【避坑】下次遇到同类题的一句口诀。总共不超过 200 字。"),
+                                    "【错因】学生为什么会选 / 写错（结合他的答案推测思维误区；如果给了他做题时和小悟的辅导对话，要据此指出他当时具体卡在哪一步、哪个想法错了）；" +
+                                    "【正解】这道题的正确思路；【避坑】下次遇到同类题的一句口诀。总共不超过 250 字。"),
                                 AiClient.Msg("user", "课程：$course\n题目：${m.question.stem}\n选项：${m.question.options.joinToString(" / ")}\n" +
-                                    "学生答案：${m.result.studentValue}\n正确答案：${m.result.standardAnswer.ifBlank { m.question.answer }}\n解析：${m.question.analysis}"),
+                                    "学生答案：${m.result.studentValue}\n正确答案：${m.result.standardAnswer.ifBlank { m.question.answer }}\n解析：${m.question.analysis}" +
+                                    // 2026-11-02：做题时「问小悟」的对话（按作业 id#题目 id 落盘），让 AI 知道学生当时怎么想的
+                                    TutorSessions.transcript(m.key).let { t ->
+                                        if (t.isBlank()) "\n做题时没有向小悟求助。"
+                                        else "\n学生做这道题时和小悟的辅导对话（学生真实的思考过程）：\n$t"
+                                    }),
                             ),
                             maxTokens = 1024,
                         ) { explain = (explain ?: "") + it }
@@ -315,12 +322,37 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
         AssignmentRepo.refresh(maxAgeMs = 60_000)
         schedule = KewuApi.getMySchedule() ?: emptyList()
     }
-    val mastery = remember(items) { masteryOf(items.orEmpty()) }
+    // 学生自评（看完视频后填的，只升不降）；变化后 version++ 刷新
+    var selfVersion by remember { mutableStateOf(0) }
+    val selfRates = remember(selfVersion) { MasteryStore.selfRates() }
+    val history = remember(selfVersion) { MasteryStore.history() }
+    val mastery = remember(items, selfVersion) {
+        masteryOf(items.orEmpty()).map { m ->
+            val self = selfRates[m.point] ?: 0
+            MasteryView(m, maxOf((m.rate * 100).toInt(), self), self >= 100)
+        }.sortedWith(compareBy<MasteryView> { it.mastered }.thenBy { it.percent })
+    }
+    // 2026-11-02 用户口径：薄弱 = 作业正确率 < 60% 且还没自评到 100%；自评到 100% 就从薄弱里减掉
+    val weakCount = mastery.count { !it.mastered && it.m.rate < 0.6 }
     val pending = remember(items) { items.orEmpty().filter { it.pending }.map { it.assignment } }
     val mistakes = remember(items) { collectMistakes(items.orEmpty()).size }
-    val cacheKey = "kewu_plan_" + KewuApi.username.orEmpty() + "_" + todayCn()
+    val cacheKey = "kewu_plan2_" + KewuApi.username.orEmpty() + "_" + todayCn()
     var plan by remember { mutableStateOf(kvGet(cacheKey)?.ifBlank { null }) }
     var busy by remember { mutableStateOf(false) }
+
+    // 知识点视频弹窗 / 看完后的自评弹窗
+    var dialogPoint by remember { mutableStateOf<MasteryView?>(null) }
+    var showVideos by remember { mutableStateOf(false) }
+    var ratePoint by remember { mutableStateOf<MasteryView?>(null) }
+    var waitingPlayback by remember { mutableStateOf<MasteryView?>(null) }
+    val playing = VideoPlayerHub.current
+    LaunchedEffect(playing) {
+        // 播放层关闭 → 问学生现在掌握了多少（已掌握的不再问）
+        if (playing == null) waitingPlayback?.let { mv ->
+            waitingPlayback = null
+            if (!mv.mastered) ratePoint = mv
+        }
+    }
 
     fun generate() {
         if (busy || schedule == null) return
@@ -330,7 +362,7 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
         val free = freeSlots(schedule.orEmpty())
         val ctx = buildString {
             appendLine("今天：${todayCn()}")
-            appendLine("知识点掌握度（越低越薄弱）：" + mastery.joinToString("；") { "${it.point} ${(it.rate * 100).toInt()}%" }.ifBlank { "暂无已批改作业" })
+            appendLine("知识点掌握度（越低越薄弱）：" + mastery.joinToString("；") { "${it.m.point} ${it.percent}%" + if (it.mastered) "（已掌握）" else "" }.ifBlank { "暂无已批改作业" })
             appendLine("未完成作业：" + pending.joinToString("；") { "《${it.title}》截止 ${it.deadline.ifBlank { "未设置" }}" }.ifBlank { "无" })
             appendLine("错题本待攻克：$mistakes 道")
             appendLine("每天空闲时段（课表之外）：" + (1..7).joinToString("；") { d -> week[d - 1] + " " + free[d].orEmpty().joinToString(" ").ifBlank { "无" } })
@@ -340,9 +372,10 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
             AiClient.chatStream(
                 listOf(
                     AiClient.Msg("system", "你是课悟的 AI 学习规划师小悟。根据学生的真实学情、作业截止时间和课表空闲时段，排一份从今天起 7 天的学习计划。" +
-                        "要求：每天 1–3 条，每条写成「HH:MM-HH:MM 做什么（为什么）」，时间必须落在给出的空闲时段内；" +
-                        "截止早的作业优先，薄弱知识点安排复习和错题本练习，课前安排预习、课后安排复习；用中文，不用 Markdown 符号，每天以「周X」开头一行。" +
-                        "最后一行给一句鼓励。"),
+                        "要求：每天 1–3 项，时间必须落在给出的空闲时段内；截止早的作业优先，薄弱知识点安排复习和错题本练习，课前安排预习、课后安排复习。" +
+                        "输出格式（App 会解析成表格，必须严格遵守）：每项一行，用竖线分隔四列「周X|HH:MM-HH:MM|做什么|为什么这样安排」，" +
+                        "例如「周一|19:00-20:00|完成《线性代数作业3》|周三截止，先做最紧急的」；不要表头、不要编号、不要 Markdown 符号、不要其它多余的行；" +
+                        "全部计划写完后，最后单独一行以「鼓励：」开头写一句鼓励。"),
                     AiClient.Msg("user", ctx),
                 ),
                 maxTokens = 2048,
@@ -364,24 +397,49 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
                 Row(Modifier.padding(18.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PlanStat("待完成作业", "${pending.size}", KewuBlue)
                     PlanStat("待攻克错题", "$mistakes", Color(0xFFE5484D))
-                    PlanStat("薄弱知识点", "${mastery.count { it.rate < 0.6 }}", Color(0xFFF5A623))
+                    PlanStat("薄弱知识点", "$weakCount", Color(0xFFF5A623))
                 }
             }
             Spacer(Modifier.height(14.dp))
-            KewuSectionTitle("知识点掌握度")
+            KewuSectionTitle("知识点掌握度 · 点知识点看 B 站讲解视频")
             KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (mastery.isEmpty()) Text("还没有批改过的作业，交几份作业后这里会画出你的知识画像", color = cs.onSurfaceSecondary, fontSize = 13.sp)
-                    mastery.take(8).forEach { mm ->
-                        val color = when { mm.rate >= 0.8 -> KewuGreen; mm.rate >= 0.6 -> KewuBlue; else -> Color(0xFFE5484D) }
-                        Column {
-                            Row {
-                                Text(mm.point, color = cs.onSurface, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
-                                Text("${(mm.rate * 100).toInt()}% · ${mm.samples} 次", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
+                Column(Modifier.padding(vertical = 8.dp)) {
+                    if (mastery.isEmpty()) Text(
+                        "还没有批改过的作业，交几份作业后这里会画出你的知识画像", color = cs.onSurfaceSecondary, fontSize = 13.sp,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                    )
+                    mastery.take(12).forEach { mv ->
+                        Column(
+                            Modifier
+                                .fillMaxWidth()
+                                .clickable { haptic(HapticKind.Tick); dialogPoint = mv; showVideos = true }
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(mv.m.point, color = cs.onSurface, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
+                                Text(
+                                    if (mv.mastered) "已掌握 · 100%" else "${mv.percent}% · ${mv.m.samples} 次",
+                                    color = if (mv.mastered) KewuGreen else cs.onSurfaceSecondary, fontSize = 12.5.sp,
+                                )
+                                Text("  ›", color = cs.onSurfaceSecondary, fontSize = 14.sp)
                             }
                             Spacer(Modifier.height(5.dp))
-                            Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(cs.onSurface.copy(alpha = 0.08f))) {
-                                Box(Modifier.fillMaxWidth(mm.rate.toFloat().coerceIn(0.03f, 1f)).fillMaxHeight().clip(RoundedCornerShape(3.dp)).background(color))
+                            MasteryBar(mv.percent / 100f, mv.mastered)
+                        }
+                    }
+                }
+            }
+            if (history.isNotEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                KewuSectionTitle("曾经的薄弱知识点（已攻克）")
+                KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        history.sortedByDescending { it.masteredAt }.forEach { r ->
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(Modifier.size(6.dp).clip(CircleShape).background(KewuGreen))
+                                Spacer(Modifier.width(8.dp))
+                                Text(r.point, color = cs.onSurface, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
+                                Text("${r.fromPercent}% → 100% · ${todayCn(r.masteredAt)}", color = cs.onSurfaceSecondary, fontSize = 12.sp)
                             }
                         }
                     }
@@ -389,17 +447,105 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(14.dp))
             KewuSectionTitle("小悟为你排的 7 天计划（结合课表空闲时段）")
-            KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
-                Column(Modifier.padding(16.dp)) {
-                    Text(
-                        plan?.ifEmpty { "小悟正在结合你的课表和作业截止时间排计划…" } ?: "正在加载课表…",
-                        color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp,
-                    )
-                    Spacer(Modifier.height(12.dp))
-                    KewuSecondaryButton(if (busy) "生成中…" else "重新规划", { generate() }, Modifier.fillMaxWidth(), enabled = !busy)
+            PlanTable(plan, busy)
+            Spacer(Modifier.height(10.dp))
+            KewuSecondaryButton(if (busy) "生成中…" else "重新规划", { generate() }, Modifier.fillMaxWidth().padding(horizontal = 12.dp), enabled = !busy)
+        }
+
+        dialogPoint?.let { mv ->
+            KnowledgeVideoDialog(
+                show = showVideos,
+                point = mv.m.point,
+                percent = mv.percent,
+                mastered = mv.mastered,
+                course = "",
+                onPlay = { v ->
+                    showVideos = false
+                    waitingPlayback = mv
+                    VideoPlayerHub.current = v
+                },
+                onDismiss = { showVideos = false },
+            )
+        }
+        ratePoint?.let { mv ->
+            MasteryRateDialog(
+                show = true,
+                point = mv.m.point,
+                currentPercent = mv.percent,
+                onConfirm = { v ->
+                    MasteryStore.setRate(mv.m.point, v, (mv.m.rate * 100).toInt())
+                    ratePoint = null
+                    selfVersion++
+                    haptic(HapticKind.Light)
+                },
+                onDismiss = { ratePoint = null },
+            )
+        }
+        // 应用内播放层（知识点视频在本页全屏播放，看完回来问掌握度）
+        BilibiliPlayerHost()
+    }
+}
+
+/** 掌握度展示：作业正确率 + 学生自评取较高者；自评到 100% 为已掌握。 */
+private data class MasteryView(val m: Mastery, val percent: Int, val mastered: Boolean)
+
+/** 计划表一行。 */
+private data class PlanRow(val day: String, val time: String, val task: String, val reason: String)
+
+/** 解析「周X|时间|做什么|为什么」行；流式生成中只解析已写完的行。 */
+private fun parsePlan(text: String, complete: Boolean): Pair<List<PlanRow>, String?> {
+    val lines = text.lines().let { if (complete) it else it.dropLast(1) }
+    val rows = lines.mapNotNull { l ->
+        val parts = l.trim().trim('|').split('|', '｜').map { it.trim() }
+        if (parts.size >= 3 && parts[0].startsWith("周")) PlanRow(parts[0], parts[1], parts[2], parts.getOrElse(3) { "" }) else null
+    }
+    val cheer = lines.firstOrNull { it.trim().startsWith("鼓励") }?.trim()?.removePrefix("鼓励：")?.removePrefix("鼓励:")
+    return rows to cheer
+}
+
+/** 7 天计划表格：每天一张卡，三列「时间 / 安排 / 为什么这样排」。解析不出表格时（老格式 / 出错文案）原样显示文字。 */
+@Composable
+private fun PlanTable(plan: String?, busy: Boolean) {
+    val cs = COUITheme.colorScheme
+    val (rows, cheer) = remember(plan, busy) { parsePlan(plan.orEmpty(), complete = !busy) }
+    if (rows.isEmpty()) {
+        KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
+            Text(
+                when {
+                    plan == null -> "正在加载课表…"
+                    plan.isBlank() || busy -> "小悟正在结合你的课表和作业截止时间排计划…"
+                    else -> plan
+                },
+                color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(16.dp),
+            )
+        }
+        return
+    }
+    rows.groupBy { it.day }.forEach { (day, list) ->
+        KewuCardGroup(Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp)) {
+            Column(Modifier.padding(vertical = 12.dp)) {
+                Text(day, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
+                Spacer(Modifier.height(8.dp))
+                // 表头
+                Row(Modifier.fillMaxWidth().background(cs.onSurface.copy(alpha = 0.05f)).padding(horizontal = 16.dp, vertical = 6.dp)) {
+                    Text("时间", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.width(92.dp))
+                    Text("安排", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    Text("为什么这样排", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                }
+                list.forEachIndexed { i, r ->
+                    if (i > 0) Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(cs.onSurface.copy(alpha = 0.06f)))
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp)) {
+                        Text(r.time, color = KewuBlue, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(92.dp))
+                        Text(r.task, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 19.sp, modifier = Modifier.weight(1f))
+                        Text(r.reason, color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    }
                 }
             }
         }
+    }
+    if (busy) Text("小悟还在继续排…", color = cs.onSurfaceSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(horizontal = 24.dp))
+    cheer?.takeIf { it.isNotBlank() }?.let {
+        Text(it, color = KewuGreen, fontSize = 13.5.sp, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
     }
 }
 

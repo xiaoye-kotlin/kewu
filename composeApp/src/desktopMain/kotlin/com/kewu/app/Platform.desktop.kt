@@ -1,5 +1,6 @@
 package com.kewu.app
 
+import io.ktor.http.encodeURLParameter
 import io.ktor.util.cio.readChannel
 
 import io.ktor.client.HttpClient
@@ -70,7 +71,7 @@ actual fun openAppSettings() = Unit
 actual fun shareText(text: String) = Unit
 actual fun platformExitApp() { exitProcess(0) }
 actual fun openBilibiliSearch(keyword: String) =
-    openUrl("https://search.bilibili.com/all?keyword=" + io.ktor.http.encodeURLParameter(keyword))
+    openUrl("https://search.bilibili.com/all?keyword=" + keyword.encodeURLParameter())
 actual fun openBilibiliVideo(bvid: String) = openUrl("https://www.bilibili.com/video/$bvid")
 
 actual fun platformFileSize(path: String): Long = try {
