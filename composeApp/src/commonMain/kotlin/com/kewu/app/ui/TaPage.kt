@@ -229,6 +229,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     // 旧版用 showAttach / isRecording 两个 boolean，连点「+」与麦克风时两片玻璃面板会同时
     // 进退场（双份 blur 采样 + 布局反复回流），表现为卡顿、面板瞬移。现在只可能有一个面板存在。
     var panel by remember { mutableStateOf(AssistantPanel.NONE) }
+    // B 站学习视频浏览面板（2026-11-02）：快捷提问行「B站视频」chip 打开
+    var showBiliPanel by remember { mutableStateOf(false) }
     var voiceSecs by remember { mutableIntStateOf(0) }
     // 派生布尔：沿用原变量名，其它逻辑（返回键/建议条/录音计时）无需改
     val showAttach = panel == AssistantPanel.ATTACH
@@ -590,10 +592,10 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                         menuIsUser = false
                                         haptic(HapticKind.Medium)
                                     }
-                                    // B 站相关视频推荐（2026-11-02）：随回答到达，点击跳 B 站 App / 浏览器
+                                    // B 站相关视频推荐（2026-11-02）：随回答到达，真实视频卡，点击跳 B 站 App / 浏览器
                                     msg.biliKeyword?.let { kw ->
                                         Spacer(Modifier.height(6.dp))
-                                        BilibiliSuggestRow(
+                                        BilibiliVideoSuggest(
                                             kw,
                                             // 与 AI 气泡同侧（左），留出气尾巴的缩进
                                             modifier = Modifier.padding(end = 48.dp),
@@ -672,6 +674,13 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
+                    // B 站学习视频入口（2026-11-02）：打开手动浏览面板，B 站粉浅底强调
+                    Chip(
+                        selected = false,
+                        onClick = { haptic(HapticKind.Tick); showBiliPanel = true },
+                        label = "B站视频",
+                        colors = ChipDefaults.chipColors(containerColor = BILI_PINK_SOFT),
+                    )
                     // coui Chip（自带按压缩放 + Tint）；首条（由真实作业生成）用品牌绿浅底做强调
                     suggestions.forEachIndexed { i, s ->
                         Chip(
@@ -801,10 +810,21 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 onDismiss = { menuMsg = null },
             )
         }
+
+        // ── B 站学习视频浏览面板（2026-11-02）：页内全屏覆盖层，自带 BackHandler ──
+        if (showBiliPanel) {
+            BilibiliBrowsePanel(onDismiss = { showBiliPanel = false })
+        }
+
+        // ── 应用内播放覆盖层宿主（2026-11-02）：视频卡点击后在此全屏播放，不跳外部 App ──
+        BilibiliPlayerHost()
     }
 }
 
 // ───────────────────────── 数据与常量 ─────────────────────────
+
+/** B 站粉浅底（「B站视频」入口 chip 用）。 */
+private val BILI_PINK_SOFT = Color(0xFFFB7299).copy(alpha = 0.14f)
 
 private data class ChatMsg(
     val text: String,

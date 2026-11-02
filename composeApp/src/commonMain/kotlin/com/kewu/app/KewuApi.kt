@@ -91,6 +91,15 @@ data class TeacherContactInfo(
 /** 课堂纪要通知跳转目标。 */
 data class ClassNoteTarget(val courseId: String, val date: String)
 
+/** B 站学科视频（接口文档 14.6）：videoUrl/audioUrl 为 DASH 直链，可能为空（风控/会员/超时）。 */
+data class BilibiliVideoInfo(
+    val bvid: String,
+    val title: String,
+    val cover: String,
+    val videoUrl: String?,
+    val audioUrl: String?,
+)
+
 data class UserMe(
     val user: UserInfo?, val courses: List<CourseInfo>,
     /** 学生加入的教学班（2026-10-26：学生「班级」以此为准，不可手改）。 */
@@ -982,6 +991,29 @@ object KewuApi {
         val date = match.groupValues[2]
         return if (courseId.isNotBlank()) ClassNoteTarget(courseId, date) else null
     }
+
+    /**
+     * 按学科 / 关键词搜 B 站视频（2026-11-02，后端文档 14.6）：`GET /api/bilibili/videos?subject=…`。
+     * 返回**裸 JSON 数组**（无 ApiResponse 壳），最多 10 条；B 站整体异常时后端返 200 + []（真空列表）。
+     * 网络 / 解析失败返回 null。后端逐条取播放直链较慢（每条最多 10s），超时放宽到 30s。
+     * 无鉴权。
+     */
+    suspend fun getBilibiliVideos(subject: String): List<BilibiliVideoInfo>? = try {
+        val resp = client.get(queryUrl("$BASE_URL/api/bilibili/videos", "subject", subject)) {
+            timeout { requestTimeoutMillis = 30_000; socketTimeoutMillis = 30_000 }
+        }
+        val el = json.parseToJsonElement(resp.bodyAsText())
+        (el as? JsonArray)?.mapNotNull { it as? JsonObject }?.map { o ->
+            BilibiliVideoInfo(
+                bvid = o["bvid"].str(),
+                title = o["title"].str(),
+                cover = o["cover"].str(),
+                videoUrl = o["videoUrl"].strOrNull()?.takeIf { it.isNotBlank() },
+                audioUrl = o["audioUrl"].strOrNull()?.takeIf { it.isNotBlank() },
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 
     /**
      * 某课最近几节课的 AI 课堂纪要（2026-10-26：下课后服务器用华为云 SIS 把最佳录音转成文字，再由大模型整理成纪要）。

@@ -48,13 +48,16 @@ object ImageLoader {
         mutex.withLock { bitmapCache.remove(key)?.let { bitmapCache[key] = it; return it } }
         val bytes = loadBytes(source) ?: return null
         val bmp = withContext(Dispatchers.Default) {
-            try { decodeImageBitmap(bytes, maxDim) } catch (_: Throwable) { null }
-        } ?: return null
+            // 2026-11-02 临时诊断：B 站封面加载失败定位（定位后删除）
+            try { decodeImageBitmap(bytes, maxDim) } catch (t: Throwable) { println("[ImageLoader] decode err: $t"); null }
+        }
+        if (bmp == null) println("[ImageLoader] decode null, ${bytes.size}B, head=${bytes.take(4).joinToString(",")} <- $source")
+        val bmp2 = bmp ?: return null
         mutex.withLock {
-            bitmapCache[key] = bmp
+            bitmapCache[key] = bmp2
             while (bitmapCache.size > BITMAP_LIMIT) bitmapCache.remove(bitmapCache.keys.first())
         }
-        return bmp
+        return bmp2
     }
 
     private suspend fun loadBytes(source: String): ByteArray? {
@@ -63,13 +66,16 @@ object ImageLoader {
         val bytes = try {
             if (isRemote(url)) {
                 val resp = client.get(url)
+                // 2026-11-02 临时诊断：B 站封面加载失败定位（定位后删除）
+                if (resp.status.value !in 200..299) println("[ImageLoader] HTTP ${resp.status.value} <- $url")
                 if (resp.status.value !in 200..299) null else resp.readBytes()
             } else {
                 withContext(Dispatchers.Default) { platformReadFile(url) }
             }
         } catch (e: CancellationException) {
             throw e
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            println("[ImageLoader] net fail ${e::class.simpleName}: ${e.message} <- $url")
             null
         } ?: return null
         if (bytes.isEmpty()) return null

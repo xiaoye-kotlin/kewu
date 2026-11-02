@@ -33,3 +33,6 @@ composeApp/xiaoye.jks
 # JVM 崩溃日志（构建/运行崩潰产物，非源码）
 hs_err_pid*.log
 replay_pid*.log
+
+# 独立总控端项目（自己的 Git 仓库，避免误嵌进学生端仓库）
+/kewu_admin/

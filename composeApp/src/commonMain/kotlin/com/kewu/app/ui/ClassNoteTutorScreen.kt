@@ -244,6 +244,9 @@ fun ClassNoteTutorScreen(
                 }
             }
         }
+
+        // 应用内播放覆盖层宿主（2026-11-02）：视频卡点击后在此全屏播放，不跳外部 App
+        BilibiliPlayerHost()
     }
 }
 
@@ -268,10 +271,10 @@ private fun NoteTutorBubble(m: NoteTutorMsg) {
                     )
                 }
             }
-            // B 站相关视频推荐（2026-11-02）
+            // B 站相关视频推荐（2026-11-02）：真实视频卡，点击应用内直接播放
             m.biliKeyword?.let { kw ->
                 Spacer(Modifier.height(6.dp))
-                BilibiliSuggestRow(kw)
+                BilibiliVideoSuggest(kw)
             }
         }
         if (!m.isUser) Spacer(Modifier.weight(1f))

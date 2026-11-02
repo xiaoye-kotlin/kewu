@@ -56,6 +56,7 @@ actual fun shareText(text: String) = Unit
 // B 站搜索走网页（B 站 universal link 会在 Safari 自动提示「在 App 中打开」）
 actual fun openBilibiliSearch(keyword: String) =
     openUrl("https://search.bilibili.com/all?keyword=" + io.ktor.http.encodeURLParameter(keyword))
+actual fun openBilibiliVideo(bvid: String) = openUrl("https://www.bilibili.com/video/$bvid")
 // iOS 人机指南：App 不应自行退出，双击返回的第二下不做任何事（提示照常消失由调用方收起）
 actual fun platformExitApp() = Unit
 

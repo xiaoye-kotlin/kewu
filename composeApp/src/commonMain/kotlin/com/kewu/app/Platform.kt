@@ -60,5 +60,8 @@ expect fun shareText(text: String)
  */
 expect fun openBilibiliSearch(keyword: String)
 
+/** 打开指定 B 站视频（2026-11-02）：Android 优先 `bilibili://video/{bvid}` 深链，未装 App 回退浏览器。 */
+expect fun openBilibiliVideo(bvid: String)
+
 /** 退出应用（一级界面双击返回键的第二下）。Android=finish 当前 Activity；iOS 不主动退出（no-op）。 */
 expect fun platformExitApp()

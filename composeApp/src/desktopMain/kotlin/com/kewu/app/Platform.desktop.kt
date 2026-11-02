@@ -71,6 +71,7 @@ actual fun shareText(text: String) = Unit
 actual fun platformExitApp() { exitProcess(0) }
 actual fun openBilibiliSearch(keyword: String) =
     openUrl("https://search.bilibili.com/all?keyword=" + io.ktor.http.encodeURLParameter(keyword))
+actual fun openBilibiliVideo(bvid: String) = openUrl("https://www.bilibili.com/video/$bvid")
 
 actual fun platformFileSize(path: String): Long = try {
     java.io.File(path).let { if (it.exists()) it.length() else -1L }

@@ -75,6 +75,11 @@ kotlin {
             implementation(libs.androidx.camera.lifecycle)
             implementation(libs.androidx.camera.view)
             implementation(libs.mlkit.barcode.scanning)
+            // B 站视频应用内播放（2026-11-02）：后端返回 DASH 分离流直链（video/audio .m4s），
+            // ExoPlayer MergingMediaSource 合并播放；iOS/Desktop 是占位 actual（跳浏览器）。
+            // GitHub 开源 Kotlin 播放器（NextPlayer/JustPlayer 等）底层同样是 media3，直接用它最稳。
+            implementation(libs.media3.exoplayer)
+            implementation(libs.media3.ui)
         }
 
         desktopMain.dependencies {

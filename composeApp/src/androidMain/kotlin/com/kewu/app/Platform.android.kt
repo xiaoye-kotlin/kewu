@@ -114,6 +114,18 @@ actual fun openBilibiliSearch(keyword: String) {
     }
 }
 
+actual fun openBilibiliVideo(bvid: String) {
+    // 优先调起哔哩哔哩 App 直接播放该视频；没装 App 回退浏览器视频页
+    try {
+        appContext.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse("bilibili://video/$bvid"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (_: android.content.ActivityNotFoundException) {
+        openUrl("https://www.bilibili.com/video/$bvid")
+    }
+}
+
 actual fun platformExitApp() {
     // 一级界面双击返回键的第二下：finish 当前 Activity（回到桌面 = 退出）。
     // 兜底：appActivity 为 null（理论上不会）时不崩。

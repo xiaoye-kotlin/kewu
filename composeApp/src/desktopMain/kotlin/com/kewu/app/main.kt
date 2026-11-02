@@ -5,9 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -39,11 +41,12 @@ import java.awt.MouseInfo
 import java.awt.Toolkit
 
 // 桌面端窗口目标尺寸（dp）：竖屏瘦长长方形——宽度收窄（接近手机端 ~411dp，略宽一点即可）、
-// 高度适中（2026-10-19 用户反馈：900dp 在 1080p 屏上几乎占满整个屏幕，改 740dp 留出系统区）。
+// 高度包含 48dp 独立窗口标题栏（2026-10-29）：原 740dp 内容高度 + 标题栏 = 788dp，
+// 最小化/关闭按钮不再覆盖首页通知等 App 内部控件。
 // 落地时再按屏幕实际可用高度二次收敛（见 fitWindowToScreen），避免高分屏/高缩放下
 // 超出屏幕被撑满。
 private val TargetWidth = 430.dp
-private val TargetHeight = 740.dp
+private val TargetHeight = 788.dp
 
 @OptIn(ExperimentalComposeUiApi::class)
 fun main() {
@@ -177,30 +180,29 @@ private fun DesktopRoot(
     dragArea: @Composable () -> Unit,
 ) {
     val backdrop = rememberGlassBackdrop()
-    Box(
+    Column(
         Modifier
             .fillMaxSize()
             .background(COUITheme.colorScheme.surface),
     ) {
-        // 被采样层：整个 App 内容。标题栏玻璃按钮透出的就是这里的内容。
-        Box(
-            Modifier
-                .fillMaxSize()
-                .layerBackdrop(backdrop),
-        ) {
-            App()
-        }
-
-        // 标题栏（采样层之外）：右上角一条可拖动窗口 + 两颗玻璃按钮。
+        // 独立窗口标题栏：只包含空白拖动区和窗口按钮，不与 App 内容共享布局空间。
         DesktopTitleBar(
             backdrop = backdrop,
             onMinimize = onMinimize,
             onClose = onClose,
             dragArea = dragArea,
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(end = 8.dp),
+            modifier = Modifier.fillMaxWidth(),
         )
+
+        // 被采样层：App 内容从标题栏下方开始，首页通知等右上角控件不会再被窗口按钮覆盖。
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .layerBackdrop(backdrop),
+        ) {
+            App()
+        }
     }
 }
 
@@ -216,14 +218,16 @@ private fun DesktopTitleBar(
     // 图标颜色在 composable 作用域取一次（Canvas 的 DrawScope 内不能再调 @Composable）。
     val iconColor = COUITheme.colorScheme.onSurface
     Row(
-        modifier = modifier.height(40.dp),
+        modifier = modifier
+            .height(48.dp)
+            .padding(start = 12.dp, end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        // 拖动区：标题栏左侧一整段空白，按下即可拖动窗口（宽度给足，方便抓住）。
+        // 标题栏左侧保留为纯空白拖动区，不放置任何 App 内部组件。
         Box(
             Modifier
-                .width(260.dp)
+                .weight(1f)
                 .fillMaxHeight(),
         ) {
             dragArea()
