@@ -7,8 +7,12 @@ import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.statement.bodyAsText
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -100,6 +104,8 @@ class BilibiliFetcher {
         val resp = client.get("https://api.bilibili.com/x/web-interface/view") {
             header("User-Agent", UA)
             header("Referer", REFERER)
+            header("X-Bili-Api-Source", "pc")
+            header("Cookie", buvidCookie())
             parameter("bvid", bvid)
         }
         val el = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
@@ -107,7 +113,10 @@ class BilibiliFetcher {
         if (code != 0) throw RuntimeException("B站 view 接口错误 code=$code ${el["message"]}")
         val data = el["data"]?.jsonObject ?: throw RuntimeException("B站 view 缺少 data")
         val title = data["title"]?.jsonPrimitive?.content ?: ""
-        val cid = (data["cid"] as? JsonPrimitive)?.content?.toLongOrNull()
+        // 优先按 pages[0].cid 取（多分 P 视频默认第一集），老视频再兜底 data.cid
+        val pages = data["pages"]?.let { it as? JsonArray }
+        val cid = pages?.firstOrNull()?.jsonObject?.get("cid")?.jsonPrimitive?.content?.toLongOrNull()
+            ?: (data["cid"] as? JsonPrimitive)?.content?.toLongOrNull()
             ?: throw RuntimeException("B站 view 缺少 cid（视频号可能无效）")
         return title to cid
     }
@@ -127,6 +136,8 @@ class BilibiliFetcher {
         val resp = client.get("https://api.bilibili.com/x/player/wbi/play") {
             header("User-Agent", UA)
             header("Referer", REFERER)
+            header("X-Bili-Api-Source", "pc")
+            header("Cookie", buvidCookie())
             params.forEach { (k, v) -> parameter(k, v) }
             parameter("w_rid", wrid)
         }
@@ -147,6 +158,77 @@ class BilibiliFetcher {
         val durlUrl = durl?.firstOrNull()?.jsonObject?.get("url")?.jsonPrimitive?.content
         if (!durlUrl.isNullOrBlank()) return durlUrl
         throw RuntimeException("B站 playurl 未解析到音频地址（dash/durl 均空）")
+    }
+
+    /** 给搜索列表用：按 bvid 拿 pages[0].cid，再取 DASH 视频/音频直链。失败直接抛给上层做单条降级。 */
+    private suspend fun fetchDashUrls(bvid: String): Pair<String, String> {
+        val cid = view(bvid).second
+        return try {
+            fetchDashUrlsByPlayurl(bvid, cid)
+        } catch (e: Throwable) {
+            // 有些网络/IP 下 playurl 会被拦，退回已验证过的 WBI 播放接口再试一次
+            log.warn("B站 playurl 直链失败，尝试 WBI 兜底 bvid=$bvid：${e.message}")
+            fetchDashUrlsByWbi(bvid, cid)
+        }
+    }
+
+    private suspend fun fetchDashUrlsByPlayurl(bvid: String, cid: Long): Pair<String, String> {
+        val resp = client.get("https://api.bilibili.com/x/player/playurl") {
+            header("User-Agent", UA)
+            header("Referer", REFERER)
+            header("X-Bili-Api-Source", "pc")
+            header("Cookie", buvidCookie())
+            parameter("bvid", bvid)
+            parameter("cid", cid.toString())
+            parameter("fnval", "16")   // DASH 格式
+            parameter("fourk", "1")
+        }
+        val el = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
+        val code = (el["code"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
+        if (code != 0) throw RuntimeException("B站 playurl 接口错误 code=$code ${el["message"]}")
+        val data = el["data"]?.jsonObject ?: throw RuntimeException("B站 playurl 缺少 data")
+        return extractDashUrls(data)
+    }
+
+    private suspend fun fetchDashUrlsByWbi(bvid: String, cid: Long): Pair<String, String> {
+        val keys = wbiKeys()
+        val wts = (System.currentTimeMillis() / 1000).toString()
+        val params = LinkedHashMap<String, String>().apply {
+            put("bvid", bvid)
+            put("cid", cid.toString())
+            put("qn", "64")
+            put("fnval", "16")
+            put("fourk", "1")
+            put("wts", wts)
+        }
+        val resp = client.get("https://api.bilibili.com/x/player/wbi/play") {
+            header("User-Agent", UA)
+            header("Referer", REFERER)
+            header("X-Bili-Api-Source", "pc")
+            header("Cookie", buvidCookie())
+            params.forEach { (k, v) -> parameter(k, v) }
+            parameter("w_rid", wbiSign(params, keys))
+        }
+        val el = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
+        val code = (el["code"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
+        if (code != 0) throw RuntimeException("B站 WBI play 接口错误 code=$code ${el["message"]}")
+        val data = el["data"]?.jsonObject ?: throw RuntimeException("B站 WBI play 缺少 data")
+        return extractDashUrls(data)
+    }
+
+    private fun extractDashUrls(data: JsonObject): Pair<String, String> {
+        val dash = data["dash"]?.jsonObject
+            ?: throw RuntimeException("B站播放接口缺少 dash（可能需要会员或触发风控）")
+        val videoUrl = dash["video"]?.let { it as? JsonArray }?.firstOrNull()?.jsonObject
+            ?.let { it["baseUrl"]?.jsonPrimitive?.content ?: it["base_url"]?.jsonPrimitive?.content }
+            .orEmpty()
+        val audioUrl = dash["audio"]?.let { it as? JsonArray }?.firstOrNull()?.jsonObject
+            ?.let { it["baseUrl"]?.jsonPrimitive?.content ?: it["base_url"]?.jsonPrimitive?.content }
+            .orEmpty()
+        if (videoUrl.isBlank() || audioUrl.isBlank()) {
+            throw RuntimeException("B站播放接口缺少 video/audio 地址")
+        }
+        return videoUrl to audioUrl
     }
 
     /** 下载音频字节（带 UA + Referer + Range + 跟随重定向，否则 403/412）。 */
@@ -171,5 +253,92 @@ class BilibiliFetcher {
         return resp.body()
     }
 
+    /**
+     * B站风控：search/type 等接口必须带 buvid3/buvid4 cookie，否则返回 412 HTML 报错页。
+     * 从 finger/spi 拿，缓存 24h（有效期很长，避免每次搜索都多打一次 spi）。
+     */
+    private var buvidCookieCache: String? = null
+    private var buvidCookieTs: Long = 0
+    private suspend fun buvidCookie(): String {
+        val now = System.currentTimeMillis()
+        if (buvidCookieCache != null && now - buvidCookieTs < 24 * 60 * 60_000) return buvidCookieCache!!
+        val resp = client.get("https://api.bilibili.com/x/frontend/finger/spi") {
+            header("User-Agent", UA)
+            header("Referer", REFERER)
+        }
+        val el = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
+        val data = el["data"]?.jsonObject ?: throw RuntimeException("B站 finger/spi 未返回 data")
+        val b3 = data["b_3"]?.jsonPrimitive?.content ?: throw RuntimeException("B站 finger/spi 缺少 b_3")
+        val b4 = data["b_4"]?.jsonPrimitive?.content ?: ""
+        val cookie = "buvid3=$b3" + if (b4.isNotBlank()) "; buvid4=$b4" else ""
+        buvidCookieCache = cookie
+        buvidCookieTs = now
+        log.info("B站 buvid cookie 已刷新")
+        return cookie
+    }
+
+    /**
+     * 按关键词搜索 B站视频，返回前 10 条（bvid/title/cover/videoUrl/audioUrl）。
+     * 带 UA + Referer + X-Bili-Api-Source(pc) + buvid cookie 防 412 风控；
+     * 单个视频直链失败只把该条 URL 留空，不让整个接口崩掉；每条直链请求最多等 10 秒。
+     */
+    suspend fun searchVideos(keyword: String): List<BilibiliVideoItem> {
+        val resp = client.get("https://api.bilibili.com/x/web-interface/search/type") {
+            header("User-Agent", UA)
+            header("Referer", REFERER)
+            header("X-Bili-Api-Source", "pc")
+            header("Cookie", buvidCookie())
+            parameter("search_type", "video")
+            parameter("keyword", keyword)
+        }
+        val el = Json.parseToJsonElement(resp.bodyAsText()).jsonObject
+        val code = (el["code"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
+        if (code != 0) throw RuntimeException("B站搜索接口错误 code=$code ${el["message"]}")
+        val data = el["data"]?.jsonObject ?: throw RuntimeException("B站搜索缺少 data")
+        val result = data["result"]?.let { it as? JsonArray } ?: return emptyList()
+        val basicItems = result.mapNotNull { item ->
+            val obj = item as? JsonObject ?: return@mapNotNull null
+            val bvid = obj["bvid"]?.jsonPrimitive?.content?.trim().orEmpty()
+            if (bvid.isEmpty()) return@mapNotNull null   // B站偶尔返回合集/直播类结果，没 bvid 前端没法跳转，直接过滤
+            // 标题里常带 <em class="keyword"> 高亮标签，剥掉只留纯文本
+            val title = (obj["title"]?.jsonPrimitive?.content ?: "").replace(Regex("<[^>]+>"), "")
+            val cover = normalizeCover(obj["pic"]?.jsonPrimitive?.content.orEmpty())
+            BilibiliVideoItem(bvid, title, cover)
+        }.take(10)
+
+        // 10 个视频并发补直链，单条最多 10 秒；某条失败只留空 URL，不影响其它视频。
+        return coroutineScope {
+            basicItems.map { item ->
+                async {
+                    val urls = runCatching {
+                        withTimeoutOrNull(10_000) { fetchDashUrls(item.bvid) }
+                    }.onFailure { e ->
+                        log.warn("B站直链获取失败 bvid=${item.bvid}：${e.message}")
+                    }.getOrNull()
+                    item.copy(
+                        videoUrl = urls?.first.orEmpty(),
+                        audioUrl = urls?.second.orEmpty()
+                    )
+                }
+            }.awaitAll()
+        }
+    }
+
+    // B站 pic 常返回 //i0.hdslb.com/... 这种协议相对地址，前端直接用会缺协议，这里统一补成 https。
+    private fun normalizeCover(pic: String): String = when {
+        pic.startsWith("//") -> "https:$pic"
+        pic.startsWith("http://") -> "https://" + pic.removePrefix("http://")
+        else -> pic
+    }
+
     fun close() = runCatching { client.close() }
 }
+
+// 搜索结果的一项：videoUrl/audioUrl 供 App 内播放，拿不到的条目留空字符串
+data class BilibiliVideoItem(
+    val bvid: String,
+    val title: String,
+    val cover: String,
+    val videoUrl: String = "",
+    val audioUrl: String = ""
+)

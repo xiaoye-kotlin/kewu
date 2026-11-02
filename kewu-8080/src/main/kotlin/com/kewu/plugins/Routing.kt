@@ -152,7 +152,7 @@ fun Application.configureRouting() {
         }
         // 总控端（管理后台）路由组：/api/admin/**（2026-10-28 移植 admin）
         adminRoutes(adminService)
-        // B站视频一键转课堂笔记（2026-11-01）：/api/bilibili/note/generate + /api/bilibili/note/{bvid}
-        bilibiliRoutes(bilibiliService, bg)
+        // B站：视频转笔记 + 按学科视频搜索列表（2026-11-01）
+        bilibiliRoutes(bilibiliService, bilibiliFetcher, bg)
     }
 }
