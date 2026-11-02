@@ -139,17 +139,16 @@ class SisTranscriptionService(private val cfg: SisConfig) {
         val uri = "/v1/${cfg.projectId}/asr/transcriber/jobs/$jobId"
         // 2026-11-02：一节课 1 小时以上的录音 10 分钟常转不完 → 放到 40 分钟
         val maxAttempts = 240
+        var transient = 0
         repeat(maxAttempts) { attempt ->
             // 每次轮询都重新算时间和签名：X-Sdk-Date 必须在请求时间 15 分钟内，轮询久了会过期
             val date = nowUtc()
             val auth = HuaweiSigner.authHeader(cfg.ak!!, cfg.sk!!, "GET", uri, "", host, cfg.region, "sis", date)
             try {
-                val resp = client.get("https://$host$uri") {
-                    header("Host", host)
-                    header("X-Sdk-Date", date)
-                    header("Authorization", auth)
-                }
-                val raw = resp.bodyAsText()
+                // 2026-11-02：查询改用 JDK HttpClient。Ktor CIO 读大号 FINISHED 结果偶发
+                //   「EOFException Not enough data available」，一次失败就让整节课转写作废（线代 11-02 卡在 10%）。
+                val (code, raw) = jdkGet("https://$host$uri", mapOf("X-Sdk-Date" to date, "Authorization" to auth))
+                transient = 0
                 val el = Json.parseToJsonElement(raw).jsonObject
                 when (val status = (el["status"] as? JsonPrimitive)?.content) {
                     "FINISHED" -> {
@@ -164,8 +163,8 @@ class SisTranscriptionService(private val cfg: SisConfig) {
                     }
                     null -> {
                         // 2026-10-27：没有 status 的响应是网关 / 鉴权错误体（4xx 不抛异常），别当成「处理中」空等 10 分钟
-                        log.error("SIS 查询任务 HTTP ${resp.status.value}：${raw.take(500)}")
-                        throw TranscriptionException("转写失败，请重试（查询任务 HTTP ${resp.status.value}：${raw.take(300)}）")
+                        log.error("SIS 查询任务 HTTP $code：${raw.take(500)}")
+                        throw TranscriptionException("转写失败，请重试（查询任务 HTTP $code：${raw.take(300)}）")
                     }
                     else -> {
                         log.info("SIS 转写进行中 job_id=$jobId status=$status 第 ${attempt + 1} 次轮询，10s 后重试")
@@ -179,13 +178,28 @@ class SisTranscriptionService(private val cfg: SisConfig) {
             } catch (e: TranscriptionException) {
                 throw e
             } catch (t: Throwable) {
-                log.error("SIS 查询任务异常：$t")
-                throw TranscriptionException("转写失败，请重试（查询任务：${t.javaClass.simpleName} ${t.message.orEmpty().take(200)}）")
+                // 网络抖动 / 读响应中断：任务还在 SIS 那边跑，重试查询即可，连续 6 次才判失败
+                transient++
+                log.error("SIS 查询任务异常（第 $transient 次）：$t")
+                if (transient >= 6) throw TranscriptionException("转写失败，请重试（查询任务：${t.javaClass.simpleName} ${t.message.orEmpty().take(200)}）")
+                delay(10_000)
             }
         }
         log.error("SIS 转写轮询超时 job_id=$jobId（超过 ${maxAttempts * 10} 秒）")
         throw TranscriptionException("转写超时，请稍后重试（任务处理超过 40 分钟）")
     }
+
+    private val jdk: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
+        .connectTimeout(java.time.Duration.ofSeconds(15)).build()
+
+    /** GET 并完整读出响应体（状态码, 文本）。 */
+    private suspend fun jdkGet(url: String, headers: Map<String, String>): Pair<Int, String> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val b = java.net.http.HttpRequest.newBuilder(java.net.URI(url)).timeout(java.time.Duration.ofSeconds(60)).GET()
+            headers.forEach { (k, v) -> b.header(k, v) }
+            val r = jdk.send(b.build(), java.net.http.HttpResponse.BodyHandlers.ofString(Charsets.UTF_8))
+            r.statusCode() to r.body()
+        }
 
     // 从 FINISHED 响应里把所有句子的 result.text 拼成完整文本（按返回顺序）
     private fun extractText(el: JsonObject): String {

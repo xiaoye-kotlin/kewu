@@ -24,6 +24,7 @@ import kotlinx.serialization.json.long
 import org.jetbrains.exposed.sql.SortOrder
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
+import org.jetbrains.exposed.sql.or
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
@@ -235,6 +236,25 @@ class ClassEndService(private val services: RecServices) {
             runPipeline(sessionId, row[ClassRecordings.courseId], row[ClassRecordings.primaryRecordingId])
         } finally {
             running.remove(sessionId)
+        }
+    }
+
+    /**
+     * 兜底巡检（2026-11-02）：卡在 PENDING_ASR（下课触发丢了 / 晚到上传把状态冲回）或
+     * TRANSCRIBING（转写中途服务重启）超过 5 分钟、且本进程没在跑的节次，重新转写。
+     * 线代 11-02 那节就是转写失败后被晚到上传冲回 PENDING_ASR，再没人触发，首页一直 10%。
+     */
+    suspend fun sweepStuck() {
+        val cutoff = LocalDateTime.now().minusMinutes(5).format(fmt)
+        val stuck = transaction {
+            ClassRecordings.selectAll().where {
+                (ClassRecordings.transcriptStatus eq "PENDING_ASR") or (ClassRecordings.transcriptStatus eq "TRANSCRIBING")
+            }.filter { it[ClassRecordings.decidedAt] <= cutoff }.map { it[ClassRecordings.sessionId] }
+        }
+        for (sid in stuck) {
+            if (sid in running) continue
+            println("ASR-SWEEP: $sid")
+            runCatching { transcribe(sid, force = true) }.onFailure { println("ASR-SWEEP-ERROR: $sid $it") }
         }
     }
 

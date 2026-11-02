@@ -304,10 +304,11 @@ fun AssignmentDetailScreen(
                                 prefillFrom(mySub)
                             }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
                         }
-                    } else {
-                        // 已提交待批阅 / 已批阅：后端允许多版本提交，给「修改并重新提交」入口
+                    } else if (mySub?.let { canResubmit(it, a.totalScore) } == true) {
+                        // 2026-11-02：只有做错 / 被扣分 / 被打回才给改，全对或还没判出对错不给；最多 MAX_SUBMIT_VERSIONS 版
+                        val left = MAX_SUBMIT_VERSIONS - (mySub?.version ?: 0)
                         KewuSecondaryButton(
-                            "修改并重新提交",
+                            if (mySub?.status == "RETURNED" || left <= 0) "修改并重新提交" else "修改并重新提交（还可 $left 次）",
                             { editing = true; prefillFrom(mySub) },
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                         )
@@ -497,3 +498,18 @@ private fun isPast(deadline: String): Boolean {
 }
 
 private fun two(v: Long) = if (v < 10) "0$v" else "$v"
+
+/** 每份作业最多提交几版（含第一次），与后端 AssignmentService.MAX_VERSIONS 一致。 */
+internal const val MAX_SUBMIT_VERSIONS = 3
+
+/**
+ * 能否「修改并重新提交」（2026-11-02）：被打回 → 能；已达版本上限 → 不能；
+ * 有判错的题、某题被扣分、或批阅总分不满 → 能；全对或还没判出对错 → 不能。
+ */
+internal fun canResubmit(sub: SubmissionInfo, totalScore: Int): Boolean {
+    if (sub.status == "RETURNED") return true
+    if (sub.version >= MAX_SUBMIT_VERSIONS) return false
+    val wrongQ = sub.questionResults.any { it.correct == false || (it.finalScore != null && it.finalScore < it.fullScore) }
+    val lostPoints = sub.status == "REVIEWED" && sub.score != null && totalScore > 0 && sub.score < totalScore
+    return wrongQ || lostPoints
+}

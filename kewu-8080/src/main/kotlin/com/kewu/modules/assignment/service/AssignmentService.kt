@@ -10,6 +10,9 @@ import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 
 // 作业模块的业务逻辑: 发布 -> 提交(多版本) -> 批阅, 外加 AI 预批阅 / 查重 / 学情画像 / 跨课程待批阅聚合
+/** 每份作业最多提交几版（含第一次）。 */
+private const val MAX_VERSIONS = 3
+
 class AssignmentService(
     private val repository: AssignmentRepository,
     private val courseRepository: CourseRepository,
@@ -121,6 +124,13 @@ class AssignmentService(
         val durationSec = req.durationSec?.takeIf { it in 1..(7 * 24 * 3600) }
 
         val old = repository.findSubmissionOf(assignmentId, req.studentId)
+        // 2026-11-02 限制重交：被打回的随时可改；否则只有判错 / 扣分才给改，且最多 MAX_VERSIONS 版
+        if (old != null && old.status != SubmissionStatus.RETURNED) {
+            if (old.version >= MAX_VERSIONS) return Result.failure(IllegalArgumentException("已达修改次数上限"))
+            val wrong = old.questionResults.any { it.correct == false || (it.finalScore != null && it.finalScore < it.fullScore) } ||
+                (old.status == SubmissionStatus.REVIEWED && old.score != null && old.score < a.totalScore)
+            if (!wrong) return Result.failure(IllegalArgumentException("已全部答对，无需重新提交"))
+        }
         val version = (old?.version ?: 0) + 1
 
         // 有题目就顺手把客观题判了, 老师能少改一大半
