@@ -656,12 +656,10 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         ChatBubbleMenu(menu, rootOrigin) { quotePreview = it }
 
         // ── B 站学习视频浏览面板（2026-11-02）：页内全屏覆盖层，自带 BackHandler ──
-        if (showBiliPanel) {
+        SlideOverlay(if (showBiliPanel) Unit else null) {
             BilibiliBrowsePanel(onDismiss = { showBiliPanel = false })
         }
 
-        // ── 应用内播放覆盖层宿主（2026-11-02）：视频卡点击后在此全屏播放，不跳外部 App ──
-        BilibiliPlayerHost()
     }
 }
 

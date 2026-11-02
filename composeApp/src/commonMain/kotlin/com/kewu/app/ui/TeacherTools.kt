@@ -178,7 +178,7 @@ internal fun BindCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
         bound = KewuApi.currentUser?.courses ?: emptyList()
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("绑定课程", onBack)
         TeacherToolIntro(backdrop, "绑定课程", "输入课程 ID 绑定到当前账号，绑定后可同步课程作业、签到与录音。")
         if (bound.isNotEmpty()) {
@@ -238,7 +238,7 @@ internal fun CreateAttendanceScreen(backdrop: LayerBackdrop, onBack: () -> Unit)
         courses = KewuApi.myCourses()
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("发起签到", onBack)
         TeacherToolIntro(backdrop, "发起课堂签到", "创建一次签到会话，学生通过动态码 / 定位完成打卡。")
         KewuSectionTitle("选择课程")
@@ -323,7 +323,7 @@ internal fun PostNoteScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("课堂笔记", onBack)
         TeacherToolIntro(backdrop, "发布课堂笔记", "记录本节课的要点，发布后即缓存到本课程，方便回看。")
         KewuSectionTitle("选择课程")

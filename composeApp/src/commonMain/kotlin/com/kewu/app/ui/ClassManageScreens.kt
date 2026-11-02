@@ -117,7 +117,7 @@ internal fun CreateCourseScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var result by remember { mutableStateOf<Pair<Boolean, String>?>(null) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("新建课程", onBack)
         IntroGlass(backdrop, "创建一门新课程", "课程创建后立即可发起签到、开设班级并发布作业。")
         TeacherToolField("课程名称", name, { name = it }, placeholder = "如：云计算基础")
@@ -214,7 +214,7 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
         ) { d ->
             when (d) {
                 ClassDrill.LIST -> Column(
-                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp),
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance),
                 ) {
                     KewuTopBar("班级管理", onBack)
                     IntroGlass(backdrop, "我的班级", "开设班级后自动生成 6 位邀请码，学生凭码加入并自动绑定课程。")
@@ -387,7 +387,7 @@ private fun ClassStudentsScreen(cls: ClassRoomInfo, onBack: () -> Unit, onImport
     var students by remember { mutableStateOf<List<ClassStudent>?>(null) }
     LaunchedEffect(cls.id) { students = KewuApi.getClassStudents(cls.id) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("${cls.name} · 学生名单", onBack)
         KewuSecondaryButton("导入 / 更新本班课表", onImportSchedule, Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp))
         val list = students
@@ -436,7 +436,7 @@ internal fun JoinClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
     val snackbar = LocalKewuSnackbar.current
     var code by remember { mutableStateOf("") }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("加入班级", onBack)
         IntroGlass(backdrop, "输入邀请码加入班级", "向任课老师索取 6 位邀请码；加入后课程、作业与签到自动同步到课堂页。")
         TeacherToolField("邀请码", code, { code = it.filter(Char::isLetterOrDigit).take(6).uppercase() },
@@ -499,7 +499,7 @@ internal fun StudentClassScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
         return
     }
     val cs = COUITheme.colorScheme
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("我的班级", onBack)
         if (list == null) { KewuLoading(); return@Column }
         list.forEach { c ->

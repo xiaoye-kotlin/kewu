@@ -51,12 +51,19 @@ fun KewuGlassCard(
     magnify: Float = 1f,
     highlight: Highlight? = null,
     onClick: (() -> Unit)? = null,
+    /** 边缘折射带宽度（默认随 blur 走 = blur×0.85）。导航栏等「真液态玻璃」件调大：边缘把身后内容明显掰弯。 */
+    refractionHeight: Dp? = null,
+    /** 折射位移量（默认同 [refractionHeight]）。 */
+    refractionAmount: Dp? = null,
+    /** 景深（0–1）：越大边缘越像厚玻璃的立体弯折。 */
+    depthEffect: Float = 0f,
     content: @Composable BoxScope.() -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val isDark = !cs.background.isLight()
     val blurPx = blurRadius.value * androidx.compose.ui.platform.LocalDensity.current.density
-    val refractPx = (blurRadius.value * 0.85f).dp
+    val refractPx = refractionHeight ?: (blurRadius.value * 0.85f).dp
+    val refractAmt = refractionAmount ?: refractPx
     val h = highlight ?: defaultKewuHighlight(isDark)
     val tint = if (isDark) Color.Black.copy(alpha = 0.30f) else Color.White.copy(alpha = tintAlpha)
 
@@ -80,7 +87,8 @@ fun KewuGlassCard(
                     if (refractPx.value > 0.5f && isRuntimeShaderSupported()) {
                         refractionLens(
                             refractionHeight = refractPx.toPx(),
-                            refractionAmount = refractPx.toPx(),
+                            refractionAmount = refractAmt.toPx(),
+                            depthEffect = depthEffect,
                         )
                     }
                 },
@@ -121,6 +129,7 @@ internal fun defaultKewuHighlight(isDark: Boolean): Highlight = Highlight(
 internal fun BackdropEffectScope.refractionLens(
     refractionHeight: Float,
     refractionAmount: Float,
+    depthEffect: Float = 0f,
 ) {
     if (refractionHeight <= 0f || refractionAmount <= 0f) return
     if (padding < refractionAmount) padding = refractionAmount
@@ -144,7 +153,7 @@ internal fun BackdropEffectScope.refractionLens(
         setFloatUniform("cornerRadii", scaledRadii)
         setFloatUniform("refractionHeight", scaledRefractionHeight)
         setFloatUniform("refractionAmount", -scaledRefractionAmount)
-        setFloatUniform("depthEffect", 0f)
+        setFloatUniform("depthEffect", depthEffect.coerceIn(0f, 1f))
     }
 }
 

@@ -117,7 +117,7 @@ fun CourseDetailScreen(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(bottom = 96.dp),
+                .padding(bottom = KewuNavClearance),
         ) {
             HubTopBar(course?.name ?: "课程详情", onBack)
             Spacer(Modifier.height(4.dp))

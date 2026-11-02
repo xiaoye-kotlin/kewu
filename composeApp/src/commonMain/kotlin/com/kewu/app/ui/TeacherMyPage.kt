@@ -167,7 +167,7 @@ private fun TeacherMyHome(
         Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(bottom = 118.dp),
+            .padding(bottom = KewuNavClearance),
     ) {
         Spacer(Modifier.height(12.dp))
 

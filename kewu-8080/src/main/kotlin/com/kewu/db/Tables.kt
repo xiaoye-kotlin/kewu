@@ -294,7 +294,8 @@ object BilibiliNotes : Table("bilibili_notes") {
     val id = varchar("id", 64)
     val bvid = varchar("bvid", 32).index()          // B站视频号，如 BV1xx411c7mD
     val title = varchar("title", 512)                // 视频标题
-    val content = text("content")                    // 大模型生成的 Markdown 笔记
+    val content = text("content")                    // 大模型生成的视频总结
+    val transcript = text("transcript").nullable()   // SIS 转写原文（2026-11-02，App「问小悟这个视频」用）
     val createdAt = varchar("created_at", 32)         // 生成时间
     override val primaryKey = PrimaryKey(id)
 }

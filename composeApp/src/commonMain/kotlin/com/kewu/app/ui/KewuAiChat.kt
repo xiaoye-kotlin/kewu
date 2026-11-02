@@ -1,5 +1,7 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
 import com.kewu.app.CourseRepo
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.expandVertically
@@ -162,9 +164,12 @@ private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
  * 由模型判断是否「在问知识点」，需要时在回答末尾单独一行输出标记，App 解析后去掉标记、渲染视频卡。
  */
 internal const val BILI_TAG_RULE =
-    "【B 站视频推荐】只有当学生在问自己没弄懂的知识点、概念、公式或解题方法时，才在回答最后单独起一行输出 [[BILI:关键词]]，" +
+    "【你会找 B 站学习视频】课悟 App 给你接了 B 站视频搜索：你在回答最后单独起一行写 [[BILI:关键词]]，App 就会自动去 B 站搜索，" +
+        "并把搜到的视频卡片紧跟在你这条回答下面发给学生（学生点开就在 App 里播放）。所以你可以找视频，绝对不要说「我不能搜索视频 / 无法提供链接」。" +
+        "以下两种情况要写这一行：① 学生让你找、推荐某个知识点的视频；② 学生在问自己没弄懂的知识点、概念、公式或解题方法。" +
+        "写了这一行时，正文里自然地说一句「我给你找了几个讲这个的 B 站视频，就在下面」，不要编造视频标题、UP 主或链接。" +
         "关键词是 2～12 个字、适合在 B 站搜索教学视频的知识点名称（例如 [[BILI:矩阵的秩]]）。" +
-        "闲聊、问候、问作业截止时间 / 成绩 / 课表、让你做规划或操作软件等其它情况，一律不要输出这一行。"
+        "闲聊、问候、问作业截止时间 / 成绩 / 课表、让你做规划或操作软件等其它情况，一律不要写这一行。"
 
 private val BILI_TAG = Regex("""\[\[\s*BILI\s*[:：]\s*([^\]\n]{1,30}?)\s*]]""")
 
@@ -914,10 +919,26 @@ internal fun KewuAiChatScreen(
             Spacer(Modifier.height(6.dp))
         }
         ChatBubbleMenu(menu, rootOrigin) { quote = it }
-        // 应用内播放覆盖层：视频卡点击后在此全屏播放，不跳外部 App
-        BilibiliPlayerHost()
     }
 }
 
 /** 新消息 id（进程内单调递增，供 LazyColumn key 用）。 */
 internal fun newChatId(): Long = com.kewu.app.ChatHistory.nextId()
+
+/**
+ * 页内全屏层的统一进出场（2026-11-02 用户：切页面 / 点控件都要有足够的动画过渡）：
+ * 从右侧滑入、向右滑出（与下钻页同方向）。层里有液态玻璃采样者，所以只做位移不做淡入淡出。
+ * [value] 非空即显示；退场动画期间仍用最后一个值渲染。
+ */
+@Composable
+internal fun <T : Any> SlideOverlay(value: T?, content: @Composable (T) -> Unit) {
+    var last by remember { mutableStateOf(value) }
+    if (value != null) last = value
+    AnimatedVisibility(
+        visible = value != null,
+        enter = slideInHorizontally(spring(dampingRatio = 0.86f, stiffness = 380f)) { it },
+        exit = slideOutHorizontally(tween(220)) { it },
+    ) {
+        last?.let { content(it) }
+    }
+}

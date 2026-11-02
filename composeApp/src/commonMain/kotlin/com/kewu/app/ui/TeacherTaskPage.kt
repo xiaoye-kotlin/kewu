@@ -355,7 +355,7 @@ private fun TeacherAssignmentList(
         Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(bottom = 118.dp),
+            .padding(bottom = KewuNavClearance),
     ) {
         Spacer(Modifier.height(12.dp))
 
@@ -532,7 +532,7 @@ private fun PendingReviewScreen(
     onOpenAssignment: (String) -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("待批阅总览", onBack = onBack)
         Spacer(Modifier.height(4.dp))
         when {
@@ -718,7 +718,7 @@ private fun TeacherAssignmentDetail(
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
             KewuTopBar(assignment?.title ?: "作业详情", onBack = onBack)
             Spacer(Modifier.height(4.dp))
             if (loading) {
@@ -1070,7 +1070,7 @@ private fun ReviewSubmissionScreen(
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
             KewuTopBar("批阅 · ${sub?.studentName ?: ""}", onBack = onBack)
             Spacer(Modifier.height(4.dp))
             val s = sub
@@ -1414,7 +1414,7 @@ private fun PublishAssignmentScreen(
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
             KewuTopBar("发布新作业", onBack = onBack)
             Spacer(Modifier.height(4.dp))
             KewuSectionTitle("选择课程")

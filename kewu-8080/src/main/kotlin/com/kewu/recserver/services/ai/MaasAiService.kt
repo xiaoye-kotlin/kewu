@@ -81,7 +81,10 @@ class MaasAiService : AiService {
     suspend fun bilibiliNotes(transcript: String): String {
         if (transcript.isBlank()) return "（逐字稿为空，无法生成笔记）"
         return chat(
-            system = "你是一个学习助手。请将以下视频逐字稿整理成结构化的 Markdown 学习笔记，包含：课程大纲、核心知识点。",
+            system = "你是课悟 App 的学习助手。下面是一个 B 站教学视频的语音转写稿，请为学生写一份视频总结，" +
+                "严格按以下三段输出，每段以【】小标题开头：【一句话总结】一句话说清视频讲了什么；" +
+                "【核心知识点】3～6 条，每条以「· 」开头，写清概念 / 公式 / 方法；【视频大纲】按讲解顺序列出 3～6 个环节，每条以「· 」开头。" +
+                "用中文，不要使用 Markdown 符号（# * 等），转写稿可能有错别字，按上下文理解。",
             user = transcript.take(12000),
             maxTokens = 2048
         )

@@ -175,7 +175,7 @@ fun CodeCheckInPage(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(bottom = 96.dp),
+                .padding(bottom = KewuNavClearance),
         ) {
             KewuTopBar("暗号签到", onBack = onBack)
             Spacer(Modifier.height(12.dp))

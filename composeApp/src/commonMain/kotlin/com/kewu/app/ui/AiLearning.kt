@@ -7,6 +7,8 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import io.github.suqi8.coui.kmp.basic.Chip
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -447,7 +449,7 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
             }
             Spacer(Modifier.height(14.dp))
             KewuSectionTitle("小悟为你排的 7 天计划（结合课表空闲时段）")
-            PlanTable(plan, busy)
+            PlanTable(plan, busy, pageBackdrop)
             Spacer(Modifier.height(10.dp))
             KewuSecondaryButton(if (busy) "生成中…" else "重新规划", { generate() }, Modifier.fillMaxWidth().padding(horizontal = 12.dp), enabled = !busy)
         }
@@ -481,8 +483,6 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
                 onDismiss = { ratePoint = null },
             )
         }
-        // 应用内播放层（知识点视频在本页全屏播放，看完回来问掌握度）
-        BilibiliPlayerHost()
     }
 }
 
@@ -503,49 +503,82 @@ private fun parsePlan(text: String, complete: Boolean): Pair<List<PlanRow>, Stri
     return rows to cheer
 }
 
-/** 7 天计划表格：每天一张卡，三列「时间 / 安排 / 为什么这样排」。解析不出表格时（老格式 / 出错文案）原样显示文字。 */
+/**
+ * 7 天计划表格（2026-11-02 重做，coui + 液态玻璃）：顶部 coui Chip 切换星期，
+ * 表格放在液态玻璃卡里（三列「时间 / 安排 / 为什么这样排」，时间做成品牌色小胶囊），
+ * 切换星期时各行错峰上浮入场。解析不出表格时（出错文案等）原样显示文字。
+ */
 @Composable
-private fun PlanTable(plan: String?, busy: Boolean) {
+private fun PlanTable(plan: String?, busy: Boolean, backdrop: LayerBackdrop) {
     val cs = COUITheme.colorScheme
     val (rows, cheer) = remember(plan, busy) { parsePlan(plan.orEmpty(), complete = !busy) }
+    val p = rememberEnterProgress(0, baseDelayMs = 160L)
     if (rows.isEmpty()) {
-        KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
+        KewuGlassCard(
+            backdrop = backdrop, shape = RoundedCornerShape(22.dp), blurRadius = glassCondenseBlur(p, 22f), tintAlpha = 0.30f * p,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).glassEnter(p, 30f),
+        ) {
             Text(
                 when {
                     plan == null -> "正在加载课表…"
                     plan.isBlank() || busy -> "小悟正在结合你的课表和作业截止时间排计划…"
                     else -> plan
                 },
-                color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(16.dp),
+                color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp, modifier = Modifier.padding(18.dp),
             )
         }
         return
     }
-    rows.groupBy { it.day }.forEach { (day, list) ->
-        KewuCardGroup(Modifier.padding(horizontal = 12.dp).padding(bottom = 10.dp)) {
-            Column(Modifier.padding(vertical = 12.dp)) {
-                Text(day, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(horizontal = 16.dp))
-                Spacer(Modifier.height(8.dp))
-                // 表头
-                Row(Modifier.fillMaxWidth().background(cs.onSurface.copy(alpha = 0.05f)).padding(horizontal = 16.dp, vertical = 6.dp)) {
-                    Text("时间", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.width(92.dp))
-                    Text("安排", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                    Text("为什么这样排", color = cs.onSurfaceSecondary, fontSize = 12.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
-                }
-                list.forEachIndexed { i, r ->
-                    if (i > 0) Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(1.dp).background(cs.onSurface.copy(alpha = 0.06f)))
-                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 9.dp)) {
-                        Text(r.time, color = KewuBlue, fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(92.dp))
-                        Text(r.task, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 19.sp, modifier = Modifier.weight(1f))
-                        Text(r.reason, color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 8.dp))
+    val days = rows.groupBy { it.day }
+    var sel by remember { mutableStateOf<String?>(null) }
+    val current = sel?.takeIf { it in days } ?: days.keys.first()
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp).padding(bottom = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        days.forEach { (d, list) ->
+            Chip(selected = d == current, onClick = { haptic(HapticKind.Tick); sel = d }, label = "$d · ${list.size} 项")
+        }
+    }
+    KewuGlassCard(
+        backdrop = backdrop, shape = RoundedCornerShape(22.dp), blurRadius = glassCondenseBlur(p, 22f), tintAlpha = 0.32f * p,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).glassEnter(p, 30f),
+    ) {
+        Column(Modifier.padding(vertical = 8.dp)) {
+            // 表头
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 8.dp)) {
+                Text("时间", color = cs.onSurfaceSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.width(96.dp))
+                Text("安排", color = cs.onSurfaceSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+                Text("为什么这样排", color = cs.onSurfaceSecondary, fontSize = 12.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f).padding(start = 10.dp))
+            }
+            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(cs.onSurface.copy(alpha = 0.08f)))
+            // key(current)：切换星期时重新播放错峰入场
+            androidx.compose.runtime.key(current) {
+                days[current].orEmpty().forEachIndexed { i, r ->
+                    val rp = rememberEnterProgress(i, baseDelayMs = 30L, stepMs = 60L)
+                    if (i > 0) Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp).height(1.dp).background(cs.onSurface.copy(alpha = 0.05f)))
+                    Row(Modifier.fillMaxWidth().riseEnter(rp, 22f).padding(horizontal = 14.dp, vertical = 12.dp)) {
+                        Box(Modifier.width(96.dp)) {
+                            Text(
+                                r.time, color = KewuBlue, fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.clip(RoundedCornerShape(8.dp)).background(KewuBlue.copy(alpha = 0.12f))
+                                    .padding(horizontal = 7.dp, vertical = 4.dp),
+                            )
+                        }
+                        Text(r.task, color = cs.onSurface, fontSize = 13.5.sp, fontWeight = FontWeight.Medium, lineHeight = 19.sp, modifier = Modifier.weight(1f))
+                        Text(r.reason, color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp, modifier = Modifier.weight(1f).padding(start = 10.dp))
                     }
                 }
             }
         }
     }
-    if (busy) Text("小悟还在继续排…", color = cs.onSurfaceSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(horizontal = 24.dp))
+    if (busy) Text("小悟还在继续排…", color = cs.onSurfaceSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp))
     cheer?.takeIf { it.isNotBlank() }?.let {
-        Text(it, color = KewuGreen, fontSize = 13.5.sp, lineHeight = 20.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp))
+        Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(6.dp).clip(CircleShape).background(KewuGreen))
+            Spacer(Modifier.width(8.dp))
+            Text(it, color = KewuGreen, fontSize = 13.5.sp, lineHeight = 20.sp)
+        }
     }
 }
 

@@ -1,6 +1,8 @@
 package com.kewu.app
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 
 /**
@@ -43,3 +45,11 @@ expect fun VideoPlayerView(
     retryToken: Int = 0,
     onError: (String) -> Unit = {},
 )
+
+/**
+ * 视频全屏状态（2026-11-02）：Android 播放器控制条的全屏键置 true（横屏 + 隐藏系统栏），
+ * 播放层返回键 / 再点全屏键置 false。公共层据此隐藏顶栏与总结区，让播放器铺满屏幕。
+ */
+object VideoFullscreen {
+    var on by androidx.compose.runtime.mutableStateOf(false)
+}

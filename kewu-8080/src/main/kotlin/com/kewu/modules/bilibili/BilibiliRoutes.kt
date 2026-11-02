@@ -72,7 +72,8 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
                 "bvid" to note.bvid,
                 "title" to note.title,
                 "content" to note.content,
-                "createdAt" to note.createdAt
+                "createdAt" to note.createdAt,
+                "transcript" to note.transcript
             )))
             return@get
         }

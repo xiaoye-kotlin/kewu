@@ -70,13 +70,43 @@ actual fun VideoPlayerView(
     androidx.compose.runtime.DisposableEffect(player) {
         onDispose { player.release() }
     }
+    // 全屏（2026-11-02 用户：视频没法放大）：控制条全屏键 → 横屏 + 隐藏系统栏；退出 / 离开播放层时恢复
+    val fullscreen = VideoFullscreen.on
+    val activity = context as? android.app.Activity ?: platformActivity() as? android.app.Activity
+    androidx.compose.runtime.LaunchedEffect(fullscreen) { activity?.let { applyFullscreen(it, fullscreen) } }
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        onDispose {
+            VideoFullscreen.on = false
+            activity?.let { applyFullscreen(it, false) }
+        }
+    }
     AndroidView(
         factory = { ctx ->
             PlayerView(ctx).apply {
                 useController = true
-                this.player = player
+                setFullscreenButtonClickListener { VideoFullscreen.on = it }
             }
+        },
+        // 重试会重建 player：update 里重新绑定（旧版只在 factory 里绑一次，重试后画面不更新）
+        update = { view ->
+            if (view.player !== player) view.player = player
+            view.setFullscreenButtonState(fullscreen)
         },
         modifier = modifier,
     )
+}
+
+private fun applyFullscreen(activity: android.app.Activity, on: Boolean) {
+    activity.requestedOrientation = if (on) {
+        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+    } else {
+        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+    val ctl = androidx.core.view.WindowCompat.getInsetsController(activity.window, activity.window.decorView)
+    if (on) {
+        ctl.systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        ctl.hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+    } else {
+        ctl.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+    }
 }

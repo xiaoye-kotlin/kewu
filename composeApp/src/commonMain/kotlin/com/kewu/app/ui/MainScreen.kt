@@ -614,8 +614,14 @@ internal fun AppleLiquidGlassNavBar(
         KewuGlassCard(
             backdrop = backdrop,
             shape = RoundedCornerShape(33.dp),
-            blurRadius = 22.dp,
-            tintAlpha = 0.12f,
+            // ★ 2026-11-02 用户：折射太弱、不像真液态玻璃。少模糊（22→8dp，身后内容看得清）+
+            //   宽折射带（≈半个栏高）+ 景深 → 边缘把身后内容明显掰弯、中间透亮，接近 Apple 液态玻璃
+            blurRadius = 8.dp,
+            tintAlpha = 0.10f,
+            magnify = 1.06f,
+            refractionHeight = 26.dp,
+            refractionAmount = 34.dp,
+            depthEffect = 0.6f,
             modifier = Modifier.fillMaxWidth().height(barHeight).align(Alignment.Center).scale(trayScale),
         ) {
             // 托盘也描一圈极淡的棱边：页面背景改成 M3 纯色后，光靠白色 tint 在浅色底上
@@ -677,9 +683,13 @@ internal fun AppleLiquidGlassNavBar(
                 KewuGlassCard(
                     backdrop = backdrop,
                     shape = RoundedCornerShape(50),
-                    blurRadius = if (bubbleActive) 16.dp else 12.dp,
-                    tintAlpha = if (bubbleActive) 0.11f else 0.075f,
+                    blurRadius = if (bubbleActive) 6.dp else 4.dp,
+                    tintAlpha = if (bubbleActive) 0.10f else 0.07f,
                     magnify = if (bubbleActive) 1.36f else 1.26f,
+                    // 泡泡：更强的边缘折射 + 景深（2026-11-02 加强）
+                    refractionHeight = 22.dp,
+                    refractionAmount = 30.dp,
+                    depthEffect = 0.8f,
                 ) {
                     // 棱边：泡泡"透"了之后，**必须**靠棱边才能读出来是个泡泡 ——
                     // Apple 液态玻璃的可见性主要来自棱边高光，而不是内部填充。所以这里

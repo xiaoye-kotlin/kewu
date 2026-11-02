@@ -206,7 +206,7 @@ fun AttendanceDetailScreen(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(bottom = 96.dp),
+                .padding(bottom = KewuNavClearance),
         ) {
             HubTopBar(session?.title ?: "签到详情", onBack)
             Spacer(Modifier.height(4.dp))

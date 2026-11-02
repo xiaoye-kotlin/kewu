@@ -364,7 +364,7 @@ private fun ConsoleHome(
         Modifier
             .fillMaxSize()
             .verticalScroll(scrollState)
-            .padding(bottom = 118.dp),
+            .padding(bottom = KewuNavClearance),
     ) {
         Spacer(Modifier.height(12.dp))
 
@@ -1204,7 +1204,7 @@ private fun CourseSessionsScreen(
     var sessions by remember { mutableStateOf<List<AttendanceSession>?>(null) }
     LaunchedEffect(course.id) { sessions = KewuApi.getAttendances(course.id) }
 
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("${course.name} · 签到记录", onBack = onBack)
         Spacer(Modifier.height(4.dp))
         val list = sessions

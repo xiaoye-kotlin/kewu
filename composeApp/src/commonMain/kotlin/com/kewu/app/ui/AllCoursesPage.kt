@@ -129,7 +129,7 @@ private fun CourseListContent(onBack: () -> Unit, onOpen: (CourseInfo) -> Unit) 
                 Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(bottom = 96.dp),
+                    .padding(bottom = KewuNavClearance),
             ) {
                 val list = courses
                 KewuTopBar(

@@ -194,7 +194,7 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                             .verticalScroll(scrollState)
                             .padding(horizontal = 12.dp)
                             // 顶部让位给浮动日条（62dp + 间距）
-                            .padding(top = 74.dp, bottom = 96.dp),
+                            .padding(top = 74.dp, bottom = KewuNavClearance),
                     ) {
                         // 按天切换：横推 + 淡入（iOS 式推页）；切天顺手滚回顶，
                         // 不然新的一天从旧滚动位置开始，课程卡会"闪没"。

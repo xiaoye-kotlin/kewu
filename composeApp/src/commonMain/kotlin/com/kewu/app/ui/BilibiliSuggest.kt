@@ -1,6 +1,25 @@
 package com.kewu.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.shape.CircleShape
+import com.kewu.app.KewuGreen
+import com.kewu.app.ui.liquidglass.KewuGlassCard
+import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.Chip
+import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
+import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.icon.extended.Close
+import io.github.suqi8.coui.kmp.icon.extended.Play
+import io.github.suqi8.coui.kmp.icon.extended.Search
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -59,13 +78,13 @@ import kotlinx.coroutines.launch
  * （接口文档 14.6，裸数组无壳，最多 10 条）。
  *
  * - [BilibiliVideoSuggest]：AI 回答带 [[BILI:关键词]] 标记时（只在学生问不懂的知识点时，见 BILI_TAG_RULE）拉视频，插在回答下方（最多 3 条）；
- *   加载中给占位、没结果 / 失败回退成 [BilibiliSuggestRow] 深链卡（永不空窗）。
- * - [BilibiliSuggestRow]：兜底入口，直接跳 B 站 App 搜索页（未装 App 回退浏览器）。
+ *   加载中给占位、没结果 / 失败显示 [BilibiliSuggestRow] 提示行。
+ * - [BilibiliSuggestRow]：没搜到视频的提示（不跳外部 App / 浏览器）。
  * - [BilibiliBrowsePanel]：助教页手动浏览面板（搜索框 + 学科快捷词 + 结果列表）。
  *
  * 点击视频卡 → 应用内直接播放（2026-11-02 用户明确要求，不跳 B 站 App）：
- * [VideoPlayerHub] 记录播放请求，[BilibiliPlayerHost] 在页面根部渲染
- * [BilibiliPlayOverlay] 全屏覆盖层，ExoPlayer 合并后端返回的 DASH video+audio 直链。
+ * [VideoPlayerHub] 记录播放请求，[BilibiliPlayerHost]（App 根部唯一一个，见 BiliPlayerOverlay.kt）渲染
+ * 全屏播放层（含 AI 视频总结与提问），ExoPlayer 合并后端返回的 DASH video+audio 直链。
  * videoUrl 为空 / 直链过期 → 覆盖层给「重试 / 返回」，不回退成跳转外部 App。
  */
 
@@ -74,7 +93,7 @@ internal data class BiliSuggest(val keyword: String)
 
 /**
  * 应用内播放请求总线：视频卡在列表（LazyColumn）里，覆盖层必须渲染到页面根部才能全屏，
- * 各卡片只负责设置它，能显示卡片的页面根部统一调用 [BilibiliPlayerHost] 消费。
+ * 各卡片只负责设置它，App 根部唯一的 [BilibiliPlayerHost] 消费（页面里不要再挂，否则同一视频会被建两个播放器）。
  */
 internal object VideoPlayerHub {
     var current by mutableStateOf<BilibiliVideoInfo?>(null)
@@ -92,12 +111,15 @@ internal fun biliKeywordOf(question: String, maxLen: Int = 30): String =
 internal fun BilibiliVideoCard(
     video: BilibiliVideoInfo,
     modifier: Modifier = Modifier,
-    /** 自定义点击（如知识点弹窗：先关弹窗再播放）；为空时直接在页面根部播放 */
+    /** 自定义点击（如知识点弹窗：先关弹窗再播放）；为空时直接交给 App 根部播放层 */
     onClick: (() -> Unit)? = null,
+    /** 列表中的序号：错峰上浮入场（2026-11-02 用户：选视频时缺少动画） */
+    index: Int = 0,
 ) {
     val cs = COUITheme.colorScheme
+    val p = rememberEnterProgress(index, baseDelayMs = 40L, stepMs = 55L)
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().riseEnter(p, 36f),
         cornerRadius = 14.dp,
         insideMargin = PaddingValues(10.dp),
         colors = kewuCardColors(),
@@ -112,6 +134,11 @@ internal fun BilibiliVideoCard(
                     .background(cs.secondaryContainer),
             ) {
                 RemoteImage(video.cover, Modifier.fillMaxSize())
+                // 播放角标
+                Box(
+                    Modifier.align(Alignment.Center).size(26.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(COUIIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp)) }
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
@@ -157,7 +184,7 @@ internal fun BilibiliVideoSuggest(keyword: String, maxCount: Int = 3, modifier: 
         BilibiliSuggestRow(keyword, modifier)
     } else {
         Column(modifier, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-            list.forEach { BilibiliVideoCard(it) }
+            list.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
         }
     }
 }
@@ -183,205 +210,136 @@ internal fun BilibiliSuggestRow(keyword: String, modifier: Modifier = Modifier) 
 // ───────────────────────── 手动浏览面板 ─────────────────────────
 
 private val BILI_SUBJECTS = listOf(
-    "数学", "语文", "英语", "物理", "化学", "生物", "历史", "地理", "政治",
+    "高等数学", "线性代数", "概率论", "大学物理", "C 语言", "数据结构", "英语四级", "思修", "近代史",
 )
 
-/** 助教页手动浏览 B 站视频的全屏面板：搜索框 + 学科快捷词 + 结果列表（点击跳 B 站）。 */
+/**
+ * 「B 站学习视频」全屏面板（2026-11-02 重做）：液态玻璃搜索栏 + 学科快捷词 + 「为你推荐」/ 搜索结果。
+ * 视频卡错峰上浮入场；底部留出导航栏空间（[KewuNavClearance]），最后的按钮不会被挡。
+ */
 @Composable
 internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
+    val backdrop = rememberGlassBackdrop()
     var query by remember { mutableStateOf("") }
-    // null=未搜索 / 空=加载中 / else=结果（可能空列表 = 无结果）
+    // null = 未搜索（显示为你推荐）/ 非空 = 结果（可能空列表 = 无结果）
     var results by remember { mutableStateOf<List<BilibiliVideoInfo>?>(null) }
     var searching by remember { mutableStateOf(false) }
+    var searchSeq by remember { mutableStateOf(0) }
 
     fun search(subject: String) {
         val s = subject.trim()
         if (s.isEmpty() || searching) return
+        haptic(HapticKind.Light)
         searching = true
         results = null
         scope.launch {
             results = KewuApi.getBilibiliVideos(s).orEmpty()
             searching = false
+            searchSeq++
         }
     }
 
     BackHandler { onDismiss() }
 
-    Box(Modifier.fillMaxSize().background(cs.surface)) {
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.matchParentSize().layerBackdrop(backdrop).background(cs.surface))
         Column(Modifier.fillMaxSize()) {
             HubTopBar("B 站学习视频", onDismiss)
-            Spacer(Modifier.height(4.dp))
 
-            // 搜索输入行
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                cornerRadius = 20.dp,
-                insideMargin = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
-                colors = kewuCardColors(),
+            // ── 液态玻璃搜索胶囊（与对话输入栏同一套外观） ──
+            val p = rememberEnterProgress(0, baseDelayMs = 80L)
+            KewuGlassCard(
+                backdrop = backdrop,
+                shape = RoundedCornerShape(26.dp),
+                blurRadius = glassCondenseBlur(p, 22f),
+                tintAlpha = 0.38f * p,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).height(52.dp).glassEnter(p, 30f),
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.weight(1f).padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (query.isEmpty()) {
-                            Text("输入学科或知识点，如「高中数学」", color = cs.onSurfaceSecondary, fontSize = 13.sp)
-                        }
+                DockStroke(RoundedCornerShape(26.dp))
+                Row(Modifier.fillMaxSize().padding(start = 16.dp, end = 5.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(COUIIcons.Search, contentDescription = null, tint = cs.onSurfaceSecondary, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                        if (query.isEmpty()) Text("搜知识点，如「定积分换元法」", color = cs.onSurfaceSecondary, fontSize = 14.sp, maxLines = 1)
                         BasicTextField(
                             value = query,
                             onValueChange = { query = it },
-                            textStyle = TextStyle(color = cs.onSurface, fontSize = 13.sp),
+                            singleLine = true,
+                            textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
                             cursorBrush = SolidColor(cs.primary),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { search(query) }),
                             modifier = Modifier.fillMaxWidth(),
                         )
                     }
-                    IconButton(
-                        onClick = { search(query) },
-                        enabled = query.isNotBlank() && !searching,
-                        backgroundColor = if (query.isNotBlank() && !searching) KewuBlue else cs.secondaryContainer,
-                        cornerRadius = 16.dp,
-                        minWidth = 36.dp,
-                        minHeight = 36.dp,
+                    AnimatedVisibility(
+                        visible = query.isNotEmpty(),
+                        enter = scaleIn(spring(dampingRatio = 0.6f, stiffness = 500f)) + fadeIn(),
+                        exit = scaleOut(tween(120)) + fadeOut(tween(120)),
                     ) {
-                        Text("搜索", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        IconButton(onClick = { haptic(HapticKind.Tick); query = ""; results = null }, minWidth = 32.dp, minHeight = 32.dp, cornerRadius = 16.dp) {
+                            Icon(COUIIcons.Close, contentDescription = "清空", tint = cs.onSurfaceSecondary, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    // 绿芯搜索钮（与发送钮同语言）：有输入才亮
+                    val active = query.isNotBlank() && !searching
+                    Box(
+                        Modifier.size(42.dp).clip(CircleShape)
+                            .background(if (active) KewuGreen else cs.onSurface.copy(alpha = 0.08f))
+                            .clickable(enabled = active) { search(query) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        if (searching) InfiniteProgressIndicator(Modifier.size(18.dp))
+                        else Icon(COUIIcons.Search, contentDescription = "搜索", tint = if (active) Color.White else cs.onSurfaceSecondary, modifier = Modifier.size(18.dp))
                     }
                 }
             }
 
-            // 学科快捷词
+            // ── 学科快捷词（coui Chip，选中态跟随当前搜索词） ──
             Row(
-                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 10.dp),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 BILI_SUBJECTS.forEach { s ->
-                    Card(
-                        cornerRadius = 14.dp,
-                        insideMargin = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                        colors = kewuCardColors(),
+                    Chip(
+                        selected = query == s,
                         onClick = { haptic(HapticKind.Tick); query = s; search(s) },
-                    ) {
-                        Text(s, color = cs.onSurface, fontSize = 12.sp)
-                    }
+                        label = s,
+                    )
                 }
             }
 
-            // 结果区
+            // ── 内容区：为你推荐 / 搜索中 / 结果 ──
             Column(
                 Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp),
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 when {
-                    // 2026-11-02：没搜索时显示「为你推荐」（AI 结合最近提问 / 作业 / 错题提炼关键词后搜索）
                     !searching && results == null -> BiliRecommendSection()
-                    searching || results == null -> Text(
-                        "正在搜索，可能需要十几秒…",
-                        color = cs.onSurfaceSecondary, fontSize = 13.sp,
-                        modifier = Modifier.padding(vertical = 20.dp),
-                    )
-                    results!!.isEmpty() -> Text(
-                        "暂时没有相关视频，换个关键词试试",
-                        color = cs.onSurfaceSecondary, fontSize = 13.sp,
-                        modifier = Modifier.padding(vertical = 20.dp),
-                    )
-                    else -> results!!.forEach { BilibiliVideoCard(it) }
-                }
-                if (!searching && results != null) {
-                    KewuSecondaryButton("回到为你推荐", { results = null; query = "" }, Modifier.fillMaxWidth())
-                }
-                Spacer(Modifier.height(24.dp))
-            }
-        }
-
-        // 应用内播放覆盖层宿主：浏览面板里的视频卡点击后在此全屏播放
-        BilibiliPlayerHost()
-    }
-}
-
-// ───────────────────────── 应用内播放覆盖层 ─────────────────────────
-
-/**
- * 页面根部消费 [VideoPlayerHub]：有播放请求时渲染全屏播放覆盖层。
- * TaPage / BilibiliBrowsePanel / ClassNoteTutorScreen 三个能出视频卡的页面根部各调一次。
- */
-@Composable
-internal fun BilibiliPlayerHost() {
-    val video = VideoPlayerHub.current
-    if (video != null) {
-        BilibiliPlayOverlay(video) { VideoPlayerHub.current = null }
-    }
-}
-
-/**
- * 应用内全屏播放层（2026-11-02）：主题色底 + 顶栏（标题/关闭）+ 16:9 播放器区。
- * videoUrl 为空或直链过期（B 站直链带过期参数）→ 错误面板给「重试 / 返回」，
- * 不回退成跳转外部 App（用户明确要求软件内观看）。
- */
-@Composable
-private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
-    val cs = COUITheme.colorScheme
-    var retryToken by remember { mutableStateOf(0) }
-    var error by remember(retryToken) { mutableStateOf<String?>(null) }
-    // B 站直链带过期参数：重试时按标题重新搜一次、取同一 bvid 的新直链（拿不到就沿用旧的）
-    var fresh by remember(video) { mutableStateOf(video) }
-    LaunchedEffect(retryToken) {
-        if (retryToken > 0) {
-            KewuApi.getBilibiliVideos(video.title.take(30))?.firstOrNull { it.bvid == video.bvid && it.videoUrl != null }
-                ?.let { fresh = it }
-        }
-    }
-    val sources = remember(fresh) {
-        DashVideoSources(fresh.title, fresh.cover, fresh.videoUrl, fresh.audioUrl)
-    }
-
-    BackHandler { onDismiss() }
-
-    Box(Modifier.fillMaxSize().background(cs.surface)) {
-        Column(Modifier.fillMaxSize()) {
-            HubTopBar(video.title, onDismiss)
-            Spacer(Modifier.height(8.dp))
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(16f / 9f)
-                    .background(Color.Black),
-            ) {
-                if (sources.playable && error == null) {
-                    VideoPlayerView(
-                        sources = sources,
-                        retryToken = retryToken,
-                        onError = { error = it },
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Column(
-                        Modifier.align(Alignment.Center),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Text(
-                            if (sources.playable) "播放链接已失效，请重试" else "该视频暂时无法播放",
-                            color = Color(0xFFBBBBBB), fontSize = 14.sp,
-                        )
-                        if (sources.playable) {
-                            Spacer(Modifier.height(12.dp))
-                            Card(
-                                cornerRadius = 16.dp,
-                                insideMargin = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
-                                colors = kewuCardColors(),
-                                onClick = { haptic(HapticKind.Tick); retryToken++ },
-                            ) {
-                                Text("重试", color = cs.onSurface, fontSize = 13.sp)
-                            }
+                    searching -> Row(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        InfiniteProgressIndicator(Modifier.size(18.dp))
+                        Spacer(Modifier.width(10.dp))
+                        Text("正在搜索，可能需要十几秒…", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                    }
+                    results!!.isEmpty() -> KewuEmpty("暂时没有相关视频，换个关键词试试")
+                    else -> {
+                        Text("「${query.trim()}」的搜索结果", color = cs.onSurfaceSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(start = 4.dp))
+                        // key 跟随搜索次数：每次新结果都重新播一遍错峰入场
+                        androidx.compose.runtime.key(searchSeq) {
+                            results!!.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
                         }
+                        KewuSecondaryButton("回到为你推荐", { haptic(HapticKind.Tick); results = null; query = "" }, Modifier.fillMaxWidth())
                     }
                 }
+                // 底部给悬浮导航栏让位（2026-11-02 用户报「换一批推荐」被导航栏挡住点不到）
+                Spacer(Modifier.height(KewuNavClearance))
             }
         }
     }

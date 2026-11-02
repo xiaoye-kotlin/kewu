@@ -202,7 +202,7 @@ fun AssignmentDetailScreen(
     Box(Modifier.fillMaxSize()) {
         // 背景层：coui 页面灰底，是信息卡液态玻璃的采样源（与玻璃卡平级 ✓）
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = 96.dp)) {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
             HubTopBar(assignment?.title ?: "作业详情", onBack)
             Spacer(Modifier.height(4.dp))
 
@@ -333,7 +333,8 @@ fun AssignmentDetailScreen(
                 }
             },
         )
-        tutorQ?.let { (idx, q) ->
+        // 整页对话从右侧滑入（统一页层动画）
+        SlideOverlay(tutorQ) { (idx, q) ->
             AiTutorSheet(
                 show = true,
                 sessionKey = assignmentId + "#" + q.id,

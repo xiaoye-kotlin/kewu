@@ -96,8 +96,15 @@ class BilibiliFetcher {
     /** 返回 (视频标题, 音频直链 baseUrl)。任何一步失败都抛带原因的异常。 */
     suspend fun fetchAudio(bvid: String): Pair<String, String> {
         val (title, cid) = view(bvid)
-        val baseUrl = playUrl(bvid, cid)
-        return title to baseUrl
+        // 2026-11-02：直接走 wbi/play 在服务器 IP 上会被风控返回 HTML（JSON 解析报 Unexpected token），
+        // 改为与搜索列表同一路径：playurl 优先、WBI 兜底；都拿不到 DASH 时再试老的 durl 解析
+        val audio = runCatching {
+            try { fetchDashUrlsByPlayurl(bvid, cid).second } catch (e: Throwable) {
+                log.warn("B站 playurl 取音频失败，尝试 WBI 兜底 bvid=$bvid：${e.message}")
+                fetchDashUrlsByWbi(bvid, cid).second
+            }
+        }.getOrElse { playUrl(bvid, cid) }
+        return title to audio
     }
 
     private suspend fun view(bvid: String): Pair<String, Long> {

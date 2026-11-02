@@ -135,7 +135,7 @@ fun ClassNoteDetailScreen(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(bottom = 96.dp),
+                .padding(bottom = KewuNavClearance),
         ) {
             HubTopBar("$date 课堂纪要", onBack)
             Spacer(Modifier.height(4.dp))
@@ -325,8 +325,7 @@ fun ClassNoteDetailScreen(
         }
 
         // 「问小悟 · 本节复习」页内全屏覆盖层（自带 BackHandler，优先消费返回键）
-        val activeRec = rec
-        if (showTutor && activeRec != null) {
+        SlideOverlay(rec?.takeIf { showTutor }) { activeRec ->
             ClassNoteTutorScreen(
                 sessionId = activeRec.sessionId,
                 courseName = courseName,

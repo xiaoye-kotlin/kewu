@@ -370,6 +370,12 @@ fun SheetConfirmButton(text: String, danger: Boolean = false, onClick: () -> Uni
     KewuPrimaryButton(text, onClick, Modifier.fillMaxWidth(), danger = danger)
 }
 
+/**
+ * 滚动页底部统一留白（2026-11-02）：底部悬浮导航栏距屏幕底 24dp、高 66dp，压住内容区底部约 90dp。
+ * 所有在导航栏之上的滚动页最后都要留出这段，最底下的按钮才不会被挡、滑得到（用户报「换一批推荐」点不到）。
+ */
+val KewuNavClearance = 124.dp
+
 /** 页面内容统一外边距：coui 列表左右 12dp。 */
 val KewuPagePadding = PaddingValues(horizontal = 12.dp)
 

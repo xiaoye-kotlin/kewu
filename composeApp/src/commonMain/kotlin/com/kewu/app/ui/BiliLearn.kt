@@ -39,6 +39,10 @@ import com.kewu.app.todayCn
 import io.github.suqi8.coui.kmp.basic.Slider
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.overlay.OverlayDialog
+import io.github.suqi8.coui.kmp.layout.DialogButtonBar
+import io.github.suqi8.coui.kmp.layout.DialogButtonBarAction
+import com.kewu.app.HapticKind
+import com.kewu.app.haptic
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -66,6 +70,7 @@ import kotlinx.serialization.json.put
 
 internal object BiliRecommend {
     private val videoCache = mutableMapOf<String, List<BilibiliVideoInfo>>()
+    private val shownForPoint = mutableMapOf<String, Set<String>>()
     private var recCache: Pair<Long, List<Pair<String, List<BilibiliVideoInfo>>>>? = null
     private fun nowMs() = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
@@ -123,14 +128,18 @@ internal object BiliRecommend {
     }
 
     /** 某个知识点的视频：AI 先把知识点（可能是作业标题）转成 1–2 个搜索词，再合并去重。关键词按账号落盘。 */
-    suspend fun forKnowledgePoint(point: String, course: String = ""): List<BilibiliVideoInfo> {
+    suspend fun forKnowledgePoint(point: String, course: String = "", refresh: Boolean = false): List<BilibiliVideoInfo> {
         val key = "kewu_kp_kw_" + KewuApi.username.orEmpty() + "_" + point
-        val kws = kvGet(key)?.split('|')?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }
+        val kws = kvGet(key)?.takeIf { !refresh }?.split('|')?.filter { it.isNotBlank() }?.takeIf { it.isNotEmpty() }
             ?: extractKeywords("课程：${course.ifBlank { "未知" }}\n薄弱知识点：$point\n请给出 2 个能搜到讲解这个知识点的教学视频的关键词。", 2)
                 .ifEmpty { listOf(point.take(16)) }
                 .also { kvSet(key, it.joinToString("|")) }
-        return coroutineScope { kws.map { kw -> async { videos(kw, 4) } }.awaitAll() }
-            .flatten().distinctBy { it.bvid }.take(6)
+        val all = coroutineScope { kws.map { kw -> async { videos(kw, 8) } }.awaitAll() }.flatten().distinctBy { it.bvid }
+        // 换一批：跳过上一批已经展示过的
+        val shown = shownForPoint[point].orEmpty()
+        val pick = all.filter { it.bvid !in shown }.ifEmpty { all }.take(6)
+        shownForPoint[point] = if (refresh) shown + pick.map { it.bvid } else pick.map { it.bvid }.toSet()
+        return pick
     }
 }
 
@@ -202,7 +211,7 @@ internal fun BiliRecommendSection(modifier: Modifier = Modifier) {
                 fontSize = 13.sp, lineHeight = 19.sp, modifier = Modifier.padding(vertical = 12.dp))
             else -> list.forEach { (kw, videos) ->
                 Text("# $kw", color = Color(0xFFFB7299), fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 4.dp))
-                videos.forEach { BilibiliVideoCard(it) }
+                videos.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
             }
         }
         if (recs != null) {
@@ -229,8 +238,9 @@ internal fun KnowledgeVideoDialog(
 ) {
     val cs = COUITheme.colorScheme
     var videos by remember(point) { mutableStateOf<List<BilibiliVideoInfo>?>(null) }
-    LaunchedEffect(point, show) {
-        if (show && point.isNotBlank() && videos == null) videos = BiliRecommend.forKnowledgePoint(point, course)
+    var refreshSeq by remember(point) { mutableStateOf(0) }
+    LaunchedEffect(point, show, refreshSeq) {
+        if (show && point.isNotBlank() && videos == null) videos = BiliRecommend.forKnowledgePoint(point, course, refresh = refreshSeq > 0)
     }
     OverlayDialog(
         show = show,
@@ -239,7 +249,11 @@ internal fun KnowledgeVideoDialog(
         onDismissRequest = onDismiss,
         onDismissFinished = { },
     ) {
-        Column(Modifier.fillMaxWidth().heightIn(max = 420.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().heightIn(max = 400.dp).verticalScroll(rememberScrollState()).padding(bottom = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             MasteryBar(percent / 100f, mastered)
             Spacer(Modifier.height(4.dp))
             val list = videos
@@ -248,10 +262,19 @@ internal fun KnowledgeVideoDialog(
                     modifier = Modifier.padding(vertical = 16.dp))
                 list.isEmpty() -> Text("暂时没搜到相关视频，稍后再试试", color = cs.onSurfaceSecondary, fontSize = 13.sp,
                     modifier = Modifier.padding(vertical = 16.dp))
-                else -> list.forEach { v -> BilibiliVideoCard(v, onClick = { onPlay(v) }) }
+                else -> list.forEachIndexed { i, v -> BilibiliVideoCard(v, onClick = { onPlay(v) }, index = i) }
             }
-            Spacer(Modifier.height(4.dp))
-            KewuSecondaryButton("关闭", onDismiss, Modifier.fillMaxWidth())
+        }
+        // 2026-11-02：底部按钮改用 coui 弹窗原生按钮栏（与确认弹窗同款间距），旧版整宽按钮贴底没有留白
+        DialogButtonBar(
+            negative = DialogButtonBarAction("关闭") { haptic(HapticKind.Tick); onDismiss() },
+            positive = DialogButtonBarAction("换一批") {
+                haptic(HapticKind.Tick)
+                videos = null
+                refreshSeq++
+            },
+            hasContentAbove = true,
+        )
         }
     }
 }

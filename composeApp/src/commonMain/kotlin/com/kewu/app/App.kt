@@ -1,5 +1,6 @@
 package com.kewu.app
 
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -72,10 +73,14 @@ fun App() {
             }
         }
         if (loggedIn) {
-            if (role == ROLE_TEACHER) {
-                TeacherMainScreen(onLogout = doLogout)
-            } else {
-                MainScreen(onLogout = doLogout)
+            // B 站视频播放层全 App 只挂这一个（2026-11-02：页面各挂一个时同一视频被建两个播放器 → 回音）
+            androidx.compose.foundation.layout.Box(androidx.compose.ui.Modifier.fillMaxSize()) {
+                if (role == ROLE_TEACHER) {
+                    TeacherMainScreen(onLogout = doLogout)
+                } else {
+                    MainScreen(onLogout = doLogout)
+                }
+                com.kewu.app.ui.BilibiliPlayerHost()
             }
         } else {
             LoginScreen(onLogin = {

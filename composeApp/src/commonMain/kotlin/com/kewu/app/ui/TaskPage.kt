@@ -235,7 +235,7 @@ private fun TaskListContent(
             Modifier
                 .fillMaxSize()
                 .verticalScroll(scrollState)
-                .padding(bottom = 96.dp),
+                .padding(bottom = KewuNavClearance),
         ) {
             Spacer(Modifier.height(12.dp))
             Row(

@@ -91,6 +91,15 @@ data class TeacherContactInfo(
 /** 课堂纪要通知跳转目标。 */
 data class ClassNoteTarget(val courseId: String, val date: String)
 
+/** B 站视频 AI 总结任务状态（PENDING / PROCESSING / FINISHED / FAILED）。 */
+data class BiliVideoNote(
+    val status: String,
+    val stage: String?,
+    val reason: String?,
+    val content: String,
+    val transcript: String,
+)
+
 /** B 站学科视频（接口文档 14.6）：videoUrl/audioUrl 为 DASH 直链，可能为空（风控/会员/超时）。 */
 data class BilibiliVideoInfo(
     val bvid: String,
@@ -991,6 +1000,31 @@ object KewuApi {
         val date = match.groupValues[2]
         return if (courseId.isNotBlank()) ClassNoteTarget(courseId, date) else null
     }
+
+    /**
+     * B 站视频 AI 总结（2026-11-02）：后端流水线「B 站音频 → OBS → 华为云 SIS 转写 → 大模型总结」。
+     * `GET /api/bilibili/note/{bvid}`：已生成返回 FINISHED + 总结 + 转写；否则返回 PENDING / PROCESSING(stage) / FAILED(reason)。
+     * 网络失败返回 null。
+     */
+    suspend fun getBilibiliNote(bvid: String): BiliVideoNote? = try {
+        val el = getJson("$BASE_URL/api/bilibili/note/${pathSegment(bvid)}")
+        val d = el.dataObjectOrNull("data")
+        if (d == null) null else BiliVideoNote(
+            status = d["status"].strOrNull() ?: "PENDING",
+            stage = d["stage"].strOrNull(),
+            reason = d["reason"].strOrNull(),
+            content = d["content"].strOrNull().orEmpty(),
+            transcript = d["transcript"].strOrNull().orEmpty(),
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 触发生成（后台跑，立即返回）；成功受理返回 true。 */
+    suspend fun generateBilibiliNote(bvid: String): Boolean = try {
+        postJson("$BASE_URL/api/bilibili/note/generate", mapOf("bvid" to bvid)) // 非 0 业务码由 parseBody 抛出
+        true
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { false }
 
     /**
      * 按学科 / 关键词搜 B 站视频（2026-11-02，后端文档 14.6）：`GET /api/bilibili/videos?subject=…`。

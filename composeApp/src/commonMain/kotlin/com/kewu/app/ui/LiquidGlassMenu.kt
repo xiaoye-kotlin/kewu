@@ -98,7 +98,9 @@ fun LiquidGlassActionMenu(
 
     Box(
         Modifier.fillMaxSize().onSizeChanged { screenSize = it },
-        contentAlignment = when (anchor) {
+        // ★ 2026-11-02：贴气泡（anchorRect）时偏移量是按左上角原点算的绝对坐标，容器必须 TopStart 对齐；
+        //   旧版用户气泡传 TopEnd，菜单先被推到最右再叠加 x 偏移 →「引用 / 分享」跑出屏幕，只剩「复制」。
+        contentAlignment = if (anchorRect != null) Alignment.TopStart else when (anchor) {
             GlassMenuAnchor.TopStart -> Alignment.TopStart
             GlassMenuAnchor.TopEnd -> Alignment.TopEnd
             GlassMenuAnchor.BottomCenter -> Alignment.BottomCenter
@@ -137,6 +139,8 @@ fun LiquidGlassActionMenu(
                                     .coerceIn(edge.toFloat(), maxX.toFloat()).toInt()
                                 var y = (anchorRect.top - cardSize.height - gap).toInt()
                                 if (y < edge) y = (anchorRect.bottom + gap).toInt()
+                                // 长气泡翻到下侧也可能出底：夹紧在屏幕内
+                                y = y.coerceIn(edge, (screenSize.height - cardSize.height - edge).coerceAtLeast(edge))
                                 IntOffset(x, y + drift)
                             }
                         }
