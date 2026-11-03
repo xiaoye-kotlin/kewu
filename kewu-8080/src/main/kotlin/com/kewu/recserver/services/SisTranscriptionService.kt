@@ -71,6 +71,82 @@ class SisTranscriptionService(private val cfg: SisConfig) {
         }
     }
 
+    /**
+     * 聊天语音转文字（2026-11-03，助教发语音）：录音已先存到 OBS（[dataUrl]），这里交给 SIS。
+     * 先走「一句话识别」（同步、1–2 秒出结果，≤60 秒音频），失败再退回录音文件识别（OBS 链接，2 秒一查，最多等 [maxWaitMs]）。
+     * 识别不出文字返回空串；配置缺失 / 都失败抛 [TranscriptionException]。
+     */
+    suspend fun transcribeChatVoice(dataUrl: String, wav: ByteArray, maxWaitMs: Long = 90_000): String {
+        checkConfig()
+        val host = cfg.endpoint.removePrefix("https://").removePrefix("http://").removeSuffix("/")
+        val shortErr = runCatching { shortAudio(wav) }.fold(
+            onSuccess = { return it },
+            onFailure = { it.message ?: it.javaClass.simpleName },
+        )
+        log.warn("SIS 一句话识别失败，改走录音文件识别：$shortErr")
+        val jobId = submitJob(host, dataUrl, "wav")
+        val attempts = (maxWaitMs / 2_000).toInt().coerceAtLeast(5)
+        return extractText(pollJob(host, jobId, intervalMs = 2_000, maxAttempts = attempts)).replace("\n", "")
+    }
+
+    /** SIS 一句话识别：16k 单声道 16bit WAV 去掉头部按 pcm16k16bit 发，其它按 wav 发；先试配置的域名再试 sis-ext。 */
+    private suspend fun shortAudio(wav: ByteArray): String {
+        val pcm16k = wav.size > 44 && String(wav, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+            le32(wav, 24) == 16000 && le16(wav, 22) == 1 && le16(wav, 34) == 16
+        val payload = if (pcm16k) dataChunk(wav) else wav
+        val body = buildJsonObject {
+            put("config", buildJsonObject {
+                put("audio_format", if (pcm16k) "pcm16k16bit" else "wav")
+                put("property", "chinese_16k_general")
+                put("add_punc", "yes")
+            })
+            put("data", java.util.Base64.getEncoder().encodeToString(payload))
+        }.toString()
+        val uri = "/v1/${cfg.projectId}/asr/short-audio"
+        val cfgHost = cfg.endpoint.removePrefix("https://").removePrefix("http://").removeSuffix("/")
+        var lastErr = ""
+        for (host in listOf(cfgHost, "sis-ext.${cfg.region}.myhuaweicloud.com").distinct()) {
+            val date = nowUtc()
+            val auth = HuaweiSigner.authHeader(cfg.ak!!, cfg.sk!!, "POST", uri, body, host, cfg.region, "sis", date)
+            val (code, raw) = try {
+                jdkPost("https://$host$uri", body, mapOf("X-Sdk-Date" to date, "Authorization" to auth))
+            } catch (t: Throwable) {
+                lastErr = "$host ${t.javaClass.simpleName}"
+                continue
+            }
+            val el = runCatching { Json.parseToJsonElement(raw).jsonObject }.getOrNull()
+            val text = ((el?.get("result") as? JsonObject)?.get("text") as? JsonPrimitive)?.content
+            if (code in 200..299 && text != null) return text.trim()
+            lastErr = "$host HTTP $code ${raw.take(200)}"
+        }
+        throw TranscriptionException(lastErr)
+    }
+
+    /** WAV 里 data 块的内容（找不到 data 块就跳过标准 44 字节头）。 */
+    private fun dataChunk(wav: ByteArray): ByteArray {
+        var i = 12
+        while (i + 8 <= wav.size) {
+            val id = String(wav, i, 4, Charsets.US_ASCII)
+            val len = le32(wav, i + 4)
+            if (len < 0) break
+            if (id == "data") return wav.copyOfRange(i + 8, minOf(wav.size, i + 8 + len))
+            i += 8 + len + (len and 1)
+        }
+        return wav.copyOfRange(44, wav.size)
+    }
+
+    private fun le16(b: ByteArray, o: Int) = (b[o].toInt() and 0xff) or ((b[o + 1].toInt() and 0xff) shl 8)
+    private fun le32(b: ByteArray, o: Int) = le16(b, o) or (le16(b, o + 2) shl 16)
+
+    private fun checkConfig() {
+        if (cfg.ak.isNullOrBlank() || cfg.sk.isNullOrBlank()) {
+            throw TranscriptionException("转写失败，请重试（SIS 未配置 AK/SK，请检查 SIS_AK/SIS_SK 或 OBS_AK/OBS_SK）")
+        }
+        if (cfg.projectId.isBlank()) {
+            throw TranscriptionException("转写失败，请重试（缺少 SIS_PROJECT_ID，请在华为云控制台查北京四的 projectId 并配置）")
+        }
+    }
+
     private suspend fun transcribeRaw(dataUrl: String, audioFormat: String): JsonObject {
         if (cfg.ak.isNullOrBlank() || cfg.sk.isNullOrBlank()) {
             throw TranscriptionException("转写失败，请重试（SIS 未配置 AK/SK，请检查 SIS_AK/SIS_SK 或 OBS_AK/OBS_SK）")
@@ -135,10 +211,9 @@ class SisTranscriptionService(private val cfg: SisConfig) {
     }
 
     // 步骤3：轮询任务状态，每 10s 一次
-    private suspend fun pollJob(host: String, jobId: String): JsonObject {
+    private suspend fun pollJob(host: String, jobId: String, intervalMs: Long = 10_000, maxAttempts: Int = 240): JsonObject {
         val uri = "/v1/${cfg.projectId}/asr/transcriber/jobs/$jobId"
-        // 2026-11-02：一节课 1 小时以上的录音 10 分钟常转不完 → 放到 40 分钟
-        val maxAttempts = 240
+        // 2026-11-02：一节课 1 小时以上的录音 10 分钟常转不完 → 放到 40 分钟（240 × 10s）
         var transient = 0
         repeat(maxAttempts) { attempt ->
             // 每次轮询都重新算时间和签名：X-Sdk-Date 必须在请求时间 15 分钟内，轮询久了会过期
@@ -167,8 +242,8 @@ class SisTranscriptionService(private val cfg: SisConfig) {
                         throw TranscriptionException("转写失败，请重试（查询任务 HTTP $code：${raw.take(300)}）")
                     }
                     else -> {
-                        log.info("SIS 转写进行中 job_id=$jobId status=$status 第 ${attempt + 1} 次轮询，10s 后重试")
-                        delay(10_000)
+                        log.info("SIS 转写进行中 job_id=$jobId status=$status 第 ${attempt + 1} 次轮询")
+                        delay(intervalMs)
                     }
                 }
             } catch (e: ResponseException) {
@@ -182,15 +257,26 @@ class SisTranscriptionService(private val cfg: SisConfig) {
                 transient++
                 log.error("SIS 查询任务异常（第 $transient 次）：$t")
                 if (transient >= 6) throw TranscriptionException("转写失败，请重试（查询任务：${t.javaClass.simpleName} ${t.message.orEmpty().take(200)}）")
-                delay(10_000)
+                delay(intervalMs)
             }
         }
-        log.error("SIS 转写轮询超时 job_id=$jobId（超过 ${maxAttempts * 10} 秒）")
-        throw TranscriptionException("转写超时，请稍后重试（任务处理超过 40 分钟）")
+        log.error("SIS 转写轮询超时 job_id=$jobId（超过 ${maxAttempts * intervalMs / 1000} 秒）")
+        throw TranscriptionException("转写超时，请稍后重试（任务处理超过 ${maxAttempts * intervalMs / 60_000} 分钟）")
     }
 
     private val jdk: java.net.http.HttpClient = java.net.http.HttpClient.newBuilder()
         .connectTimeout(java.time.Duration.ofSeconds(15)).build()
+
+    /** POST JSON 并完整读出响应体（状态码, 文本）。 */
+    private suspend fun jdkPost(url: String, body: String, headers: Map<String, String>): Pair<Int, String> =
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            val b = java.net.http.HttpRequest.newBuilder(java.net.URI(url)).timeout(java.time.Duration.ofSeconds(30))
+                .header("Content-Type", "application/json")
+                .POST(java.net.http.HttpRequest.BodyPublishers.ofString(body))
+            headers.forEach { (k, v) -> b.header(k, v) }
+            val r = jdk.send(b.build(), java.net.http.HttpResponse.BodyHandlers.ofString(Charsets.UTF_8))
+            r.statusCode() to r.body()
+        }
 
     /** GET 并完整读出响应体（状态码, 文本）。 */
     private suspend fun jdkGet(url: String, headers: Map<String, String>): Pair<Int, String> =

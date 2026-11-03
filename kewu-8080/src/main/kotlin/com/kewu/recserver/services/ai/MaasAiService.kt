@@ -159,6 +159,8 @@ class MaasAiService : AiService {
         messages: List<Pair<String, String>>,
         maxTokens: Int,
         thinking: Boolean,
+        /** 第 i 条消息附带的图片（data:image/...;base64,... 形式），有图的消息 content 改为 [text, image_url...] 数组。 */
+        images: Map<Int, List<String>> = emptyMap(),
         onDelta: suspend (String) -> Unit,
     ): String? {
         missingConfig()?.let { return it }
@@ -171,10 +173,26 @@ class MaasAiService : AiService {
                 put("type", "disabled")
             })
             put("messages", buildJsonArray {
-                messages.forEach { (role, content) ->
+                messages.forEachIndexed { i, (role, content) ->
+                    val pics = images[i].orEmpty()
                     add(buildJsonObject {
                         put("role", role)
-                        put("content", content)
+                        if (pics.isEmpty()) {
+                            put("content", content)
+                        } else {
+                            put("content", buildJsonArray {
+                                add(buildJsonObject {
+                                    put("type", "text")
+                                    put("text", content.ifBlank { "请看这张图片" })
+                                })
+                                pics.forEach { url ->
+                                    add(buildJsonObject {
+                                        put("type", "image_url")
+                                        put("image_url", buildJsonObject { put("url", url) })
+                                    })
+                                }
+                            })
+                        }
                     })
                 }
             })

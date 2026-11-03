@@ -35,6 +35,39 @@ class MainActivity : ComponentActivity() {
         pickCallback = null
     }
 
+    // 助教发图「拍照」（2026-11-03）：系统相机拍到 App 缓存目录（FileProvider 授权），回调本地路径；取消 / 失败回调 null
+    private var cameraFile: java.io.File? = null
+    private var cameraCallback: ((String?) -> Unit)? = null
+    private val takePictureLauncher = registerForActivityResult(
+        ActivityResultContracts.TakePicture()
+    ) { ok ->
+        val f = cameraFile
+        val cb = cameraCallback
+        cameraFile = null
+        cameraCallback = null
+        val path = f?.takeIf { ok && it.exists() && it.length() > 0 }?.absolutePath
+        if (path == null) f?.delete()
+        cb?.invoke(path)
+    }
+
+    fun takePhoto(callback: (String?) -> Unit) {
+        requestCameraPermission { granted ->
+            if (!granted) { callback(null); return@requestCameraPermission }
+            try {
+                val dir = java.io.File(cacheDir, "camera").apply { mkdirs() }
+                val f = java.io.File(dir, "cam_${System.currentTimeMillis()}.jpg")
+                val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.fileprovider", f)
+                cameraFile = f
+                cameraCallback = callback
+                takePictureLauncher.launch(uri)
+            } catch (_: Exception) {
+                cameraFile = null
+                cameraCallback = null
+                callback(null)
+            }
+        }
+    }
+
     fun pickImages(callback: (List<Uri>) -> Unit) {
         pickCallback = callback
         pickImagesLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
@@ -115,6 +148,7 @@ class MainActivity : ComponentActivity() {
         appContext = applicationContext // 供 haptic() 取 Vibrator
         CrashLog.install(applicationContext)
         appActivity = this // 供录音权限请求等需要 Activity 的运行时调用
+        CameraCapture.launcher = { cb -> (appActivity as? MainActivity)?.takePhoto(cb) ?: cb(null) }
         // 只开 edge-to-edge：系统导航小白条（手势条）默认显示，底部区域透明，
         // 内容直接延伸到屏幕底边（托盘底已留 24dp 空隙，小白条悬在背景上不挡标签）。
         // 早期版本在这里 hide(navigationBars()) 全屏沉浸，用户要求改回「不隐藏、只透明」。

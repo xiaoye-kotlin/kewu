@@ -1,5 +1,13 @@
 package com.kewu.app.ui
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.tween
+import com.kewu.app.BackHandler
+import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Add
+import io.github.suqi8.coui.kmp.icon.extended.Mic
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -128,7 +136,12 @@ private data class TaMsg(
     val keep: Boolean = false,
     /** 被引用的原文（与学生端 ChatMsg.quote 同口径）：用户气泡顶部渲染引用小条；null = 无引用。 */
     val quote: String? = null,
+    /** 图片 / 语音消息（2026-11-03）：渲染与上传状态复用学生端 [AiChatMsg]；null = 普通文字。 */
+    val media: AiChatMsg? = null,
 )
+
+/** 附件 / 录音面板（互斥，与学生端同一套）。 */
+private enum class TeacherPanel { NONE, ATTACH, VOICE }
 
 /** 复制 / 引用 / 分享用的纯文本（Students / Chips 块转可读行，与落盘口径一致）。 */
 private fun TaMsg.plainText(): String = blocks.joinToString("\n") { b ->
@@ -194,7 +207,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     fun persistMessages(current: List<TaMsg>) {
         // ★ 只落盘真实对话（keep=true）。入场简报不落盘，否则每次进页都会往历史里堆一份，
         //   下次进来「历史里的简报」+「现生成的简报」会重复出现。
-        val entries = current.filter { it.keep && it.id != 0L }.map { m ->
+        // 图片 / 语音由 ChatMediaHub 落盘（上传完成后换成 OBS 链接），这里跳过，免得旧状态覆盖
+        val entries = current.filter { it.keep && it.id != 0L && it.media == null }.map { m ->
             ChatHistory.Entry(
                 id = m.id,
                 role = if (m.isUser) "user" else "assistant",
@@ -238,6 +252,10 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         ts = e.ts,
         keep = true, // 来自历史，后续整体落盘时要保留
         quote = e.quote,
+        media = if (e.image != null || e.voice != null) AiChatMsg(
+            e.text, isUser = true, isVoice = e.voice != null, voiceSecs = e.voiceSecs,
+            id = e.id, ts = e.ts, quote = e.quote, image = e.image, voice = e.voice,
+        ) else null,
     )
 
     // 顶部下拉加载更早一天
@@ -409,12 +427,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             "不要重复自我介绍（「你好，我是小悟…」这类开场只在当天第一轮出现一次），也不要复述问题。\n\n当前班级学情数据：\n"
 
     /** 真实 AI 回答：成功返回文本块列表；失败返回 null（调用方回退本地规则）。 */
-    suspend fun aiAnswer(q: String, emit: (String) -> Unit = {}): List<TaBlock>? {
+    suspend fun aiAnswer(q: String, emit: (String) -> Unit = {}, images: List<String> = emptyList()): List<TaBlock>? {
         // 2026-10-26：流式——边生成边上屏
         val reply = AiClient.chatStream(
             listOf(
                 AiClient.Msg("system", aiSystemPrompt + buildAiContext() + "\n【课悟 App 里此刻能看到的全部信息（以此为准，作业截止、提交、批阅、签到等直接引用）】\n" + com.kewu.app.AiContext.teacher() + "\n\n" + AiAgent.teacherCapability()),
-                AiClient.Msg("user", q),
+                AiClient.Msg("user", q, images),
             ),
             onDelta = emit,
         ) ?: return null
@@ -486,26 +504,159 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
     }
 
-    fun send() {
-        val text = input.trim()
-        val quoted = quotePreview
-        // 允许「只发引用 + 正文为空」（与学生端一致）；两者都空则不动
-        if ((text.isEmpty() && quoted == null) || aiThinking) return
-        push(TaMsg(true, if (text.isEmpty()) emptyList() else listOf(TaBlock.Text(text)), quote = quoted), persist = true)
-        input = ""
-        quotePreview = null
-        haptic(HapticKind.Light)
+    // ── 发图 / 发语音（2026-11-03）：图片 → OBS → 视觉模型；语音 → OBS → SIS 转写 → 小悟 ──
+    var panel by remember { mutableStateOf(TeacherPanel.NONE) }
+    var stagedImage by remember { mutableStateOf<String?>(null) }
+    val recorder = rememberChatVoiceRecorder()
+    var finishingVoice by remember { mutableStateOf(false) }
+    val mediaBusy = ChatHistory.KEY_TEACHER in ChatMediaHub.busy.collectAsState().value
+    val mediaPatches by ChatMediaHub.patches.collectAsState()
+    LaunchedEffect(mediaPatches) {
+        var changed = false
+        messages.forEachIndexed { i, m ->
+            val media = m.media ?: return@forEachIndexed
+            val p = mediaPatches[m.id] ?: return@forEachIndexed
+            val next = ChatMediaHub.apply(media, p)
+            if (next != media) {
+                // 语音识别出的文字也写进 blocks（复制 / 引用 / 分享用）
+                messages[i] = m.copy(media = next, blocks = if (next.isVoice && next.text.isNotBlank()) listOf(TaBlock.Text(next.text)) else m.blocks)
+                changed = true
+            }
+        }
+        if (changed) msgVersion++
+    }
+    LaunchedEffect(panel) {
+        if (panel != TeacherPanel.VOICE && recorder.recording && !finishingVoice) recorder.cancel()
+    }
+
+    /** 把问题交给小悟（文字 / 图片 / 语音共用）。[images] 为 OBS 图片链接。 */
+    fun ask(text: String, quoted: String?, images: List<String> = emptyList()) {
         // 引用拼进问题正文交给大模型 / 本地规则（学生端同口径）
-        val q = if (quoted != null) "（引用：$quoted）${text.ifEmpty { "请解释一下这段内容" }}" else text
+        val base = text.ifEmpty { if (images.isNotEmpty()) "请看这张图片" else "请解释一下这段内容" }
+        val q = if (quoted != null) "（引用：$quoted）$base" else text.ifEmpty { base }
         AssistantHub.askStream(ChatHistory.KEY_TEACHER) { emit ->
             // 优先真实大模型（流式）；失败回退本地规则（学情数据仍有价值），并明确告知用户
-            val blocks = aiAnswer(q, emit) ?: buildList {
-                add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
-                addAll(answer(q))
+            val blocks = aiAnswer(q, emit, images) ?: buildList {
+                if (images.isNotEmpty()) {
+                    add(TaBlock.Text("⚠ AI 服务暂时连不上，图片没能看到，稍后再试一次。"))
+                } else {
+                    add(TaBlock.Text("⚠ AI 服务暂时连不上，先根据本地学情数据回答："))
+                    addAll(answer(q))
+                }
             }
             AssistantHub.Reply(blocksToText(blocks), payload = blocks)
         }
     }
+
+    fun startImageJob(m: AiChatMsg) {
+        ChatMediaHub.run(ChatHistory.KEY_TEACHER) {
+            val local = m.image ?: return@run
+            val (url, err) = if (local.startsWith("http")) local to null
+            else KewuApi.uploadChatImage(local, guessImageMime(local))
+            if (url == null) {
+                ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.FAILED, error = err ?: "发送失败"))
+                snackbar.toast(err ?: "图片没发出去，点图片重试")
+                return@run
+            }
+            val done = m.copy(image = url, mediaState = ChatMediaState.DONE, mediaError = null)
+            ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.DONE, image = url))
+            ChatMediaHub.persist(ChatHistory.KEY_TEACHER, done)
+            ask(m.text, m.quote, listOf(url))
+        }
+    }
+    fun startVoiceJob(m: AiChatMsg) {
+        ChatMediaHub.run(ChatHistory.KEY_TEACHER) {
+            val local = m.voice ?: return@run
+            val r = KewuApi.sendChatVoice(local)
+            val text = r.text.trim()
+            if (r.url == null || text.isEmpty()) {
+                val why = if (r.url == null) r.error ?: "发送失败" else "没听清"
+                ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.FAILED, error = why))
+                return@run
+            }
+            val done = m.copy(voice = r.url, text = text, mediaState = ChatMediaState.DONE, mediaError = null)
+            ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.DONE, voice = r.url, text = text))
+            ChatMediaHub.persist(ChatHistory.KEY_TEACHER, done)
+            ask(text, null)
+        }
+    }
+    val retryMedia: (AiChatMsg) -> Unit = { m ->
+        when {
+            m.mediaState != ChatMediaState.FAILED -> Unit
+            aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在忙，稍等一下再试") }
+            else -> {
+                ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.SENDING))
+                val pending = m.copy(mediaState = ChatMediaState.SENDING, mediaError = null)
+                if (m.isVoice) startVoiceJob(pending) else startImageJob(pending)
+            }
+        }
+    }
+
+    fun send() {
+        val text = input.trim()
+        val quoted = quotePreview
+        val img = stagedImage
+        if (aiThinking || mediaBusy) return
+        if (img != null) {
+            // 图片（可带配文 / 引用）：先上屏（本地图 + 转圈），上传完再问
+            val id = ChatHistory.nextId()
+            val ts = nowMs()
+            val media = AiChatMsg(text, isUser = true, id = id, ts = ts, quote = quoted, image = img,
+                mediaState = ChatMediaState.SENDING)
+            push(TaMsg(true, if (text.isEmpty()) emptyList() else listOf(TaBlock.Text(text)),
+                id = id, ts = ts, keep = true, quote = quoted, media = media))
+            ChatMediaHub.persist(ChatHistory.KEY_TEACHER, media)
+            input = ""
+            quotePreview = null
+            stagedImage = null
+            haptic(HapticKind.Light)
+            startImageJob(media)
+            return
+        }
+        // 允许「只发引用 + 正文为空」（与学生端一致）；两者都空则不动
+        if (text.isEmpty() && quoted == null) return
+        push(TaMsg(true, if (text.isEmpty()) emptyList() else listOf(TaBlock.Text(text)), quote = quoted), persist = true)
+        input = ""
+        quotePreview = null
+        haptic(HapticKind.Light)
+        ask(text, quoted)
+    }
+
+    /** 录音结束：取消则丢弃；太短丢弃；否则上屏（识别中）并交给 SIS。 */
+    fun finishVoice(send: Boolean) {
+        if (finishingVoice) return
+        finishingVoice = true
+        scope.launch {
+            try {
+                if (!send) {
+                    recorder.cancel()
+                    return@launch
+                }
+                val r = recorder.stop()
+                when {
+                    r == null -> snackbar.toast("录音保存失败，请重试")
+                    r.second < 1 -> {
+                        com.kewu.app.platformDeleteFile(r.first)
+                        snackbar.toast("说话时间太短")
+                    }
+                    else -> {
+                        val id = ChatHistory.nextId()
+                        val ts = nowMs()
+                        val media = AiChatMsg("", isUser = true, isVoice = true, voiceSecs = r.second, id = id, ts = ts,
+                            voice = r.first, mediaState = ChatMediaState.SENDING)
+                        push(TaMsg(true, emptyList(), id = id, ts = ts, keep = true, media = media))
+                        ChatMediaHub.persist(ChatHistory.KEY_TEACHER, media)
+                        haptic(HapticKind.Light)
+                        startVoiceJob(media)
+                    }
+                }
+            } finally {
+                panel = TeacherPanel.NONE
+                finishingVoice = false
+            }
+        }
+    }
+    BackHandler(panel != TeacherPanel.NONE) { panel = TeacherPanel.NONE }
 
     Box(
         Modifier
@@ -589,14 +740,16 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
                     Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
-                        TaBubble(
-                            pageBackdrop, msg,
-                            // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
-                            reportBounds = msg == menuMsg,
-                            onBounds = { menuAnchor = it },
-                        ) {
-                            menuMsg = msg
-                            haptic(HapticKind.Medium)
+                        androidx.compose.runtime.CompositionLocalProvider(LocalChatMediaRetry provides retryMedia) {
+                            TaBubble(
+                                pageBackdrop, msg,
+                                // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
+                                reportBounds = msg == menuMsg,
+                                onBounds = { menuAnchor = it },
+                            ) {
+                                menuMsg = msg
+                                haptic(HapticKind.Medium)
+                            }
                         }
                     }
                     Spacer(Modifier.height(10.dp))
@@ -621,15 +774,81 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 }
             }
 
+            // ── 附件 / 录音面板：单一互斥容器，纯滑入滑出（面板是玻璃采样者，祖先禁 alpha） ──
+            var shownPanel by remember { mutableStateOf(TeacherPanel.ATTACH) }
+            LaunchedEffect(panel) { if (panel != TeacherPanel.NONE) shownPanel = panel }
+            AnimatedVisibility(
+                visible = panel != TeacherPanel.NONE,
+                enter = slideInVertically(spring(dampingRatio = 0.82f, stiffness = 420f)) { it },
+                exit = slideOutVertically(tween(150)) { it },
+            ) {
+                when (shownPanel) {
+                    TeacherPanel.ATTACH -> ChatAttachPanel(
+                        backdrop = pageBackdrop,
+                        onAlbum = {
+                            panel = TeacherPanel.NONE
+                            com.kewu.app.pickFiles(images = true) { files ->
+                                val f = files.firstOrNull() ?: return@pickFiles
+                                if (f.size > 15L * 1024 * 1024) {
+                                    scope.launch { snackbar.toast("图片超过 15MB，换一张吧") }
+                                } else {
+                                    stagedImage = f.path
+                                    if (files.size > 1) scope.launch { snackbar.toast("一次发一张，已选第一张") }
+                                }
+                            }
+                        },
+                        onCamera = if (com.kewu.app.CameraCapture.available) {
+                            {
+                                panel = TeacherPanel.NONE
+                                com.kewu.app.CameraCapture.launcher?.invoke { path ->
+                                    if (path != null) stagedImage = path
+                                }
+                            }
+                        } else null,
+                    )
+                    TeacherPanel.VOICE -> ChatVoicePanel(
+                        backdrop = pageBackdrop,
+                        recorder = recorder,
+                        onCancel = { finishVoice(send = false) },
+                        onSend = { finishVoice(send = true) },
+                    )
+                    TeacherPanel.NONE -> Unit
+                }
+            }
+
             // ── 液态玻璃输入框（常驻导航栏上方，与学生端同款位置约束） ──
-            TaInputBar(
+            ChatInputDock(
                 backdrop = pageBackdrop,
                 input = input,
                 onInput = { input = it },
                 onSend = { send() },
-                enabled = !aiThinking,
+                placeholder = "问小悟：谁退步了 / 作业质量 / 薄弱知识点…",
+                sendEnabled = !aiThinking && !mediaBusy,
                 quote = quotePreview,
                 onCancelQuote = { quotePreview = null },
+                stagedImage = stagedImage,
+                onRemoveImage = { stagedImage = null },
+                leading = {
+                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                        panel = if (panel == TeacherPanel.ATTACH) TeacherPanel.NONE else TeacherPanel.ATTACH
+                    }) { ChatGlyphIcon(COUIIcons.Add) }
+                },
+                trailing = {
+                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                        when {
+                            panel == TeacherPanel.VOICE -> finishVoice(send = false)
+                            aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
+                            else -> scope.launch {
+                                com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
+                                val err = recorder.start()
+                                if (err != null) snackbar.toast(err) else {
+                                    haptic(HapticKind.Light)
+                                    panel = TeacherPanel.VOICE
+                                }
+                            }
+                        }
+                    }) { ChatGlyphIcon(COUIIcons.Mic) }
+                },
             )
         }
 
@@ -679,7 +898,27 @@ private fun TaBubble(
     val cs = COUITheme.colorScheme
     val press = if (onLongPress != null) Modifier.bubblePress(onLongPress) else Modifier
     val bounds = Modifier.onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
-    if (msg.isUser) {
+    val media = msg.media
+    if (msg.isUser && media != null) {
+        // 图片 / 语音：与学生端同一套气泡（上传 / 识别状态、失败点按重试）
+        val longPress = onLongPress ?: {}
+        if (media.isVoice) {
+            Box(Modifier.fillMaxWidth().then(bounds), contentAlignment = Alignment.CenterEnd) {
+                ChatVoiceBubble(media, longPress)
+            }
+        } else {
+            Column(
+                Modifier.fillMaxWidth().then(bounds),
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                ChatImageBubble(media, longPress)
+                if (msg.blocks.isNotEmpty() || msg.quote != null) {
+                    TaBubble(backdrop, msg.copy(media = null), onLongPress = onLongPress)
+                }
+            }
+        }
+    } else if (msg.isUser) {
         // 用户：coui Surface 品牌蓝气泡（右对齐，与学生端同款）
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(modifier = bounds.widthIn(max = 300.dp), shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
@@ -809,30 +1048,6 @@ private fun TaBubble(
 }
 
 // ───────────────────────── 输入框 ─────────────────────────
-
-/** 输入栏：全 App 统一的 [ChatInputDock]（2026-11-02，与学生端助教 / 纪要问答 / 作业辅导同一外观与键盘间距）。 */
-@Composable
-private fun TaInputBar(
-    backdrop: LayerBackdrop,
-    input: String,
-    onInput: (String) -> Unit,
-    onSend: () -> Unit,
-    enabled: Boolean = true,
-    /** 待发送的引用（长按气泡 →「引用」）：输入框上方显示引用小条，× 取消 */
-    quote: String? = null,
-    onCancelQuote: () -> Unit = {},
-) {
-    ChatInputDock(
-        backdrop = backdrop,
-        input = input,
-        onInput = onInput,
-        onSend = onSend,
-        placeholder = "问小悟：谁退步了 / 作业质量 / 薄弱知识点…",
-        sendEnabled = enabled,
-        quote = quote,
-        onCancelQuote = onCancelQuote,
-    )
-}
 
 /** 当前 epoch 毫秒（2026-10-24 聊天记录持久化用）。 */
 private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()

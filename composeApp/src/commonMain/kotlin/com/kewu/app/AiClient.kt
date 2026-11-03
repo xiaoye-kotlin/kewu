@@ -17,6 +17,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -102,7 +103,8 @@ object AiClient {
         println("[AiClient] $where failed -> $lastError")
     }
 
-    data class Msg(val role: String, val content: String)
+    /** [images]：这条消息附带的图片（OBS 链接，2026-11-03 助教发图）；只有后端中转支持，直连端点不带图。 */
+    data class Msg(val role: String, val content: String, val images: List<String> = emptyList())
 
     /**
      * 多轮对话。返回助手文本；任何失败（网络/鉴权/解析）返回 null。
@@ -133,7 +135,9 @@ object AiClient {
      * ★ 已经吐出过内容的通道中途断了不再换下一个（避免重复输出），直接返回已收到的部分。
      */
     suspend fun chatStream(messages: List<Msg>, maxTokens: Int = 4096, onDelta: (String) -> Unit): String? {
-        val endpoints = endpointOverride?.let { listOf(it) } ?: ENDPOINTS
+        // 带图的对话只走后端中转：服务端取回 OBS 图片交给 DeepSeek 视觉模型；直连端点是纯文字模型
+        val hasImages = messages.any { it.images.isNotEmpty() }
+        val endpoints = if (hasImages) emptyList() else endpointOverride?.let { listOf(it) } ?: ENDPOINTS
         val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
         for (ep in endpoints) {
             if ((unreachableUntil[ep] ?: 0L) > now) continue
@@ -152,18 +156,21 @@ object AiClient {
         val relayBody = buildJsonObject {
             put("maxTokens", maxTokens)
             put("thinking", false)
-            put("messages", msgsJson(messages))
+            put("messages", msgsJson(messages, withImages = true))
         }
         streamOnce(STREAM_RELAY_URL, relayBody.toString(), auth = false, onDelta = onDelta)?.let { return it }
+        // 非流式兜底只有文字通道：带图时不能假装看过图
+        if (hasImages) return null
         // 最后兜底：非流式（老后端 / 中转不可用时仍能回答，只是一次性出现）
         return chat(messages, maxTokens)?.also(onDelta)
     }
 
-    private fun msgsJson(messages: List<Msg>) = buildJsonArray {
+    private fun msgsJson(messages: List<Msg>, withImages: Boolean = false) = buildJsonArray {
         messages.forEach { m ->
             add(buildJsonObject {
                 put("role", m.role)
                 put("content", m.content)
+                if (withImages && m.images.isNotEmpty()) put("images", buildJsonArray { m.images.forEach { add(JsonPrimitive(it)) } })
             })
         }
     }

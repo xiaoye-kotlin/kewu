@@ -74,6 +74,11 @@ object ChatHistory {
         val text: String,
         val ts: Long,
         val quote: String? = null,
+        /** 图片消息：OBS 链接（2026-11-03 助教发图）。 */
+        val image: String? = null,
+        /** 语音消息：OBS 链接 + 时长；[text] 存识别出的文字。 */
+        val voice: String? = null,
+        val voiceSecs: Int = 0,
     )
 
     private var idSeq = 0L
@@ -103,6 +108,9 @@ object ChatHistory {
                 text = o["text"]?.jsonPrimitive?.content ?: return@mapNotNull null,
                 ts = o["ts"]?.jsonPrimitive?.longOrNull ?: 0L,
                 quote = o["quote"]?.jsonPrimitive?.content,
+                image = o["image"]?.jsonPrimitive?.content,
+                voice = o["voice"]?.jsonPrimitive?.content,
+                voiceSecs = o["voiceSecs"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
             )
         }.sortedBy { it.ts }
     } catch (_: Exception) {
@@ -141,6 +149,11 @@ object ChatHistory {
                         put("text", e.text)
                         put("ts", e.ts)
                         if (e.quote != null) put("quote", e.quote)
+                        if (e.image != null) put("image", e.image)
+                        if (e.voice != null) {
+                            put("voice", e.voice)
+                            put("voiceSecs", e.voiceSecs)
+                        }
                     })
                 }
             }

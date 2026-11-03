@@ -1007,6 +1007,63 @@ object KewuApi {
     catch (_: Exception) { null to "网络异常，请稍后重试" }
 
     /**
+     * 助教发图（2026-11-03）：`POST /api/ai/chat-image` multipart「file」→ 服务端转正、缩放、转 JPEG 后存 OBS。
+     * 成功返回 (OBS 链接, null)，失败返回 (null, 原因)。
+     */
+    suspend fun uploadChatImage(path: String, mime: String): Pair<String?, String?> = try {
+        val bytes = platformReadFile(path) ?: return null to "读取图片失败"
+        if (bytes.size > 15 * 1024 * 1024) return null to "图片超过 15MB"
+        val resp = client.post("$BASE_URL/api/ai/chat-image") {
+            timeout { requestTimeoutMillis = 120_000; socketTimeoutMillis = 60_000 }
+            authHeaders().forEach { (k, v) -> header(k, v) }
+            setBody(MultiPartFormDataContent(formData {
+                append("file", bytes, Headers.build {
+                    append(HttpHeaders.ContentType, mime.ifBlank { "image/jpeg" })
+                    append(HttpHeaders.ContentDisposition, "filename=\"image\"")
+                })
+            }))
+        }
+        val o = runCatching { json.parseToJsonElement(resp.bodyAsText()) as? JsonObject }.getOrNull()
+        val url = o?.get("url").strOrNull()
+        when {
+            url != null -> url to null
+            resp.status.value == 404 -> null to "服务器还没更新，暂不能发图片"
+            else -> null to (o?.get("error").strOrNull() ?: "图片上传失败（HTTP ${resp.status.value}）")
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null to "网络异常，图片没发出去" }
+
+    /** 助教语音识别结果：[url] 为 OBS 上的语音，[text] 为识别文字（可能为空），[error] 为失败原因。 */
+    data class ChatVoiceResult(val url: String?, val text: String, val error: String?)
+
+    /**
+     * 助教发语音（2026-11-03）：`POST /api/ai/voice` multipart「file」(WAV) → 服务端存 OBS → 华为 SIS 识别。
+     */
+    suspend fun sendChatVoice(path: String): ChatVoiceResult = try {
+        val bytes = platformReadFile(path)
+        if (bytes == null) ChatVoiceResult(null, "", "读取录音失败")
+        else {
+            val resp = client.post("$BASE_URL/api/ai/voice") {
+                timeout { requestTimeoutMillis = 150_000; socketTimeoutMillis = 130_000 }
+                authHeaders().forEach { (k, v) -> header(k, v) }
+                setBody(MultiPartFormDataContent(formData {
+                    append("file", bytes, Headers.build {
+                        append(HttpHeaders.ContentType, "audio/wav")
+                        append(HttpHeaders.ContentDisposition, "filename=\"voice.wav\"")
+                    })
+                }))
+            }
+            val o = runCatching { json.parseToJsonElement(resp.bodyAsText()) as? JsonObject }.getOrNull()
+            when {
+                o == null && resp.status.value == 404 -> ChatVoiceResult(null, "", "服务器还没更新，暂不能发语音")
+                o == null -> ChatVoiceResult(null, "", "语音发送失败（HTTP ${resp.status.value}）")
+                else -> ChatVoiceResult(o["url"].strOrNull(), o["text"].strOrNull().orEmpty(), o["error"].strOrNull())
+            }
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { ChatVoiceResult(null, "", "网络异常，语音没发出去") }
+
+    /**
      * 课前资料（2026-10-26 后端 `POST /api/courses/{id}/materials`）：老师开课前上传本节 PPT / 讲义，
      * AI 后续结合课堂录音分析。[attachments] 必须是 [uploadAttachment] 返回过的。成功返回 null，失败返回原因。
      */

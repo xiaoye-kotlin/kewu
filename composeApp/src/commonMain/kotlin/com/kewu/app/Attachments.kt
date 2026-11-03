@@ -55,6 +55,15 @@ const val ATTACHMENT_MAX_COUNT = 9
  */
 expect fun pickFiles(images: Boolean, onResult: (List<PickedFile>) -> Unit)
 
+/**
+ * 拍照（2026-11-03 助教发图）：Android 由 MainActivity 注入（系统相机 → 缓存目录 JPEG，回调本地路径，取消为 null）；
+ * 其它平台为 null，界面不显示「拍照」。
+ */
+object CameraCapture {
+    var launcher: ((onResult: (String?) -> Unit) -> Unit)? = null
+    val available: Boolean get() = launcher != null
+}
+
 /** 用系统浏览器 / 默认应用打开链接（查看附件）。 */
 expect fun openUrl(url: String)
 

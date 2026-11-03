@@ -204,10 +204,22 @@ internal data class AiChatMsg(
     val quote: String? = null,
     /** B 站相关视频推荐（2026-11-02）：仅 AI 回答气泡可能携带，渲染在气泡下方的推荐卡。 */
     val biliKeyword: String? = null,
+    /** 图片消息（2026-11-03）：本地路径（上传中）或 OBS 链接；[text] 为配的文字。 */
+    val image: String? = null,
+    /** 语音消息：本地路径（识别中）或 OBS 链接；[text] 为识别出的文字。 */
+    val voice: String? = null,
+    /** 图片 / 语音的发送状态。 */
+    val mediaState: ChatMediaState = ChatMediaState.DONE,
+    val mediaError: String? = null,
 ) {
-    /** 复制/引用/分享用的纯文本（语音消息给可读描述）。 */
+    /** 复制/引用/分享用的纯文本（语音给识别文字，图片给配文）。 */
     val displayText: String
-        get() = if (isVoice) "语音消息 · ${fmtClock(voiceSecs)}" else if (isUser) aiVisibleText(text) else stripMarkdown(aiVisibleText(text))
+        get() = when {
+            isVoice -> text.trim().ifEmpty { "语音消息 · ${fmtClock(voiceSecs)}" }
+            image != null -> text.trim().ifEmpty { "[图片]" }
+            isUser -> aiVisibleText(text)
+            else -> stripMarkdown(aiVisibleText(text))
+        }
 }
 
 // ───────────────────────── 通用按压 Q 弹 ─────────────────────────
@@ -379,6 +391,26 @@ internal fun ChatUserBubble(
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
 ) {
+    if (msg.isVoice) {
+        Box(
+            Modifier.fillMaxWidth().onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
+            contentAlignment = Alignment.CenterEnd,
+        ) { ChatVoiceBubble(msg, onLongPress) }
+        return
+    }
+    if (msg.image != null) {
+        Column(
+            Modifier.fillMaxWidth().onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            ChatImageBubble(msg, onLongPress)
+            if (msg.text.isNotBlank() || msg.quote != null) {
+                ChatUserBubble(msg.copy(image = null), reportBounds = false, onBounds = {}, onLongPress = onLongPress)
+            }
+        }
+        return
+    }
     val cs = COUITheme.colorScheme
     val shape = RoundedCornerShape(topStart = 22.dp, topEnd = 8.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
@@ -426,19 +458,7 @@ internal fun ChatUserBubble(
                 }
                 Spacer(Modifier.height(7.dp))
             }
-            if (msg.isVoice) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(COUIIcons.Mic, contentDescription = null, tint = cs.onPrimary, modifier = Modifier.size(16.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        "语音消息 · ${fmtClock(msg.voiceSecs)}",
-                        color = cs.onPrimary,
-                        fontSize = 13.sp,
-                    )
-                }
-            } else {
-                Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
-            }
+            if (msg.text.isNotEmpty()) Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
         }
         }
     }
@@ -751,6 +771,9 @@ internal fun ChatInputDock(
     restingBottom: Dp = ChatDockRestingBottom,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
+    /** 待发图片（本地路径）：显示在输入栏上方，可单独发送。 */
+    stagedImage: String? = null,
+    onRemoveImage: () -> Unit = {},
 ) {
     val cs = COUITheme.colorScheme
     val density = LocalDensity.current
@@ -771,7 +794,7 @@ internal fun ChatInputDock(
         spring(dampingRatio = 1f, stiffness = 420f),
         label = "dockBottomPad",
     )
-    val canSend = sendEnabled && (input.isNotBlank() || quote != null)
+    val canSend = sendEnabled && (input.isNotBlank() || quote != null || stagedImage != null)
     Column(
         modifier
             .fillMaxWidth()
@@ -788,6 +811,16 @@ internal fun ChatInputDock(
             var last by remember { mutableStateOf("") }
             if (quote != null) last = quote
             Box(Modifier.padding(bottom = 6.dp)) { QuotePreviewBar(text = last) { onCancelQuote() } }
+        }
+        AnimatedVisibility(
+            visible = stagedImage != null,
+            enter = fadeIn(tween(160)) + expandVertically(spring(dampingRatio = 0.8f, stiffness = 420f)) +
+                androidx.compose.animation.scaleIn(spring(dampingRatio = 0.6f, stiffness = 420f), initialScale = 0.9f),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
+        ) {
+            var last by remember { mutableStateOf("") }
+            if (stagedImage != null) last = stagedImage
+            Box(Modifier.padding(bottom = 6.dp)) { ChatStagedImageBar(last, onRemoveImage) }
         }
         KewuGlassCard(
             backdrop = backdrop,
