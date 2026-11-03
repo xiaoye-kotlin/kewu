@@ -293,6 +293,8 @@ private data class Mastery(val point: String, val rate: Double, val samples: Int
  */
 private fun masteryOf(items: List<AssignmentRepo.Item>): List<Mastery> {
     val acc = mutableMapOf<String, MutableList<Double>>()
+    // 课后自测（AI 学习工具）的逐题结果也算样本：课堂 → 自测 → 掌握度 → 学习规划，形成闭环
+    StudyLabStore.quizSamples().forEach { (p, l) -> if (l.isNotEmpty()) acc.getOrPut(p) { mutableListOf() }.addAll(l) }
     items.forEach { it ->
         val sub = it.mine ?: return@forEach
         val a = it.assignment
@@ -381,6 +383,9 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
     var dialogPoint by remember { mutableStateOf<MasteryView?>(null) }
     var showVideos by remember { mutableStateOf(false) }
     var ratePoint by remember { mutableStateOf<MasteryView?>(null) }
+    // AI 学习工具（2026-11-03）：1 今日复习（全部到期卡片）/ 2 讲给小悟听（薄弱知识点）
+    var labTool by remember { mutableStateOf(0) }
+    val dueCards = remember(labTool) { StudyLabStore.due().size }
     var waitingPlayback by remember { mutableStateOf<MasteryView?>(null) }
     val playing = VideoPlayerHub.current
     LaunchedEffect(playing) {
@@ -437,6 +442,11 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
                     PlanStat("待攻克错题", "$mistakes", Color(0xFFE5484D))
                     PlanStat("薄弱知识点", "$weakCount", Color(0xFFF5A623))
                 }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                PlanToolCard("今日复习", if (dueCards > 0) "$dueCards 张卡片到期" else "记忆卡片", KewuBlue, Modifier.weight(1f)) { labTool = 1 }
+                PlanToolCard("讲给小悟听", "费曼学习法自测", Color(0xFFF5A623), Modifier.weight(1f)) { labTool = 2 }
             }
             Spacer(Modifier.height(14.dp))
             KewuSectionTitle("知识点掌握度")
@@ -519,6 +529,38 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
                 },
                 onDismiss = { ratePoint = null },
             )
+        }
+        SlideOverlay(labTool.takeIf { it != 0 }) { tool ->
+            if (tool == 1) {
+                FlashcardsScreen(deck = null, deckTitle = "全部课程", onBack = { labTool = 0 })
+            } else {
+                FeynmanScreen(
+                    points = mastery.filter { !it.mastered }.map { it.m.point }.take(8),
+                    subtitle = "挑一个薄弱知识点讲一遍",
+                    onBack = { labTool = 0; selfVersion++ },
+                )
+            }
+        }
+    }
+}
+
+/** 学习规划页的工具小卡。 */
+@Composable
+private fun PlanToolCard(title: String, desc: String, color: Color, modifier: Modifier, onClick: () -> Unit) {
+    val cs = COUITheme.colorScheme
+    Card(
+        modifier = modifier,
+        cornerRadius = 18.dp,
+        insideMargin = androidx.compose.foundation.layout.PaddingValues(14.dp),
+        colors = kewuCardColors(),
+        onClick = { haptic(HapticKind.Light); onClick() },
+    ) {
+        Column {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.height(8.dp))
+            Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(2.dp))
+            Text(desc, color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
         }
     }
 }

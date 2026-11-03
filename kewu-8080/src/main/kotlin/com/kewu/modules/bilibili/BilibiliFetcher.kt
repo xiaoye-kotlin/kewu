@@ -310,7 +310,8 @@ class BilibiliFetcher {
             // 标题里常带 <em class="keyword"> 高亮标签，剥掉只留纯文本
             val title = (obj["title"]?.jsonPrimitive?.content ?: "").replace(Regex("<[^>]+>"), "")
             val cover = normalizeCover(obj["pic"]?.jsonPrimitive?.content.orEmpty())
-            BilibiliVideoItem(bvid, title, cover)
+            // 时长：搜索接口给 "4:5" / "1:02:30" 这类未补零字符串，统一成 m:ss / h:mm:ss
+            BilibiliVideoItem(bvid, title, cover, duration = normalizeDuration(obj["duration"]?.jsonPrimitive?.content.orEmpty()))
         }.take(10)
 
         // 10 个视频并发补直链，单条最多 10 秒；某条失败只留空 URL，不影响其它视频。
@@ -331,6 +332,17 @@ class BilibiliFetcher {
         }
     }
 
+    private fun normalizeDuration(raw: String): String {
+        val parts = raw.trim().split(':').map { it.trim().toIntOrNull() ?: return "" }
+        if (parts.isEmpty() || parts.size > 3) return ""
+        val total = parts.fold(0) { acc, v -> acc * 60 + v }
+        if (total <= 0) return ""
+        val h = total / 3600
+        val m = total % 3600 / 60
+        val sec = total % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+    }
+
     // B站 pic 常返回 //i0.hdslb.com/... 这种协议相对地址，前端直接用会缺协议，这里统一补成 https。
     private fun normalizeCover(pic: String): String = when {
         pic.startsWith("//") -> "https:$pic"
@@ -347,5 +359,7 @@ data class BilibiliVideoItem(
     val title: String,
     val cover: String,
     val videoUrl: String = "",
-    val audioUrl: String = ""
+    val audioUrl: String = "",
+    /** 时长 m:ss / h:mm:ss；拿不到为空串 */
+    val duration: String = ""
 )

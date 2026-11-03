@@ -125,6 +125,8 @@ data class BilibiliVideoInfo(
     val cover: String,
     val videoUrl: String?,
     val audioUrl: String?,
+    /** 时长 m:ss / h:mm:ss（2026-11-03）；老后端 / 拿不到为空串 */
+    val duration: String = "",
 )
 
 data class UserMe(
@@ -1194,6 +1196,7 @@ object KewuApi {
                 cover = o["cover"].str(),
                 videoUrl = o["videoUrl"].strOrNull()?.takeIf { it.isNotBlank() },
                 audioUrl = o["audioUrl"].strOrNull()?.takeIf { it.isNotBlank() },
+                duration = o["duration"].strOrNull().orEmpty(),
             )
         }
     } catch (e: CancellationException) { throw e }

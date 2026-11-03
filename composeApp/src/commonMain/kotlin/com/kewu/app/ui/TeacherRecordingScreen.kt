@@ -188,12 +188,33 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
                 recs = emptyList()
             }
     }
-    BackHandler { onBack() }
+    // AI 课堂复盘（2026-11-03）
+    var showReview by remember(s.sessionId) { mutableStateOf(false) }
+    BackHandler(!showReview) { onBack() }
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(backdrop).background(cs.surface))
         Column(Modifier.fillMaxSize()) {
             KewuTopBar(courseName.ifBlank { "课堂录音" }, onBack = onBack, subtitle = s.date)
+            // AI 课堂复盘入口：读整节转写 + 学生专注结论
+            if (s.transcript.isNotBlank()) {
+                Card(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).padding(top = 4.dp, bottom = 6.dp),
+                    cornerRadius = 18.dp,
+                    insideMargin = PaddingValues(16.dp),
+                    colors = kewuCardColors(),
+                    onClick = { haptic(HapticKind.Light); showReview = true },
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("AI 课堂复盘", color = cs.primary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                            Spacer(Modifier.height(2.dp))
+                            Text("教学评分 · 课堂脉络 · 易错预警 · 作业草稿", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+                        }
+                        Text("›", color = cs.primary, fontSize = 22.sp)
+                    }
+                }
+            }
             Column(
                 Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState())
                     .padding(horizontal = 12.dp).padding(bottom = KewuNavClearance),
@@ -245,6 +266,12 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
                     }
                 }
             }
+        }
+        SlideOverlay(s.takeIf { showReview }) { sess ->
+            val students = recs.orEmpty().filter { !it.role.equals("teacher", true) && it.focusVerdict != null }
+            val focusLine = if (students.isEmpty()) "" else
+                students.groupingBy { it.focusVerdict!! }.eachCount().entries.joinToString("，") { "${it.key} ${it.value} 人" }
+            TeachingReviewScreen(sess, courseName, focusLine) { showReview = false }
         }
     }
 }

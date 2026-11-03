@@ -82,6 +82,8 @@ fun ClassNoteDetailScreen(
     var courseName by remember { mutableStateOf("") }
     // 「问小悟 · 本节复习」页内覆盖层
     var showTutor by remember { mutableStateOf(false) }
+    // AI 学习工具（2026-11-03）：0 无 / 1 课后自测 / 2 记忆卡片 / 3 讲给小悟听
+    var labTool by remember { mutableStateOf(0) }
 
     fun reload() {
         scope.launch {
@@ -319,8 +321,26 @@ fun ClassNoteDetailScreen(
                             color = cs.onSurfaceSecondary, fontSize = 12.sp,
                         )
                     }
+                    Spacer(Modifier.height(10.dp))
+                    StudyLabEntries(
+                        rec.sessionId,
+                        refresh = labTool,
+                        onQuiz = { labTool = 1 },
+                        onCards = { labTool = 2 },
+                        onFeynman = { labTool = 3 },
+                    )
                 }
                 Spacer(Modifier.height(24.dp))
+            }
+        }
+
+        // AI 学习工具：页内全屏覆盖层
+        SlideOverlay(rec?.takeIf { labTool != 0 }?.let { it to labTool }) { (r, tool) ->
+            val close = { labTool = 0 }
+            when (tool) {
+                1 -> ClassQuizScreen(r.sessionId, courseName, date, r.summary, r.transcript, onBack = close)
+                2 -> FlashcardsScreen(r.sessionId, "$courseName $date".trim(), courseName, r.summary, r.transcript, onBack = close)
+                else -> FeynmanScreen(emptyList(), r.summary, r.transcript, subtitle = "$courseName $date".trim(), onBack = close)
             }
         }
 

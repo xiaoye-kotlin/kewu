@@ -139,6 +139,15 @@ internal fun BilibiliVideoCard(
                     Modifier.align(Alignment.Center).size(26.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
                     contentAlignment = Alignment.Center,
                 ) { Icon(COUIIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp)) }
+                // 时长角标（右下角，B 站同款半透明黑底）
+                if (video.duration.isNotBlank()) {
+                    Text(
+                        video.duration, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
+                            .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.6f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {

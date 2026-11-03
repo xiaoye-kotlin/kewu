@@ -149,6 +149,39 @@ class MainActivity : ComponentActivity() {
         CrashLog.install(applicationContext)
         appActivity = this // 供录音权限请求等需要 Activity 的运行时调用
         CameraCapture.launcher = { cb -> (appActivity as? MainActivity)?.takePhoto(cb) ?: cb(null) }
+        // 全屏视频手势：亮度只改本窗口（不动系统设置、无需权限），音量为媒体音量
+        val resolver = applicationContext.contentResolver
+        DeviceLevels.brightness = {
+            val act = appActivity as? MainActivity
+            val w = act?.window?.attributes?.screenBrightness ?: -1f
+            if (w >= 0f) w else runCatching {
+                android.provider.Settings.System.getInt(resolver, android.provider.Settings.System.SCREEN_BRIGHTNESS) / 255f
+            }.getOrDefault(0.5f).coerceIn(0f, 1f)
+        }
+        DeviceLevels.setBrightness = { v ->
+            (appActivity as? MainActivity)?.window?.let { w ->
+                w.attributes = w.attributes.apply { screenBrightness = v.coerceIn(0.01f, 1f) }
+            }
+        }
+        DeviceLevels.resetBrightness = {
+            (appActivity as? MainActivity)?.window?.let { w ->
+                w.attributes = w.attributes.apply {
+                    screenBrightness = android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                }
+            }
+        }
+        val audio = applicationContext.getSystemService(AUDIO_SERVICE) as android.media.AudioManager
+        DeviceLevels.volume = {
+            val max = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+            audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC).toFloat() / max
+        }
+        DeviceLevels.setVolume = { v ->
+            val max = audio.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+            val target = kotlin.math.round(v.coerceIn(0f, 1f) * max).toInt()
+            if (target != audio.getStreamVolume(android.media.AudioManager.STREAM_MUSIC)) {
+                runCatching { audio.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, target, 0) }
+            }
+        }
         // 只开 edge-to-edge：系统导航小白条（手势条）默认显示，底部区域透明，
         // 内容直接延伸到屏幕底边（托盘底已留 24dp 空隙，小白条悬在背景上不挡标签）。
         // 早期版本在这里 hide(navigationBars()) 全屏沉浸，用户要求改回「不隐藏、只透明」。

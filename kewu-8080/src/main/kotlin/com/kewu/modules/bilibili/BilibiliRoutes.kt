@@ -37,7 +37,7 @@ private val SUBJECT_KEYWORDS = mapOf(
 // B站视频转课堂笔记路由：
 //   POST /api/bilibili/note/generate  { "bvid": "BVxxxx" } -> 立即返回 {"status":"PROCESSING"}，流水线后台跑
 //   GET  /api/bilibili/note/{bvid}                       -> 落库后返回笔记；未完成返回 Redis 状态（兼做进度轮询）
-//   GET  /api/bilibili/videos?subject=初中数学           -> 返回 B站视频搜索列表 [{bvid,title,cover,videoUrl,audioUrl}]
+//   GET  /api/bilibili/videos?subject=初中数学           -> 返回 B站视频搜索列表 [{bvid,title,cover,videoUrl,audioUrl,duration}]
 //
 // 解析前端入参用 Json.parseToJsonElement（项目未开 @Serializable 数据类，按统一约定走手解）。
 fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher, scope: CoroutineScope) {
@@ -114,6 +114,7 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
                         put("cover", it.cover)
                         put("videoUrl", it.videoUrl)
                         put("audioUrl", it.audioUrl)
+                        put("duration", it.duration)
                     })
                 }
             }

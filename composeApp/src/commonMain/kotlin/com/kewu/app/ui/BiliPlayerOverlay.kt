@@ -9,6 +9,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
@@ -375,12 +376,20 @@ private fun VideoControlsLayer(fullscreen: Boolean) {
     var dragFrac by remember { mutableStateOf<Float?>(null) }
     var swipeDelta by remember { mutableStateOf<Long?>(null) }
     var widthPx by remember { mutableStateOf(1) }
+    var heightPx by remember { mutableStateOf(1) }
+    // 全屏左侧上下滑 = 亮度，右侧 = 音量（2026-11-03）。levelKind：0 亮度 / 1 音量；null = 不在调
+    var levelKind by remember { mutableStateOf<Int?>(null) }
+    var levelValue by remember { mutableStateOf(0f) }
+    // 退出全屏 / 关掉播放器：亮度交还系统
+    androidx.compose.runtime.DisposableEffect(fullscreen) {
+        onDispose { if (fullscreen) com.kewu.app.DeviceLevels.resetBrightness?.invoke() }
+    }
     LaunchedEffect(shown, c.playing, poke, dragFrac) {
         if (shown && c.playing && dragFrac == null) { delay(3_000); shown = false }
     }
     Box(
         Modifier.fillMaxSize()
-            .onSizeChanged { widthPx = it.width.coerceAtLeast(1) }
+            .onSizeChanged { widthPx = it.width.coerceAtLeast(1); heightPx = it.height.coerceAtLeast(1) }
             .pointerInput(Unit) {
                 detectTapGestures(
                     onTap = { shown = !shown; poke++ },
@@ -400,8 +409,37 @@ private fun VideoControlsLayer(fullscreen: Boolean) {
                     acc += dx
                     swipeDelta = (acc / widthPx * 90_000f).toLong()
                 }
-            },
+            }
+            .then(
+                if (fullscreen && com.kewu.app.DeviceLevels.available) Modifier.pointerInput(Unit) {
+                    val lv = com.kewu.app.DeviceLevels
+                    var start = 0f
+                    var acc = 0f
+                    detectVerticalDragGestures(
+                        onDragStart = { o ->
+                            val kind = if (o.x < widthPx / 2f) 0 else 1
+                            start = (if (kind == 0) lv.brightness?.invoke() else lv.volume?.invoke()) ?: 0.5f
+                            acc = 0f
+                            levelValue = start
+                            levelKind = kind
+                        },
+                        onDragEnd = { levelKind = null },
+                        onDragCancel = { levelKind = null },
+                    ) { change, dy ->
+                        change.consume()
+                        acc -= dy
+                        // 滑过约 80% 屏高 = 从 0 调到满
+                        val v = (start + acc / (heightPx * 0.8f)).coerceIn(0f, 1f)
+                        if (v != levelValue) {
+                            levelValue = v
+                            if (levelKind == 0) lv.setBrightness?.invoke(v) else lv.setVolume?.invoke(v)
+                        }
+                    }
+                } else Modifier,
+            ),
     ) {
+        // 亮度 / 音量浮层：图标 + 进度条（玻璃底，只做位移不做淡入，与控制条同规则）
+        levelKind?.let { kind -> LevelPill(kind, levelValue, Modifier.align(Alignment.TopCenter).padding(top = 28.dp)) }
         // 中间：滑动快进提示 / 缓冲转圈
         val sd = swipeDelta
         if (sd != null && sd != 0L) {
@@ -459,6 +497,59 @@ private fun VideoControlsLayer(fullscreen: Boolean) {
                 }
             }
         }
+    }
+}
+
+/** 全屏手势调亮度 / 音量时的浮层。[kind] 0 = 亮度，1 = 音量。 */
+@Composable
+private fun LevelPill(kind: Int, value: Float, modifier: Modifier = Modifier) {
+    val shown by androidx.compose.animation.core.animateFloatAsState(value, spring(dampingRatio = 0.9f, stiffness = 900f), label = "level")
+    Row(
+        modifier.clip(RoundedCornerShape(20.dp)).background(Color.Black.copy(alpha = 0.58f))
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(Modifier.size(18.dp)) {
+            val w = size.width
+            val sw = 1.7.dp.toPx()
+            if (kind == 0) {
+                // 太阳：圆 + 8 条光芒
+                drawCircle(Color.White, radius = w * 0.2f, style = androidx.compose.ui.graphics.drawscope.Stroke(sw))
+                for (k in 0 until 8) {
+                    val a = k * kotlin.math.PI / 4
+                    val cx = w / 2; val cy = w / 2
+                    drawLine(
+                        Color.White,
+                        androidx.compose.ui.geometry.Offset(cx + (w * 0.33f * kotlin.math.cos(a)).toFloat(), cy + (w * 0.33f * kotlin.math.sin(a)).toFloat()),
+                        androidx.compose.ui.geometry.Offset(cx + (w * 0.46f * kotlin.math.cos(a)).toFloat(), cy + (w * 0.46f * kotlin.math.sin(a)).toFloat()),
+                        strokeWidth = sw, cap = androidx.compose.ui.graphics.StrokeCap.Round,
+                    )
+                }
+            } else {
+                // 喇叭 + 声波（静音时打叉）
+                val body = androidx.compose.ui.graphics.Path().apply {
+                    moveTo(w * 0.1f, w * 0.38f); lineTo(w * 0.3f, w * 0.38f); lineTo(w * 0.52f, w * 0.18f)
+                    lineTo(w * 0.52f, w * 0.82f); lineTo(w * 0.3f, w * 0.62f); lineTo(w * 0.1f, w * 0.62f); close()
+                }
+                drawPath(body, Color.White)
+                if (value <= 0.001f) {
+                    drawLine(Color.White, androidx.compose.ui.geometry.Offset(w * 0.66f, w * 0.36f), androidx.compose.ui.geometry.Offset(w * 0.92f, w * 0.64f), sw, androidx.compose.ui.graphics.StrokeCap.Round)
+                    drawLine(Color.White, androidx.compose.ui.geometry.Offset(w * 0.92f, w * 0.36f), androidx.compose.ui.geometry.Offset(w * 0.66f, w * 0.64f), sw, androidx.compose.ui.graphics.StrokeCap.Round)
+                } else {
+                    drawArc(Color.White, -45f, 90f, false, topLeft = androidx.compose.ui.geometry.Offset(w * 0.42f, w * 0.3f),
+                        size = androidx.compose.ui.geometry.Size(w * 0.4f, w * 0.4f), style = androidx.compose.ui.graphics.drawscope.Stroke(sw, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                    if (value > 0.5f) drawArc(Color.White, -45f, 90f, false, topLeft = androidx.compose.ui.geometry.Offset(w * 0.32f, w * 0.15f),
+                        size = androidx.compose.ui.geometry.Size(w * 0.7f, w * 0.7f), style = androidx.compose.ui.graphics.drawscope.Stroke(sw, cap = androidx.compose.ui.graphics.StrokeCap.Round))
+                }
+            }
+        }
+        Spacer(Modifier.width(10.dp))
+        Box(Modifier.width(120.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.25f))) {
+            Box(Modifier.fillMaxWidth(shown.coerceIn(0f, 1f)).height(4.dp).clip(CircleShape).background(Color.White))
+        }
+        Spacer(Modifier.width(10.dp))
+        Text("${(value * 100).toInt()}%", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Medium,
+            modifier = Modifier.width(34.dp), maxLines = 1)
     }
 }
 

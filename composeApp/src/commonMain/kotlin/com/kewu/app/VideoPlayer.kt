@@ -75,3 +75,16 @@ object VideoControls {
         onSeek?.invoke(t)
     }
 }
+
+/**
+ * 全屏播放时左侧上下滑调亮度、右侧上下滑调音量（2026-11-03）。数值 0..1。
+ * Android 在 MainActivity 注册（亮度只改本窗口，退出全屏恢复跟随系统；音量为媒体音量）；其它平台为 null，手势不生效。
+ */
+object DeviceLevels {
+    var brightness: (() -> Float)? = null
+    var setBrightness: ((Float) -> Unit)? = null
+    var resetBrightness: (() -> Unit)? = null
+    var volume: (() -> Float)? = null
+    var setVolume: ((Float) -> Unit)? = null
+    val available: Boolean get() = setBrightness != null && setVolume != null
+}

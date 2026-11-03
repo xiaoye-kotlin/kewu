@@ -140,7 +140,7 @@ internal object BiliRecommend {
             val vs = (o["v"] as? JsonArray).orEmpty().mapNotNull { e ->
                 val v = e as? JsonObject ?: return@mapNotNull null
                 fun f(k: String) = (v[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
-                BilibiliVideoInfo(f("b") ?: return@mapNotNull null, f("t").orEmpty(), f("c").orEmpty(), f("vu"), f("au"))
+                BilibiliVideoInfo(f("b") ?: return@mapNotNull null, f("t").orEmpty(), f("c").orEmpty(), f("vu"), f("au"), f("d").orEmpty())
             }
             if (vs.isEmpty()) null else kw to vs
         }
@@ -153,7 +153,7 @@ internal object BiliRecommend {
                     put("k", kw)
                     put("v", buildJsonArray {
                         vs.forEach { v ->
-                            add(buildJsonObject { put("b", v.bvid); put("t", v.title); put("c", v.cover); put("vu", v.videoUrl); put("au", v.audioUrl) })
+                            add(buildJsonObject { put("b", v.bvid); put("t", v.title); put("c", v.cover); put("vu", v.videoUrl); put("au", v.audioUrl); put("d", v.duration) })
                         }
                     })
                 })
