@@ -304,6 +304,18 @@ object BilibiliNotes : Table("bilibili_notes") {
     override val primaryKey = PrimaryKey(id)
 }
 
+// 多路录音并发转写 + 文本大融合生成的终极课堂笔记（2026-11-03 新增）
+// 同一节课多台设备录音，各自转写后拼接融合，交给 DeepSeek 生成一份结构化笔记
+object AudioFusionNotes : Table("audio_fusion_notes") {
+    val id = varchar("id", 64)
+    val taskId = varchar("task_id", 64).index()       // 任务 ID（前端轮询用）
+    val sourceCount = integer("source_count")          // 成功融合的录音路数
+    val content = text("content")                      // DeepSeek 融合生成的终极笔记（Markdown）
+    val transcript = text("transcript").nullable()     // 多路拼接后的原始长文本（融合前，便于复核）
+    val createdAt = varchar("created_at", 32)           // 生成时间
+    override val primaryKey = PrimaryKey(id)
+}
+
 val allTables = arrayOf(
     Users, UserCourses, Courses, ClassNotes,
     Classes, ClassStudents, ClassStates,
@@ -311,7 +323,7 @@ val allTables = arrayOf(
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
     Questions,
     Uploads, CourseMaterials, ClassRecordings, CourseSchedules, CrashReports,
-    Recordings, RecordingSessions, BilibiliNotes, UserSessions, RecordingTranscripts
+    Recordings, RecordingSessions, BilibiliNotes, UserSessions, RecordingTranscripts, AudioFusionNotes
 )
 
 // 单设备登录（2026-11-02）：每个账号每类平台（android / desktop / ios）只认最新一次登录的 sid，

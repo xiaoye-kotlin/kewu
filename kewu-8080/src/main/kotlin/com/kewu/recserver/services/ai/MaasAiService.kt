@@ -108,6 +108,22 @@ class MaasAiService : AiService {
     }
 
     /**
+     * 多路录音融合总结（2026-11-03）：同一节课多设备录音转写文本拼接后，
+     * 交给 DeepSeek 做语义对齐 + 去重 + 合并，生成一份结构化终极课堂笔记。
+     * 拼接文本可能很长（多份长录音叠加），截取前 24000 字再送模型，避免超出上下文。
+     */
+    suspend fun fusionNotes(multiTranscript: String): String {
+        if (multiTranscript.isBlank()) return "（多路转写内容为空，无法融合总结）"
+        return chat(
+            system = "你是一个专业的课堂助教。以下是同一节课来自不同设备的多份录音转写文本。" +
+                "请先将它们进行语义对齐和去重（将重复的话语合并），然后总结成一份结构化的课堂笔记，" +
+                "包含：课程大纲、核心知识点、课堂互动问答。",
+            user = "【多路录音转写文本（已按设备分路）】\n${multiTranscript.take(24000)}",
+            maxTokens = 2048
+        )
+    }
+
+    /**
      * 多模态预留（2026-11-02）：发送图片 Base64 + 文本提示词。
      * DeepSeek/OpenAI 兼容格式里，user.content 是数组：[text, image_url]。
      * 后续“拍照搜题”可直接调用这里；错误不会抛出，统一返回友好中文提示。

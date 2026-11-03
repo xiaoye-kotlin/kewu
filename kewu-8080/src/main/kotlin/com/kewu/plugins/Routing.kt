@@ -35,6 +35,8 @@ import com.kewu.recserver.config.loadRecConfig
 import com.kewu.modules.bilibili.BilibiliFetcher
 import com.kewu.modules.bilibili.BilibiliNoteService
 import com.kewu.modules.bilibili.bilibiliRoutes
+import com.kewu.modules.audio.TranscribeFusionService
+import com.kewu.modules.audio.audioFusionRoutes
 import com.kewu.recserver.services.ai.MaasAiService
 import io.ktor.server.application.*
 import io.ktor.server.response.respond
@@ -125,6 +127,12 @@ fun Application.configureRouting() {
         redis = recServices.redis,
         maas = recServices.ai as? MaasAiService ?: MaasAiService()
     )
+    // 多路录音并发转写 + 文本大融合（2026-11-03）：复用现有 SIS 转写 / DeepSeek MaaS / Redis，零新增部署物
+    val audioFusionService = TranscribeFusionService(
+        transcription = recServices.transcription,
+        redis = recServices.redis,
+        maas = recServices.ai as? MaasAiService ?: MaasAiService()
+    )
     routing {
         get("/") {
             call.respondText("kewu backend is running")
@@ -163,5 +171,7 @@ fun Application.configureRouting() {
         adminRoutes(adminService)
         // B站：视频转笔记 + 按学科视频搜索列表（2026-11-01）
         bilibiliRoutes(bilibiliService, bilibiliFetcher, bg)
+        // 多路录音并发转写 + 文本大融合 → DeepSeek 终极笔记（2026-11-03）
+        audioFusionRoutes(audioFusionService, bg)
     }
 }

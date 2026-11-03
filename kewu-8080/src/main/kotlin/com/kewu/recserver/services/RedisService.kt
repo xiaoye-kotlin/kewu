@@ -131,5 +131,12 @@ class RedisService(private val cfg: RedisConfig) {
     suspend fun getBiliStatus(bvid: String): String? =
         withRedis(null) { it.get("kewu:bilibili:status:$bvid") }
 
+    // 多路录音融合任务状态：kewu:audio:fusion:{taskId} 存 {"status":"PROCESSING|FINISHED|FAILED","stage":"...","progress":N,"reason":"..."}。
+    // 复用同一 Redis 连接，连不上自动降级。24h 过期兜底，防任务中途挂掉永远卡 PROCESSING（2026-11-03）
+    suspend fun setFusionStatus(taskId: String, json: String): Boolean =
+        withRedis(false) { it.setex("kewu:audio:fusion:$taskId", TTL_CLASS_DATA_SECONDS, json); true }
+    suspend fun getFusionStatus(taskId: String): String? =
+        withRedis(null) { it.get("kewu:audio:fusion:$taskId") }
+
     fun close() = runCatching { connection?.close() }
 }
