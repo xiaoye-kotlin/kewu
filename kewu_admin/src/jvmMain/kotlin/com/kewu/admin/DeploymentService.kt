@@ -60,8 +60,12 @@ class DeploymentService {
         onLog: (String) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val serverRoot = File(serverRootPath).absoluteFile
-        if (!looksLikeServerRoot(serverRoot)) {
-            return@withContext Result.failure(DeploymentException("未找到服务器后端目录：$serverRoot（需要 deploy-8080.ps1 和 kewu-8080.jar）"))
+        // 目录可以不存在（全新服务器首次搭建）：不存在则创建，不再要求预先放好 deploy-8080.ps1 / kewu-8080.jar。
+        if (!serverRoot.exists() && !serverRoot.mkdirs()) {
+            return@withContext Result.failure(DeploymentException("无法创建服务器后端目录：${serverRoot.absolutePath}"))
+        }
+        if (!serverRoot.isDirectory) {
+            return@withContext Result.failure(DeploymentException("服务器后端目录不是文件夹：${serverRoot.absolutePath}"))
         }
         val workDir = File(
             System.getProperty("java.io.tmpdir"),
@@ -71,7 +75,10 @@ class DeploymentService {
             return@withContext Result.failure(DeploymentException("无法创建部署临时目录：${workDir.absolutePath}"))
         }
         val script = File(workDir, "deploy-backend.ps1")
-        script.writeText(deployScript, Charsets.UTF_8)
+        // 必须带 UTF-8 BOM 写出：Windows PowerShell 5.1 对无 BOM 文件按系统 ANSI(GBK) 解码，
+        // 脚本里的中文注释乱码后可能注入引号字符、破坏 here-string，导致 init 脚本等生成物损坏。
+        val bom = byteArrayOf(0xEF.toByte(), 0xBB.toByte(), 0xBF.toByte())
+        script.writeBytes(bom + deployScript.toByteArray(Charsets.UTF_8))
 
         val command = listOf(
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script.absolutePath,

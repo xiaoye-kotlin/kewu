@@ -18,6 +18,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.SkipNext
 import io.github.suqi8.coui.kmp.basic.Icon
 import androidx.compose.material3.MaterialTheme
@@ -42,6 +44,10 @@ import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.awt.Toolkit
+import java.awt.datatransfer.StringSelection
+import java.io.File
+import javax.swing.JFileChooser
 
 /** 应用启动时的部署入口：用户确认后才进入管理界面。 */
 @Composable
@@ -102,6 +108,7 @@ private fun DeploymentContent(
     var deploying by remember { mutableStateOf(false) }
     var success by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var copied by remember { mutableStateOf(false) }
     val logs = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
 
@@ -160,7 +167,7 @@ private fun DeploymentContent(
         Spacer(Modifier.height(20.dp))
         if (detectedRoot == null) {
             Text(
-                "未自动识别到服务器后端目录。总控端应放在服务器本机运行，并填写包含 deploy-8080.ps1 与 kewu-8080.jar 的目录。",
+                "未自动识别到既有部署目录。总控端应在服务器本机运行；点「浏览…」选择目录即可，全新服务器直接选一个空目录，首次部署会自动初始化。",
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall,
             )
@@ -169,14 +176,34 @@ private fun DeploymentContent(
             Text("已识别服务器后端目录：$detectedRoot", color = KewuGreen, style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
         }
-        OutlinedTextField(
-            value = serverRoot,
-            onValueChange = { serverRoot = it },
-            modifier = Modifier.fillMaxWidth(),
-            label = "服务器后端目录",
-            singleLine = true,
-            enabled = !deploying,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = serverRoot,
+                onValueChange = { serverRoot = it },
+                modifier = Modifier.weight(1f),
+                label = "服务器后端目录",
+                singleLine = true,
+                enabled = !deploying,
+            )
+            Spacer(Modifier.width(8.dp))
+            AdminButton(
+                "浏览…",
+                {
+                    val chooser = JFileChooser().apply {
+                        fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                        dialogTitle = "选择服务器后端目录（全新服务器可直接选一个空目录）"
+                        if (serverRoot.isNotBlank()) currentDirectory = File(serverRoot)
+                    }
+                    if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) {
+                        serverRoot = chooser.selectedFile.absolutePath
+                    }
+                },
+                icon = Icons.Outlined.FolderOpen,
+                style = AdminButtonStyle.Secondary,
+                enabled = !deploying,
+                compact = true,
+            )
+        }
         Spacer(Modifier.height(10.dp))
         OutlinedTextField(
             value = zipUrl,
@@ -188,7 +215,7 @@ private fun DeploymentContent(
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "要求：在服务器本机运行；使用管理员身份启动总控端；目录中保留服务器既有 deploy-8080.ps1。部署前会自动在 8090 试启动，失败不会替换线上 8080。",
+            "要求：在服务器本机以管理员身份运行。目录无需预先准备任何文件——首次部署会自动安装 JDK 21、生成 kewu.env、创建开机启动任务；已有部署的目录会自动安全升级（8090 试启动，失败自动回滚）。",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             style = MaterialTheme.typography.bodySmall,
         )
@@ -207,6 +234,22 @@ private fun DeploymentContent(
                 icon = Icons.Outlined.SkipNext,
                 style = AdminButtonStyle.Secondary,
                 enabled = !deploying,
+            )
+            Spacer(Modifier.width(10.dp))
+            AdminButton(
+                if (copied) "已复制" else "复制日志",
+                {
+                    val text = logs.joinToString("\n")
+                    runCatching {
+                        Toolkit.getDefaultToolkit().systemClipboard.setContents(StringSelection(text), null)
+                    }.onSuccess {
+                        copied = true
+                        scope.launch { delay(1600); copied = false }
+                    }
+                },
+                icon = Icons.Outlined.ContentCopy,
+                style = AdminButtonStyle.Secondary,
+                enabled = !deploying && logs.isNotEmpty(),
             )
             if (success) {
                 Spacer(Modifier.width(10.dp))
