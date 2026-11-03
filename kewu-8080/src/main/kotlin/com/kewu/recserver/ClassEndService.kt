@@ -22,6 +22,8 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import org.jetbrains.exposed.sql.SortOrder
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.inList
+import org.jetbrains.exposed.sql.SqlExpressionBuilder.less
 import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.or
@@ -258,6 +260,28 @@ class ClassEndService(private val services: RecServices) {
             if (sid in running) continue
             println("ASR-SWEEP: $sid")
             runCatching { transcribe(sid, force = true) }.onFailure { println("ASR-SWEEP-ERROR: $sid $it") }
+        }
+    }
+
+    /**
+     * 卡住自救（2026-11-02 夜）：转写失败后状态会停在 PENDING_ASR / TRANSCRIBING 而无人再触发
+     * （旧包只在下课时触发一次，一次 EOFException 即整节失败，晚到上传把状态冲回 PENDING_ASR 后
+     * 再也没人理它 → 首页纪要卡永远 10%）。启动后周期调用：把卡住超 5 分钟的节次重新转写；
+     * TRANSCRIBING 用 force 重启（进程重启后 running 为空，可能是死状态）。已转写成功的份不重复转。
+     */
+    suspend fun sweepStuck() {
+        val cutoff = LocalDateTime.now().minusMinutes(5).format(fmt)
+        val stuck = transaction {
+            ClassRecordings.selectAll().where {
+                (ClassRecordings.transcriptStatus inList listOf("PENDING_ASR", "TRANSCRIBING")) and
+                    (ClassRecordings.decidedAt less cutoff)
+            }.map { it[ClassRecordings.sessionId] to it[ClassRecordings.transcriptStatus] }
+        }
+        for ((sid, st) in stuck) {
+            if (sid in running) continue
+            println("SWEEP: restart transcription $sid ($st)")
+            runCatching { transcribe(sid, force = st == "TRANSCRIBING") }
+                .onFailure { println("SWEEP-ERROR: $sid $it") }
         }
     }
 

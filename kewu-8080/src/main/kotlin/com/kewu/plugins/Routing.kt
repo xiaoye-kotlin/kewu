@@ -114,6 +114,15 @@ fun Application.configureRouting() {
                 .onFailure { println("AUTO-END-ERROR: $it") }
         }
     }
+    // 转写卡住自救（2026-11-02 夜）：启动 2 分钟后每 10 分钟扫一次，把卡在 PENDING_ASR /
+    // TRANSCRIBING 超 5 分钟的节次重新转写（一次网络抖动不再让整节课永远 10%）
+    bg.launch {
+        kotlinx.coroutines.delay(120_000)
+        while (true) {
+            runCatching { classEnd.sweepStuck() }.onFailure { println("SWEEP-ERROR: $it") }
+            kotlinx.coroutines.delay(600_000)
+        }
+    }
     // B站视频一键转课堂笔记（2026-11-01）：复用现有 SIS 转写 / 盘古 MaaS / OBS / Redis，零新增部署物
     val recServices = attributes[com.kewu.recserver.RecServicesKey]
     val bilibiliFetcher = BilibiliFetcher()

@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+.idea/
+build/
+out/
+local.properties
+*.iml
+*.jks
+*.keystore
+*.log
+hs_err_pid*
+replay_pid*
+.DS_Store

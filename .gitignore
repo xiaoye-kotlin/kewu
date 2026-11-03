@@ -34,5 +34,5 @@ composeApp/xiaoye.jks
 hs_err_pid*.log
 replay_pid*.log
 
-# 独立总控端项目（自己的 Git 仓库，避免误嵌进学生端仓库）
-/kewu_admin/
+# 总控端 kewu_admin 现已并入本仓库（原为独立仓库 xiaoye-kotlin/kewu-admin），
+# 其自身忽略规则见 kewu_admin/.gitignore，此处不再整体忽略。

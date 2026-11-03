@@ -210,7 +210,7 @@ object AssistantHub {
         val missed = sub.ai?.missedKnowledgePoints.orEmpty()
         val system = "你是「小悟」，课悟 App 里学生的 AI 学习助手。老师刚把学生的作业打回重做，" +
             "请根据老师评语和作业要求，用中文给出 3 条以内、每条一行、以「·」开头的具体修改方向，" +
-            "语气鼓励、直接可执行；不要代写答案，不要用 markdown 符号，总长 150 字以内。"
+            "语气鼓励、直接可执行；不要代写答案；可用简洁 markdown（加粗关键词），总长 150 字以内。"
         val user = buildString {
             appendLine("作业：${a.title}")
             if (a.description.isNotBlank()) appendLine("要求：${a.description.take(400)}")
