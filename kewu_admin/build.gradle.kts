@@ -51,6 +51,11 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "com.kewu.admin.MainKt"
+        // 正式打包（packageReleaseXxx）会跑 ProGuard。okhttp3/ktor 的可选 TLS 适配器与
+        // slf4j 绑定在桌面端用不到，但 ProGuard 默认把它们当错误，需接入自定义 -dontwarn 规则。
+        buildTypes.release.proguard {
+            configurationFiles.from(files("proguard-rules.pro"))
+        }
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
