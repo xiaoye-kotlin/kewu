@@ -2,6 +2,11 @@ package com.kewu.app.ui
 
 import com.kewu.app.todayCn
 import androidx.compose.foundation.Canvas
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -16,9 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -146,12 +149,15 @@ fun NotificationSheet(
                 Text("暂无通知", color = cs.onSurfaceSecondary, fontSize = 14.sp)
             }
         } else {
-            Column(Modifier.verticalScroll(rememberScrollState())) {
-                list.forEach { n ->
-                    NotificationRow(n, onOpenClassNote)
-                    Spacer(Modifier.height(8.dp))
-                }
-                Spacer(Modifier.height(8.dp))
+            // 2026-11-03：固定半屏高 + 懒加载列表（纪要通知正文很长时旧版会把弹窗撑满整屏）
+            val density = LocalDensity.current
+            val halfScreen = with(density) { (LocalWindowInfo.current.containerSize.height / 2).toDp() }
+            LazyColumn(
+                Modifier.fillMaxWidth().height(halfScreen.coerceAtLeast(240.dp)),
+                contentPadding = PaddingValues(bottom = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                items(list.distinctBy { it.id }, key = { it.id }) { n -> NotificationRow(n, onOpenClassNote) }
             }
         }
     }
@@ -170,12 +176,13 @@ private fun NotificationRow(
             KewuApi.classNoteTargetFromNotificationId(n.id)
         else null
     }
+    val open: (() -> Unit)? = noteTarget?.let { t -> { haptic(HapticKind.Tick); onOpenClassNote?.invoke(t) } }
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 16.dp,
         insideMargin = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
         colors = kewuCardColors(),
-        onClick = noteTarget?.let { t -> { haptic(HapticKind.Tick); onOpenClassNote?.invoke(t) } },
+        onClick = open,
     ) {
         Row(verticalAlignment = Alignment.Top) {
             // 未读小圆点
@@ -207,9 +214,16 @@ private fun NotificationRow(
                     Text(formatNotifTime(n.ts), color = cs.onSurfaceSecondary, fontSize = 11.sp)
                 }
                 Spacer(Modifier.height(6.dp))
-                Text(n.title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                Text(n.title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                    maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Spacer(Modifier.height(3.dp))
-                Text(n.body, color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                // 纪要全文去详情页看，这里只给一句话
+                val body = if (n.type == Notifications.TYPE_RECORDING_DONE) "课堂纪要已生成" else n.body
+                Text(body, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (open != null) {
+                    Spacer(Modifier.height(10.dp))
+                    KewuSecondaryButton("查看纪要", open, Modifier.fillMaxWidth())
+                }
             }
         }
     }

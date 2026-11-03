@@ -178,8 +178,26 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                         .padding(horizontal = 12.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(video.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp,
-                        modifier = Modifier.padding(horizontal = 4.dp))
+                    // 2026-11-03：顶栏标题会被省略，这里用 coui 卡片完整显示（不限行数，可长按选中复制）
+                    io.github.suqi8.coui.kmp.basic.Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        cornerRadius = 20.dp,
+                        insideMargin = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                        colors = kewuCardColors(),
+                    ) { Column {
+                        androidx.compose.foundation.text.selection.SelectionContainer {
+                            Text(video.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp)
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.clip(CircleShape).background(Color(0xFFFB7299).copy(alpha = 0.14f))
+                                    .padding(horizontal = 8.dp, vertical = 2.dp),
+                            ) { Text("B 站", color = Color(0xFFFB7299), fontSize = 11.sp, fontWeight = FontWeight.Medium) }
+                            Spacer(Modifier.width(8.dp))
+                            Text(video.bvid, color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
+                        }
+                    } }
                     VideoSummaryCard(backdrop, video.bvid, onNote = { note = it }, onAsk = { asking = true })
                     Spacer(Modifier.height(12.dp))
                 }
