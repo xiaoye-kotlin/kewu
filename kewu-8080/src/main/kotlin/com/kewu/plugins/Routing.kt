@@ -95,14 +95,6 @@ fun Application.configureRouting() {
             runCatching { classEnd.transcribe(sid) }.onFailure { println("ASR-ERROR: $it") }
         }
     }
-    // 卡住的转写兜底：启动 2 分钟后起，每 10 分钟巡检一次
-    bg.launch {
-        kotlinx.coroutines.delay(120_000)
-        while (true) {
-            runCatching { classEnd.sweepStuck() }.onFailure { println("ASR-SWEEP-ERROR: $it") }
-            kotlinx.coroutines.delay(600_000)
-        }
-    }
     com.kewu.recserver.ClassEndService.onUpload = { sid ->
         bg.launch { runCatching { classEnd.refreshIfDecided(sid) } }
     }

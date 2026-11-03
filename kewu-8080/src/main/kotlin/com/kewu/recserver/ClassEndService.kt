@@ -245,25 +245,6 @@ class ClassEndService(private val services: RecServices) {
     }
 
     /**
-     * 兜底巡检（2026-11-02）：卡在 PENDING_ASR（下课触发丢了 / 晚到上传把状态冲回）或
-     * TRANSCRIBING（转写中途服务重启）超过 5 分钟、且本进程没在跑的节次，重新转写。
-     * 线代 11-02 那节就是转写失败后被晚到上传冲回 PENDING_ASR，再没人触发，首页一直 10%。
-     */
-    suspend fun sweepStuck() {
-        val cutoff = LocalDateTime.now().minusMinutes(5).format(fmt)
-        val stuck = transaction {
-            ClassRecordings.selectAll().where {
-                (ClassRecordings.transcriptStatus eq "PENDING_ASR") or (ClassRecordings.transcriptStatus eq "TRANSCRIBING")
-            }.filter { it[ClassRecordings.decidedAt] <= cutoff }.map { it[ClassRecordings.sessionId] }
-        }
-        for (sid in stuck) {
-            if (sid in running) continue
-            println("ASR-SWEEP: $sid")
-            runCatching { transcribe(sid, force = true) }.onFailure { println("ASR-SWEEP-ERROR: $sid $it") }
-        }
-    }
-
-    /**
      * 卡住自救（2026-11-02 夜）：转写失败后状态会停在 PENDING_ASR / TRANSCRIBING 而无人再触发
      * （旧包只在下课时触发一次，一次 EOFException 即整节失败，晚到上传把状态冲回 PENDING_ASR 后
      * 再也没人理它 → 首页纪要卡永远 10%）。启动后周期调用：把卡住超 5 分钟的节次重新转写；
