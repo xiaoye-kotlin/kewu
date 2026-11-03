@@ -15,15 +15,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -207,10 +202,10 @@ private fun CourseDialog(course: JsonObject?, onDismiss: () -> Unit, onSubmit: (
         title = { Text(if (course == null) "新建课程" else "编辑课程") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("课程名称 *") }, singleLine = true)
-                OutlinedTextField(description, { description = it }, label = { Text("课程简介") }, minLines = 2)
-                OutlinedTextField(teacher, { teacher = it }, label = { Text("任课教师") }, singleLine = true)
-                if (course == null) OutlinedTextField(teacherId, { teacherId = it }, label = { Text("教师 ID / 账号（可选）") }, singleLine = true)
+                OutlinedTextField(name, { name = it }, label = "课程名称 *", singleLine = true)
+                OutlinedTextField(description, { description = it }, label = "课程简介", minLines = 2)
+                OutlinedTextField(teacher, { teacher = it }, label = "任课教师", singleLine = true)
+                if (course == null) OutlinedTextField(teacherId, { teacherId = it }, label = "教师 ID / 账号（可选）", singleLine = true)
             }
         },
         confirmButton = { Button(enabled = name.isNotBlank(), onClick = { onSubmit(name, description, teacher, teacherId) }) { Text("保存") } },
@@ -228,9 +223,9 @@ private fun ClassDialog(item: JsonObject?, onDismiss: () -> Unit, onSubmit: (Str
         title = { Text(if (item == null) "新建班级" else "编辑班级") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(name, { name = it }, label = { Text("班级名称 *") }, singleLine = true)
-                OutlinedTextField(term, { term = it }, label = { Text("学期") }, singleLine = true)
-                OutlinedTextField(teacherId, { teacherId = it }, label = { Text("教师 ID / 账号（可选）") }, singleLine = true)
+                OutlinedTextField(name, { name = it }, label = "班级名称 *", singleLine = true)
+                OutlinedTextField(term, { term = it }, label = "学期", singleLine = true)
+                OutlinedTextField(teacherId, { teacherId = it }, label = "教师 ID / 账号（可选）", singleLine = true)
             }
         },
         confirmButton = { Button(enabled = name.isNotBlank(), onClick = { onSubmit(name, term, teacherId) }) { Text("保存") } },
@@ -261,7 +256,7 @@ private fun ClassStudentsDialog(api: AdminApi, item: JsonObject, onDismiss: () -
         text = {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedTextField(studentId, { studentId = it }, label = { Text("学生 ID") }, singleLine = true, modifier = Modifier.weight(1f))
+                    OutlinedTextField(studentId, { studentId = it }, label = "学生 ID", singleLine = true, modifier = Modifier.weight(1f))
                     Spacer(Modifier.width(8.dp))
                     Button(enabled = studentId.isNotBlank(), onClick = {
                         scope.launch {

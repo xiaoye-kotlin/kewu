@@ -323,7 +323,8 @@ val allTables = arrayOf(
     AttendanceSessions, AttendanceRecords, AttendanceRoster,
     Questions,
     Uploads, CourseMaterials, ClassRecordings, CourseSchedules, CrashReports,
-    Recordings, RecordingSessions, BilibiliNotes, UserSessions, RecordingTranscripts, AudioFusionNotes
+    Recordings, RecordingSessions, BilibiliNotes, UserSessions, RecordingTranscripts, AudioFusionNotes,
+    SystemConfigs
 )
 
 // 单设备登录（2026-11-02）：每个账号每类平台（android / desktop / ios）只认最新一次登录的 sid，
@@ -354,4 +355,13 @@ object RecordingTranscripts : Table("recording_transcripts") {
     val focusConfidence = integer("focus_confidence").nullable()
     val updatedAt = varchar("updated_at", 32)
     override val primaryKey = PrimaryKey(recordingId)
+}
+
+// 云端服务配置（2026-11-03）：华为云 SIS / OBS / AI 等密钥由总控端写入，覆盖服务器环境变量；
+// 值用 AES-GCM 加密后存（见 infra/SecretStore），App 端不内置任何密钥
+object SystemConfigs : Table("system_config") {
+    val cfgKey = varchar("cfg_key", 64)
+    val cfgValue = text("cfg_value")
+    val updatedAt = varchar("updated_at", 32)
+    override val primaryKey = PrimaryKey(cfgKey)
 }

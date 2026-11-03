@@ -877,6 +877,8 @@ internal fun VoiceSpeakPanel(
         scope.launch {
             val r = recorder.stop() ?: run { snackbar.toast("录音保存失败，请重试"); return@launch }
             if (r.second < 2) { platformDeleteFile(r.first); snackbar.toast("说话时间太短，多讲几句"); return@launch }
+            // 实时转录已出结果就直接用；没走实时识别 / 失败时才整段上传转写
+            recorder.lastText?.let { platformDeleteFile(r.first); onText(it); return@launch }
             transcribing = true
             val res = KewuApi.sendChatVoice(r.first)
             transcribing = false
@@ -939,6 +941,12 @@ internal fun VoiceSpeakPanel(
                     }
                 }
             }
+        }
+        // 实时转录：边说边出字
+        val live = recorder.liveText
+        if (recording && live.isNotBlank()) {
+            Text(live, color = cs.onSurface, fontSize = 14.sp, lineHeight = 21.sp, maxLines = 5,
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
         }
         Spacer(Modifier.height(4.dp))
         Text(

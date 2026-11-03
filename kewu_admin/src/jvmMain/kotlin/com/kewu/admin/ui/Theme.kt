@@ -5,7 +5,16 @@ import androidx.compose.material3.lightColorScheme as m3LightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import io.github.suqi8.coui.kmp.basic.Scaffold
+import io.github.suqi8.coui.kmp.basic.SnackbarHost
+import io.github.suqi8.coui.kmp.basic.SnackbarHostState
+import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import io.github.suqi8.coui.kmp.theme.Colors
 import io.github.suqi8.coui.kmp.theme.lightColorScheme
@@ -59,16 +68,35 @@ private fun m3FromCoui(c: Colors) = m3LightColorScheme(
     inverseOnSurface = Color.White,
 )
 
-/** 总控端全局主题：COUITheme 为唯一视觉来源，M3 只做兼容映射。 */
+/**
+ * 当前界面的玻璃采样层（背景 + 光斑）。页面内的液态玻璃（玻璃页头 / 横幅 / 浮条）从这里取 backdrop；
+ * 为 null 时（例如弹窗内）组件自动退化为 coui 白卡。
+ */
+val LocalAdminBackdrop = staticCompositionLocalOf<LayerBackdrop?> { null }
+
+/** 全局提示条（coui Snackbar）。 */
+val LocalAdminSnackbar = staticCompositionLocalOf { SnackbarHostState() }
+
+/** 总控端全局主题：COUITheme 为唯一视觉来源，M3 只做兼容映射；根挂 coui Scaffold（覆盖层宿主 + 提示条）。 */
 @Composable
 fun KewuAdminTheme(content: @Composable () -> Unit) {
     val colors = remember { kewuAdminCouiColors() }
+    val snackbar = remember { SnackbarHostState() }
     // coui OverlayDialog / BottomSheet 内部需要 navigation-event dispatcher。
     val navEventOwner = rememberNavigationEventDispatcherOwner(parent = null)
     COUITheme(colors = colors) {
         MaterialTheme(colorScheme = m3FromCoui(colors)) {
-            CompositionLocalProvider(LocalNavigationEventDispatcherOwner provides navEventOwner) {
-                content()
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides navEventOwner,
+                LocalAdminSnackbar provides snackbar,
+            ) {
+                Scaffold(
+                    containerColor = COUITheme.colorScheme.surface,
+                    contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                    snackbarHost = { SnackbarHost(snackbar, modifier = Modifier.padding(bottom = 28.dp)) },
+                ) { _ ->
+                    content()
+                }
             }
         }
     }

@@ -1,6 +1,8 @@
 package com.kewu.recserver.routes
 
 import com.kewu.recserver.RecServicesKey
+import io.ktor.server.websocket.webSocket
+import io.ktor.websocket.close
 import io.ktor.http.ContentType
 import io.ktor.server.request.receive
 import io.ktor.server.response.header
@@ -118,6 +120,20 @@ fun Route.aiRoutes() {
             println("CHAT-VOICE-SIS-ERROR: ${t.message}")
             call.respond(mapOf("url" to url, "text" to "", "error" to "语音识别失败"))
         }
+    }
+
+    // 语音输入实时识别（2026-11-03）：WebSocket，App 发 PCM16/16k 单声道二进制帧、说完发 "END"，
+    // 服务端中转华为云 SIS 实时识别，回 {"type":"text","text":已识别全文} … {"type":"done"}（协议见 SisRealtimeService）。
+    // 鉴权：Authorization: Bearer <登录 token>（或 ?token=），防止被当成免费语音接口
+    webSocket("/api/ai/voice/stream") {
+        val token = call.request.headers["Authorization"]?.removePrefix("Bearer ")?.trim()
+            ?: call.request.queryParameters["token"]
+        if (token.isNullOrBlank() || com.kewu.security.JwtConfig.verifyToken(token) == null) {
+            send(io.ktor.websocket.Frame.Text("""{"type":"error","message":"请先登录"}"""))
+            close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "unauthorized"))
+            return@webSocket
+        }
+        com.kewu.recserver.services.SisRealtimeService.relay(this)
     }
 
     // 课堂转写总结：POST /api/ai/summarize  { "transcript": "..." } -> { "summary": "..." }

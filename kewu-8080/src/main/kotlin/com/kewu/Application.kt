@@ -4,6 +4,7 @@ import com.kewu.db.DatabaseFactory
 import com.kewu.plugins.*
 import com.kewu.recserver.installRecServices
 import io.ktor.server.application.Application
+import io.ktor.server.application.install
 import io.ktor.server.engine.embeddedServer
 import io.ktor.server.netty.Netty
 
@@ -25,5 +26,11 @@ fun Application.module() {
     configureCors()
     configureAuthentication()
     configureCallLogging()
+    // WebSocket：App 语音输入实时识别（/api/ai/voice/stream，2026-11-03）
+    install(io.ktor.server.websocket.WebSockets) {
+        pingPeriodMillis = 20_000
+        timeoutMillis = 60_000
+        maxFrameSize = 1L shl 20
+    }
     configureRouting()
 }

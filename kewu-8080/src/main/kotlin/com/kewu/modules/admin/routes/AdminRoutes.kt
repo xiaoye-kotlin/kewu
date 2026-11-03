@@ -1,6 +1,9 @@
 package com.kewu.modules.admin.routes
 
 import com.kewu.models.ApiResponse
+import com.kewu.infra.SecretStore
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import com.kewu.modules.admin.models.AdminClassStudentRequest
 import com.kewu.modules.admin.models.AdminCreateUserRequest
 import com.kewu.modules.admin.models.AdminResetPasswordRequest
@@ -40,6 +43,53 @@ private suspend fun ApplicationCall.checkAdmin(service: AdminService): Boolean {
 // 总控端路由组：挂载在 /api/admin 下。所有写操作经 checkAdmin 双保险鉴权。
 fun Routing.adminRoutes(service: AdminService) {
     route("/api/admin") {
+
+        // ---------- 云端服务配置（2026-11-03）：SIS / OBS / AI 等密钥只存服务器，总控端在这里改 ----------
+        get("/config") {
+            if (call.checkAdmin(service)) call.respond(ApiResponse(0, "ok", SecretStore.items()))
+        }
+
+        // body {"items":{"KEY":"value"}}；空串 = 删除云端值（回落服务器环境变量 / 默认值）
+        put("/config") {
+            if (call.checkAdmin(service)) {
+                val body = runCatching { call.receive<JsonObject>() }.getOrNull()
+                val items = (body?.get("items") as? JsonObject).orEmpty()
+                    .mapValues { (_, v) -> (v as? JsonPrimitive)?.content.orEmpty() }
+                val changed = SecretStore.set(items)
+                println("ADMIN-CONFIG: updated ${changed.joinToString()}") // 只记键名，不记值
+                val restart = changed.any { SecretStore.isRestartKey(it) }
+                call.respond(ApiResponse(0, if (restart) "已保存，部分配置需重启后端生效" else "已保存并生效", SecretStore.items()))
+            }
+        }
+
+        // 测试连接：body {"group":"AI"|"SIS"|"OBS"} → {ok, message}，用当前生效的配置现连
+        post("/config/test") {
+            if (call.checkAdmin(service)) {
+                val group = runCatching { call.receive<JsonObject>() }.getOrNull()
+                    ?.get("group")?.let { (it as? JsonPrimitive)?.content }.orEmpty().uppercase()
+                val (ok, message) = when (group) {
+                    "AI" -> {
+                        val r = runCatching {
+                            com.kewu.recserver.services.ai.MaasAiService().answer("请只回复两个字：正常", "连通性测试", 64)
+                        }.getOrElse { "（AI 调用异常：${it.message}）" }
+                        if (r.isNotBlank() && !r.startsWith("（AI")) true to "AI 可用：${r.take(30)}" else false to r
+                    }
+                    "SIS" -> com.kewu.recserver.services.SisRealtimeService.probe()
+                    "OBS" -> runCatching {
+                        val obs = com.kewu.recserver.config.loadRecConfig().obs
+                        if (obs.ak.isNullOrBlank() || obs.sk.isNullOrBlank()) {
+                            false to "未配置 OBS 的 AK / SK"
+                        } else {
+                            val c = com.obs.services.ObsClient(obs.ak, obs.sk, com.obs.services.ObsConfiguration().apply { endPoint = obs.endpoint })
+                            val exists = try { c.headBucket(obs.bucket) } finally { runCatching { c.close() } }
+                            if (exists) true to "OBS 桶「${obs.bucket}」可访问" else false to "桶「${obs.bucket}」不存在或无权限"
+                        }
+                    }.getOrElse { false to ("OBS 连接失败：" + (it.message ?: it.javaClass.simpleName).take(120)) }
+                    else -> false to "未知分组"
+                }
+                call.respond(ApiResponse(0, "ok", SecretStore.TestResult(ok, message)))
+            }
+        }
 
         // ---------- 概览 / 系统（§5.1） ----------
         get("/overview") {

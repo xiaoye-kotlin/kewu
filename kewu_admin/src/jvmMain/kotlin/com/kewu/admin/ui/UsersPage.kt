@@ -12,14 +12,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -198,9 +193,9 @@ private fun UserEditorDialog(
         text = {
             Column {
                 if (user == null) {
-                    OutlinedTextField(username, { username = it }, label = { Text("账号") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(username, { username = it }, label = "账号", singleLine = true, modifier = Modifier.fillMaxWidth())
                     Spacer(Modifier.height(10.dp))
-                    OutlinedTextField(password, { password = it }, label = { Text("初始密码（至少 6 位）") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(password, { password = it }, label = "初始密码（至少 6 位）", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                 } else {
                     Text("${user.str("username")} · ${user.str("id")}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
                     detail?.let { raw ->
@@ -213,7 +208,7 @@ private fun UserEditorDialog(
                     }
                 }
                 Spacer(Modifier.height(10.dp))
-                OutlinedTextField(nickname, { nickname = it }, label = { Text("昵称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(nickname, { nickname = it }, label = "昵称", singleLine = true, modifier = Modifier.fillMaxWidth())
                 Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OptionSelector(role, listOf("STUDENT" to "学生", "TEACHER" to "教师", "ADMIN" to "管理员")) { role = it }
                     if (user != null) OptionSelector(status, listOf("active" to "正常", "disabled" to "已禁用")) { status = it }
@@ -243,7 +238,7 @@ private fun ResetPasswordDialog(working: Boolean, onDismiss: () -> Unit, onSubmi
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("重置密码") },
-        text = { OutlinedTextField(password, { password = it }, label = { Text("新密码（至少 6 位）") }, singleLine = true, visualTransformation = PasswordVisualTransformation()) },
+        text = { OutlinedTextField(password, { password = it }, label = "新密码（至少 6 位）", singleLine = true, visualTransformation = PasswordVisualTransformation()) },
         confirmButton = { Button(enabled = password.length >= 6 && !working, onClick = { onSubmit(password) }) { Text("确认重置") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )

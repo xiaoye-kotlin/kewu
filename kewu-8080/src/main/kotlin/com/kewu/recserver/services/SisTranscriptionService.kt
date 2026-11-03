@@ -40,7 +40,10 @@ import java.time.format.DateTimeFormatter
 //   - Ktor Client 遇 4xx/5xx 抛 ResponseException，已 try-catch 并打印 e.response 内容；
 //   - 单次请求 30s 超时，防 SIS 卡死；
 //   - 失败/超时绝不抛 500 崩溃，而是抛明确的 TranscriptionException，交给路由层兜底。
-class SisTranscriptionService(private val cfg: SisConfig) {
+class SisTranscriptionService(@Suppress("unused") private val initial: SisConfig) {
+    // 每次现读（2026-11-03 总控端可在线改 SIS 密钥）
+    private val cfg: SisConfig get() = com.kewu.recserver.config.loadSisConfig()
+
 
     private val log = LoggerFactory.getLogger(SisTranscriptionService::class.java)
 

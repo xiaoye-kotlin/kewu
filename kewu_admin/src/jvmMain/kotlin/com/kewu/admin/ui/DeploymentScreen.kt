@@ -19,15 +19,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudSync
 import androidx.compose.material.icons.outlined.SkipNext
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.Icon
+import io.github.suqi8.coui.kmp.basic.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import io.github.suqi8.coui.kmp.basic.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +36,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.kewu.admin.DeploymentService
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
@@ -54,25 +49,14 @@ fun DeploymentGate(onFinished: () -> Unit) {
     val cs = COUITheme.colorScheme
     val backdrop = rememberAdminGlassBackdrop()
     Box(Modifier.fillMaxSize()) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .layerBackdrop(backdrop)
-                .background(cs.surface)
-                .drawBehind {
-                    val w = this.size.width
-                    val h = this.size.height
-                    val minD = minOf(w, h)
-                    drawCircle(KewuBlue.copy(alpha = 0.15f), minD * 0.45f, Offset(w * 0.12f, h * 0.18f))
-                    drawCircle(KewuGreen.copy(alpha = 0.13f), minD * 0.40f, Offset(w * 0.90f, h * 0.78f))
-                },
-        )
+        AdminBackdropLayer(backdrop, strength = 1.25f)
+        val p = rememberEnterProgress(0, baseDelayMs = 60L)
         AdminGlassCard(
             backdrop = backdrop,
-            modifier = Modifier.width(880.dp).heightIn(max = 760.dp).align(Alignment.Center),
+            modifier = Modifier.width(880.dp).heightIn(max = 760.dp).align(Alignment.Center).glassEnter(p, 40f),
             shape = RoundedCornerShape(30.dp),
-            blurRadius = 28.dp,
-            tintAlpha = 0.44f,
+            blurRadius = glassCondenseBlur(p, 28f),
+            tintAlpha = 0.44f * p.coerceIn(0f, 1f),
         ) {
             DeploymentContent(
                 compact = false,
@@ -89,7 +73,7 @@ fun DeploymentDialog(onClose: () -> Unit) {
     var canClose by remember { mutableStateOf(true) }
     AlertDialog(
         onDismissRequest = { },
-        title = { Text("一键部署后端服务") },
+        title = { Text("一键部署后端服务", fontSize = 19.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Box(Modifier.width(760.dp).heightIn(max = 620.dp)) {
                 DeploymentContent(
@@ -100,7 +84,7 @@ fun DeploymentDialog(onClose: () -> Unit) {
                 )
             }
         },
-        confirmButton = { TextButton(onClick = onClose, enabled = canClose) { Text("关闭") } },
+        confirmButton = { AdminButton("关闭", onClose, style = AdminButtonStyle.Secondary, enabled = canClose) },
     )
 }
 
@@ -189,7 +173,7 @@ private fun DeploymentContent(
             value = serverRoot,
             onValueChange = { serverRoot = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("服务器后端目录") },
+            label = "服务器后端目录",
             singleLine = true,
             enabled = !deploying,
         )
@@ -198,7 +182,7 @@ private fun DeploymentContent(
             value = zipUrl,
             onValueChange = { zipUrl = it },
             modifier = Modifier.fillMaxWidth(),
-            label = { Text("后端源码 ZIP 地址") },
+            label = "后端源码 ZIP 地址",
             singleLine = true,
             enabled = !deploying,
         )
@@ -210,23 +194,20 @@ private fun DeploymentContent(
         )
         Spacer(Modifier.height(14.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(
-                onClick = ::startDeployment,
-                enabled = !deploying,
-                modifier = Modifier.height(46.dp),
-                shape = RoundedCornerShape(13.dp),
-            ) {
-                if (deploying) CircularProgressIndicator(Modifier.width(18.dp).height(18.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Outlined.CloudSync, null)
-                Spacer(Modifier.width(8.dp))
-                Text(if (deploying) "部署中…" else "开始一键部署")
-            }
+            AdminButton(
+                if (deploying) "部署中…" else "开始一键部署",
+                ::startDeployment,
+                icon = Icons.Outlined.CloudSync,
+                loading = deploying,
+            )
             Spacer(Modifier.width(10.dp))
-            OutlinedButton(onClick = onSkip, enabled = !deploying, modifier = Modifier.height(46.dp), shape = RoundedCornerShape(13.dp)) {
-                Icon(Icons.Outlined.SkipNext, null)
-                Spacer(Modifier.width(6.dp))
-                Text("跳过，进入管理界面")
-            }
+            AdminButton(
+                "跳过，进入管理界面",
+                onSkip,
+                icon = Icons.Outlined.SkipNext,
+                style = AdminButtonStyle.Secondary,
+                enabled = !deploying,
+            )
             if (success) {
                 Spacer(Modifier.width(10.dp))
                 StatusPill("部署完成", StatusTone.SUCCESS)

@@ -54,7 +54,7 @@ class ClassEndService(private val services: RecServices) {
         @Volatile var onUpload: ((String) -> Unit)? = null
 
         /** 单节课最多转写几份录音（SIS 按时长计费）。环境变量 KEWU_ASR_MAX 可调。 */
-        val asrMax: Int = System.getenv("KEWU_ASR_MAX")?.toIntOrNull()?.coerceIn(1, 60) ?: 12
+        val asrMax: Int = com.kewu.infra.SecretStore.get("KEWU_ASR_MAX")?.toIntOrNull()?.coerceIn(1, 60) ?: 12
 
         fun sessionRecordings(sessionId: String): List<SessionRecordingView> = transaction {
             // 转写表读失败（老库缺表 / 列）不拖垮整页：录音照常列出，只是没有转写与专注结论

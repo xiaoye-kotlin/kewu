@@ -16,9 +16,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AdminPanelSettings
-import androidx.compose.material3.Icon
+import io.github.suqi8.coui.kmp.basic.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
+import io.github.suqi8.coui.kmp.basic.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +27,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -72,31 +73,19 @@ fun LoginScreen(api: AdminApi, onLogin: (AdminSession) -> Unit) {
     val cs = COUITheme.colorScheme
     val backdrop = rememberAdminGlassBackdrop()
     Box(Modifier.fillMaxSize()) {
-        // 被玻璃采样的课悟品牌背景：coui 灰底 + 蓝绿品牌光斑。
-        Box(
-            Modifier
-                .fillMaxSize()
-                .layerBackdrop(backdrop)
-                .background(cs.surface)
-                .drawBehind {
-                    val w = this.size.width
-                    val h = this.size.height
-                    val minD = minOf(w, h)
-                    drawCircle(KewuBlue.copy(alpha = 0.16f), minD * 0.46f, Offset(w * 0.16f, h * 0.16f))
-                    drawCircle(KewuGreen.copy(alpha = 0.14f), minD * 0.42f, Offset(w * 0.86f, h * 0.84f))
-                    drawCircle(KewuBlue.copy(alpha = 0.08f), minD * 0.35f, Offset(w * 0.72f, h * 0.08f))
-                },
-        )
+        // 被玻璃采样的课悟品牌背景：coui 灰底 + 品牌色光（玻璃的兄弟层、位于其后）。
+        AdminBackdropLayer(backdrop, strength = 1.3f)
 
         // 采样层之外的官方范式液态玻璃登录卡。
+        val p = rememberEnterProgress(0, baseDelayMs = 80L)
         AdminGlassCard(
             backdrop = backdrop,
-            modifier = Modifier.width(460.dp).align(Alignment.Center),
+            modifier = Modifier.width(460.dp).align(Alignment.Center).glassEnter(p, 48f),
             shape = RoundedCornerShape(30.dp),
-            blurRadius = 28.dp,
-            tintAlpha = 0.46f,
+            blurRadius = glassCondenseBlur(p, 28f),
+            tintAlpha = 0.46f * p.coerceIn(0f, 1f),
         ) {
-            Column(Modifier.padding(40.dp)) {
+            Column(Modifier.padding(40.dp).alpha(p.coerceIn(0f, 1f))) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
                         Modifier.size(52.dp).background(KewuBlue, RoundedCornerShape(16.dp)),

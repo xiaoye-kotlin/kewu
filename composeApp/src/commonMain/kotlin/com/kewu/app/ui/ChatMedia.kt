@@ -67,6 +67,8 @@ import com.kewu.app.ChatHistory
 import com.kewu.app.HapticKind
 import com.kewu.app.ImageLoader
 import com.kewu.app.KewuGreen
+import com.kewu.app.LiveAudio
+import com.kewu.app.RealtimeAsr
 import com.kewu.app.RecordingManager
 import com.kewu.app.haptic
 import com.kewu.app.platformActivity
@@ -203,6 +205,10 @@ internal fun guessImageMime(path: String): String = when (path.substringAfterLas
 /**
  * 助教语音录制：16kHz 单声道 WAV（与 SIS 一句话识别格式一致）。
  * 课堂录音进行中不抢麦克风；页面销毁时若还在录，停掉并删除文件。
+ *
+ * 2026-11-03 实时转录：平台注册了 [LiveAudio]（Android）时边录边把 PCM 送给 [RealtimeAsr]，
+ * 说话过程中 [liveText] 实时出字，停下后 [lastText] 即最终文字，不再上传文件等转写；
+ * 实时识别连不上时 [lastText] 为 null，调用方退回 `KewuApi.sendChatVoice` 整段上传。
  */
 @Stable
 internal class ChatVoiceRecorder {
@@ -216,16 +222,42 @@ internal class ChatVoiceRecorder {
     var startedAtMs by mutableLongStateOf(0L)
         private set
 
+    private var asr: RealtimeAsr? = null
+    private var live = false
+
+    /** 实时识别出的文字（录音中边说边更新）。 */
+    val liveText: String get() = asr?.text.orEmpty()
+
+    /** 上一次 [stop] 得到的实时识别结果；null = 没走实时识别或识别失败（需上传转写）。 */
+    var lastText: String? = null
+        private set
+
     /** 开始录音；成功返回 null，失败返回原因。 */
     suspend fun start(): String? = lock.withLock {
         if (recording) return@withLock null
         if (RecordingManager.isRecording) return@withLock "正在录课堂录音，暂时不能发语音"
-        val rec = recorder ?: return@withLock "当前设备不支持录音"
+        val rec = recorder ?: if (LiveAudio.start == null) return@withLock "当前设备不支持录音" else null
         if (!awaitPermission()) return@withLock "需要麦克风权限才能发语音"
         val now = nowMs()
+        lastText = null
+        val liveStart = LiveAudio.start
+        if (liveStart != null) {
+            val a = RealtimeAsr()
+            val ok = runCatching { liveStart("${platformCacheDir()}/chatvoice/v_$now.wav") { a.push(it) } }.getOrDefault(false)
+            if (ok) {
+                a.start()
+                asr = a
+                live = true
+                startedAtMs = now
+                recording = true
+                return@withLock null
+            }
+        }
         val out = "${platformCacheDir()}/chatvoice/v_$now.pcm"
-        val ok = runCatching { rec.startRecording(out) }.getOrDefault(false)
+        val fileRec = rec ?: return@withLock "当前设备不支持录音"
+        val ok = runCatching { fileRec.startRecording(out) }.getOrDefault(false)
         if (!ok) return@withLock "无法开始录音（麦克风可能被占用）"
+        live = false
         startedAtMs = now
         recording = true
         null
@@ -236,6 +268,13 @@ internal class ChatVoiceRecorder {
         if (!recording) return@withLock null
         recording = false
         val secs = ((nowMs() - startedAtMs + 400) / 1000).toInt().coerceIn(0, CHAT_VOICE_MAX_SECS)
+        if (live) {
+            val path = runCatching { LiveAudio.stop?.invoke() }.getOrNull()
+            val a = asr
+            asr = null
+            lastText = if (path == null || secs < 1) { a?.cancel(); null } else a?.finish()
+            return@withLock path?.let { it to secs }
+        }
         val path = runCatching { recorder?.stopRecording() }.getOrNull() ?: return@withLock null
         path to secs
     }
@@ -409,6 +448,16 @@ internal fun ChatVoicePanel(
                 Text(
                     if (warn) "还剩 $left 秒" else "点 ✓ 发送",
                     color = if (warn) Color(0xFFF5A623) else cs.onSurfaceSecondary, fontSize = 12.sp,
+                )
+            }
+            // 实时转录：边说边出字（没走实时识别时不显示）
+            val live = recorder.liveText
+            AnimatedVisibility(live.isNotBlank()) {
+                Text(
+                    live,
+                    color = cs.onSurface, fontSize = 14.sp, lineHeight = 20.sp, maxLines = 4,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 )
             }
         }

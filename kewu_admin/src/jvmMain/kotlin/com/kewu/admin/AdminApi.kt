@@ -137,6 +137,29 @@ class AdminApi(
         envelope = false,
     )
 
+    // ───── 密钥与服务配置（全部密钥只存在云端服务器，总控端只能看到打码值） ─────
+
+    suspend fun configItems(): List<ConfigItem> = parseConfigItems(getData("/api/admin/config"))
+
+    /** 只提交改动过的键；值为 "" 表示删除云端覆盖值（回落到服务器环境变量 / 默认值）。返回更新后的完整列表。 */
+    suspend fun saveConfig(changes: Map<String, String>): List<ConfigItem> = parseConfigItems(
+        request(
+            path = "/api/admin/config",
+            method = HttpMethod.Put,
+            body = buildJsonObject {
+                put("items", buildJsonObject { changes.forEach { (key, value) -> put(key, value) } })
+            },
+        ),
+    )
+
+    suspend fun testConfig(group: String): ConfigTestResult = parseConfigTestResult(
+        request(
+            path = "/api/admin/config/test",
+            method = HttpMethod.Post,
+            body = buildJsonObject { put("group", group) },
+        ),
+    )
+
     private suspend fun getData(path: String, params: Map<String, String?> = emptyMap()) =
         request(path, HttpMethod.Get, params = params)
 

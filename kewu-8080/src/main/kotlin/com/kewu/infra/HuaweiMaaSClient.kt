@@ -29,9 +29,10 @@ import org.slf4j.LoggerFactory
 class HuaweiMaaSClient {
     private val log = LoggerFactory.getLogger(HuaweiMaaSClient::class.java)
 
-    private val apiUrl = System.getenv("MAAS_API_URL")?.trim().orEmpty()
-    private val apiKey = System.getenv("MAAS_API_KEY")?.trim().orEmpty()
-    private val modelName = System.getenv("MAAS_MODEL_NAME")?.trim().orEmpty()
+    // 现读（2026-11-03）：总控端改了 AI 配置立即生效
+    private val apiUrl get() = SecretStore.get("MAAS_API_URL")?.trim().orEmpty()
+    private val apiKey get() = SecretStore.get("MAAS_API_KEY")?.trim().orEmpty()
+    private val modelName get() = SecretStore.get("MAAS_MODEL_NAME")?.trim().orEmpty()
 
     private val client = HttpClient(CIO) {
         install(HttpTimeout) {

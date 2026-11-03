@@ -56,6 +56,7 @@ object DatabaseFactory {
         }
         // 2026-10-26 用户要求全部用真实数据：不再灌演示课程 / 作业 / 提交 / 签到（SeedData 保留源码仅供本地开发参考）
         connected = true
+        com.kewu.infra.SecretStore.load() // 总控端写入的云端配置（2026-11-03），要在各服务构建前载入
         ensureAdmin() // 首次启动按 kewu.env 的 ADMIN_ACCOUNT/ADMIN_PASSWORD 建种子管理员（2026-10-28 移植 admin）
     }
 

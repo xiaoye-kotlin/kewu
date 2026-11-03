@@ -564,9 +564,18 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             ask(m.text, m.quote, listOf(url))
         }
     }
-    fun startVoiceJob(m: AiChatMsg) {
+    /** [liveText]：实时转录已得到的文字（2026-11-03），有就直接问 AI、不再上传整段录音转写；重试 / 实时失败时为 null。 */
+    fun startVoiceJob(m: AiChatMsg, liveText: String? = null) {
         ChatMediaHub.run(ChatHistory.KEY_TEACHER) {
             val local = m.voice ?: return@run
+            if (liveText != null) {
+                val text = liveText
+                val done = m.copy(text = text, mediaState = ChatMediaState.DONE, mediaError = null)
+                ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.DONE, voice = local, text = text))
+                ChatMediaHub.persist(ChatHistory.KEY_TEACHER, done)
+                ask(text, null)
+                return@run
+            }
             val r = KewuApi.sendChatVoice(local)
             val text = r.text.trim()
             if (r.url == null || text.isEmpty()) {
@@ -647,7 +656,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                         push(TaMsg(true, emptyList(), id = id, ts = ts, keep = true, media = media))
                         ChatMediaHub.persist(ChatHistory.KEY_TEACHER, media)
                         haptic(HapticKind.Light)
-                        startVoiceJob(media)
+                        startVoiceJob(media, recorder.lastText)
                     }
                 }
             } finally {

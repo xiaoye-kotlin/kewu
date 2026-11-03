@@ -390,9 +390,18 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             askAi(done, listOf(url))
         }
     }
-    fun startVoiceJob(m: ChatMsg) {
+    /** [liveText]：实时转录已得到的文字（2026-11-03），有就直接问 AI、不再上传整段录音转写；重试 / 实时失败时为 null。 */
+    fun startVoiceJob(m: ChatMsg, liveText: String? = null) {
         ChatMediaHub.run(ChatHistory.KEY_STUDENT) {
             val local = m.voice ?: return@run
+            if (liveText != null) {
+                val text = liveText
+                val done = m.copy(text = text, mediaState = ChatMediaState.DONE, mediaError = null)
+                ChatMediaHub.patch(ChatMediaHub.Patch(m.id, ChatMediaState.DONE, voice = local, text = text))
+                ChatMediaHub.persist(ChatHistory.KEY_STUDENT, done)
+                askAi(done, emptyList())
+                return@run
+            }
             val r = com.kewu.app.KewuApi.sendChatVoice(local)
             val text = r.text.trim()
             if (r.url == null || text.isEmpty()) {
@@ -472,7 +481,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                         messages = messages + m
                         ChatMediaHub.persist(ChatHistory.KEY_STUDENT, m)
                         haptic(HapticKind.Light)
-                        startVoiceJob(m)
+                        startVoiceJob(m, recorder.lastText)
                     }
                 }
             } finally {

@@ -197,6 +197,8 @@ class MainActivity : ComponentActivity() {
         window.isNavigationBarContrastEnforced = false
         window.isStatusBarContrastEnforced = false
         registerNotifier()
+        // 语音输入实时识别：边录边送 PCM（2026-11-03）
+        LiveAudioAndroid.register()
         handleNoticeIntent(intent)
         setContent {
             App()

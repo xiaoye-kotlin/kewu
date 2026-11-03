@@ -23,6 +23,8 @@ dependencies {
     implementation("io.ktor:ktor-server-auth-jwt:3.3.3")
     implementation("io.ktor:ktor-server-cors:3.3.3")
     implementation("io.ktor:ktor-server-call-logging:3.3.3")
+    // App 语音输入实时识别中转（2026-11-03）：App ⇄ 服务端 WebSocket ⇄ 华为云 SIS RASR
+    implementation("io.ktor:ktor-server-websockets:3.3.3")
     // 录音存华为云 OBS（原 8081 的依赖，2026-10-26 两个后端合并为一个）
     implementation("com.huaweicloud:esdk-obs-java:3.25.10")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")

@@ -42,45 +42,13 @@ import kotlinx.serialization.json.put
  *      [Json.parseToJsonElement] 解析（与 KewuApi 同款写法）；
  *   3. 所有调用失败返回 null，由调用方降级（本地规则 / 后端规则引擎 / 占位文案），
  *      绝不上抛异常打断 UI；
- *   4. API Key 默认内置（用户 2026-10-24 提供），可用 kv `kewu_ai_key` 覆盖；
- *      长期建议改为业务后端代理转发，避免密钥随 APK 分发。
+ *   4. 2026-11-03 起 App **不内置任何 AI 密钥**：全部走业务后端中转（/api/ai/stream、/api/ai/answer），
+ *      模型地址 / 密钥由总控端「密钥配置」写在云端，改了立即生效，不用发版。
  */
 object AiClient {
 
-    /**
-     * 直连接入点（OpenAI 兼容），按顺序尝试，成功即止。
-     * 1) ModelArts 官方端点（固定配置，见交接文档 26.1）；
-     * 2) 局域网调试代理（kewu_ai_proxy.py，PC 转发；仅开发机网络可达时有效）。
-     * 两者都失败时再走 [RELAY_URL]（8081 业务后端的 MaaS 中转，手机能连上业务后端就能用 AI）。
-     * 可用 kv `kewu_ai_endpoint` 覆盖为单一直连端点（总控端「自定义 AI 模型」预留口）。
-     */
-    private val ENDPOINTS = listOf(
-        "https://api.modelarts-maas.com/v2/chat/completions",
-        "http://192.168.100.104:8377/v2/chat/completions",
-    )
-
-    /**
-     * 兜底中转：8081 `POST /api/ai/answer {question, context}` → `{answer}`（接口文档 10.11.2，
-     * 服务器用自己的环境变量调同一个 MaaS）。部分校园网 / 运营商会拦 api.modelarts-maas.com:443，
-     * 而业务后端 47.99.42.168 是 App 必须能连的，所以把它放在最后兜底（2026-10-26 用户反馈「AI 又不可用」）。
-     */
-    // 2026-10-26 起与业务后端同一端口（8081 已并入 8080）
+    // 兜底中转：非流式 POST /api/ai/answer {question, context} → {answer}（服务器用总控端配置的模型）
     private const val RELAY_URL = "http://47.99.42.168:8080/api/ai/answer"
-
-    private val endpointOverride: String? = kvGet("kewu_ai_endpoint")?.takeIf { it.isNotBlank() }
-
-    private const val MODEL = "openpangu-2.0-flash"
-
-    /** 内置默认 Key（用户提供的 ModelArts MaaS Key）。 */
-    private const val DEFAULT_KEY =
-        "L9rOhF9l7GfmwTGw4yhhzSImYTg5MXE83fApkEfAgznIbkdNMh0t8s9KfdOypVLNlTjdzRfuKr0s4xRoRphroQ"
-
-    /** 运行时 Key：优先 kv 覆盖值，便于不发版换 Key。 */
-    var apiKey: String = kvGet("kewu_ai_key")?.takeIf { it.isNotBlank() } ?: DEFAULT_KEY
-        set(value) {
-            field = value
-            kvSet("kewu_ai_key", value)
-        }
 
     // 共享引擎 + 显式安装 HttpTimeout：Ktor 的 per-request `timeout {}` 必须配合该插件，
     // 否则抛 IllegalArgumentException（2026-10-24 真机踩坑）
@@ -115,14 +83,8 @@ object AiClient {
      * 但回答偏长时适当调大）。
      */
     suspend fun chat(messages: List<Msg>, maxTokens: Int = 4096): String? {
-        val endpoints = endpointOverride?.let { listOf(it) } ?: ENDPOINTS
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-        for (ep in endpoints) {
-            // 5 分钟内连不上过的接入点直接跳过（旧版每次都要白等直连 + 局域网各 8s 握手超时）
-            if ((unreachableUntil[ep] ?: 0L) > now) continue
-            val r = chatOnce(ep, messages, maxTokens)
-            if (r != null) return r
-        }
+        // 流式中转一次性收齐（比非流式接口少一层超时风险）；出题 / 批改等结构化任务保留思考
+        streamOnce(STREAM_RELAY_URL, relayBody(messages, maxTokens, thinking = true), onDelta = {})?.let { return it }
         return relayOnce(messages, maxTokens)
     }
 
@@ -135,35 +97,20 @@ object AiClient {
      * ★ 已经吐出过内容的通道中途断了不再换下一个（避免重复输出），直接返回已收到的部分。
      */
     suspend fun chatStream(messages: List<Msg>, maxTokens: Int = 4096, onDelta: (String) -> Unit): String? {
-        // 带图的对话只走后端中转：服务端取回 OBS 图片交给 DeepSeek 视觉模型；直连端点是纯文字模型
+        // 带图的对话：服务端取回 OBS 图片交给视觉模型
         val hasImages = messages.any { it.images.isNotEmpty() }
-        val endpoints = if (hasImages) emptyList() else endpointOverride?.let { listOf(it) } ?: ENDPOINTS
-        val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
-        for (ep in endpoints) {
-            if ((unreachableUntil[ep] ?: 0L) > now) continue
-            val body = buildJsonObject {
-                put("model", MODEL)
-                put("stream", true)
-                put("max_tokens", maxTokens)
-                // ★ 2026-10-26 实测：openpangu 默认先输出一大段思维链（不计入可见回答），用户要干等 7 秒以上才见第一个字；
-                //   thinking.type=disabled 后首字约 1–2 秒，流式才有「打字」的感觉。对话场景关掉思考。
-                put("thinking", buildJsonObject { put("type", "disabled") })
-                put("messages", msgsJson(messages))
-            }
-            val r = streamOnce(ep, body.toString(), auth = true, onDelta = onDelta)
-            if (r != null) return r
-        }
-        val relayBody = buildJsonObject {
-            put("maxTokens", maxTokens)
-            put("thinking", false)
-            put("messages", msgsJson(messages, withImages = true))
-        }
-        streamOnce(STREAM_RELAY_URL, relayBody.toString(), auth = false, onDelta = onDelta)?.let { return it }
+        // 对话场景关掉思考（openpangu 默认先想一大段，用户干等 7 秒以上才见第一个字）
+        streamOnce(STREAM_RELAY_URL, relayBody(messages, maxTokens, thinking = false), onDelta = onDelta)?.let { return it }
         // 非流式兜底只有文字通道：带图时不能假装看过图
         if (hasImages) return null
-        // 最后兜底：非流式（老后端 / 中转不可用时仍能回答，只是一次性出现）
-        return chat(messages, maxTokens)?.also(onDelta)
+        return relayOnce(messages, maxTokens)?.also(onDelta)
     }
+
+    private fun relayBody(messages: List<Msg>, maxTokens: Int, thinking: Boolean): String = buildJsonObject {
+        put("maxTokens", maxTokens)
+        put("thinking", thinking)
+        put("messages", msgsJson(messages, withImages = true))
+    }.toString()
 
     private fun msgsJson(messages: List<Msg>, withImages: Boolean = false) = buildJsonArray {
         messages.forEach { m ->
@@ -179,11 +126,11 @@ object AiClient {
      * 读一路 SSE：兼容 OpenAI 格式（choices[0].delta.content）与后端中转格式（{"d":…}）。
      * 没吐出任何内容就失败 → 返回 null（换下一个通道）；吐过内容 → 返回已累积文本。
      */
-    private suspend fun streamOnce(url: String, body: String, auth: Boolean, onDelta: (String) -> Unit): String? {
+    private suspend fun streamOnce(url: String, body: String, onDelta: (String) -> Unit): String? {
         val acc = StringBuilder()
         return try {
             client.preparePost(url) {
-                if (auth) header(HttpHeaders.Authorization, "Bearer $apiKey")
+                KewuApi.token?.let { header(HttpHeaders.Authorization, "Bearer $it") }
                 header(HttpHeaders.Accept, "text/event-stream")
                 contentType(ContentType.Application.Json)
                 timeout {
@@ -255,6 +202,7 @@ object AiClient {
             appendLine("（以上是你的身份设定与之前的对话，请据此直接回答最新的问题，不要局限于课堂内容。）")
         }
         val resp = client.post(RELAY_URL) {
+            KewuApi.token?.let { header(HttpHeaders.Authorization, "Bearer $it") }
             contentType(ContentType.Application.Json)
             timeout { requestTimeoutMillis = 180_000 }
             setBody(buildJsonObject {
@@ -275,62 +223,6 @@ object AiClient {
         throw e
     } catch (e: Exception) {
         logErr("relay", e)
-        null
-    }
-
-    private suspend fun chatOnce(endpoint: String, messages: List<Msg>, maxTokens: Int): String? = try {
-        val body = buildJsonObject {
-            put("model", MODEL)
-            put("stream", false)
-            put("max_tokens", maxTokens)
-            put("messages", buildJsonArray {
-                messages.forEach { m ->
-                    add(buildJsonObject {
-                        put("role", m.role)
-                        put("content", m.content)
-                    })
-                }
-            })
-        }
-        val resp = client.post(endpoint) {
-            header(HttpHeaders.Authorization, "Bearer $apiKey")
-            contentType(ContentType.Application.Json)
-            // 大模型推理耗时远长于业务接口，单请求超时放宽到 120s
-            // 直连握手 8s 就放弃：被网络拦截时尽快落到下一个接入点，不让用户干等
-            timeout {
-                requestTimeoutMillis = 120_000
-                connectTimeoutMillis = 8_000
-            }
-            setBody(body.toString())
-        }
-        val bodyText = resp.bodyAsText()
-        if (resp.status.value !in 200..299) {
-            lastError = "HTTP ${resp.status.value} @ $endpoint: ${bodyText.take(200)}"
-            println("[AiClient] $lastError")
-            return null
-        }
-        println("[AiClient] chat HTTP ok, ${bodyText.length} chars")
-        val root = json.parseToJsonElement(bodyText).jsonObject
-        val content = root["choices"]?.jsonArray?.firstOrNull()?.jsonObject
-            ?.get("message")?.jsonObject?.get("content")?.jsonPrimitive?.content
-            ?.trim()?.takeIf { it.isNotEmpty() }
-        if (content == null) {
-            lastError = "empty content in: ${bodyText.take(200)}"
-            println("[AiClient] empty content")
-        } else {
-            lastError = null
-        }
-        content
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        logErr("chat", e)
-        // 只有「连不上」（连接被拒 / 握手超时 / DNS 失败）才 5 分钟内跳过这个接入点；
-        // 读超时等「连上了但慢」的错误不算，避免把可用的直连误判掉
-        val name = e::class.simpleName.orEmpty()
-        if (name.contains("Connect") || name.contains("UnknownHost") || name.contains("NoRouteToHost")) {
-            unreachableUntil[endpoint] = kotlin.time.Clock.System.now().toEpochMilliseconds() + 5 * 60_000L
-        }
         null
     }
 

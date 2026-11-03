@@ -11,14 +11,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Refresh
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -194,9 +189,9 @@ private fun ReviewDialog(submission: JsonObject, onDismiss: () -> Unit, onSubmit
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("提交 ${submission.str("id")} · v${submission.long("version", 1)}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedTextField(score, { score = it.filter(Char::isDigit) }, label = { Text("分数") }, singleLine = true)
-                OutlinedTextField(comment, { comment = it }, label = { Text("评语") }, minLines = 3)
-                OutlinedTextField(reviewer, { reviewer = it }, label = { Text("批阅人") }, singleLine = true)
+                OutlinedTextField(score, { score = it.filter(Char::isDigit) }, label = "分数", singleLine = true)
+                OutlinedTextField(comment, { comment = it }, label = "评语", minLines = 3)
+                OutlinedTextField(reviewer, { reviewer = it }, label = "批阅人", singleLine = true)
                 OptionSelector(action, listOf("ACCEPT" to "定分并完成批阅", "RETURN" to "打回重做")) { action = it }
             }
         },

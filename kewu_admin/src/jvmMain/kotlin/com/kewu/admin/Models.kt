@@ -154,3 +154,76 @@ private fun obsObjectUrl(bucketUrl: String, key: String): String {
     }
     return "$base/$encodedKey"
 }
+
+// ───────────────────────── 密钥与服务配置（/api/admin/config） ─────────────────────────
+
+/**
+ * 一条云端配置项。[value] 对 secret 项是后端打码后的值（如 `AKx***9Q`），永远拿不到明文；
+ * [source]：db = 云端覆盖值，env = 服务器环境变量，default = 内置默认，unset = 未设置。
+ * [restart] = true 表示修改后需重启后端才生效，false = 即时生效。
+ */
+data class ConfigItem(
+    val key: String,
+    val group: String,
+    val label: String,
+    val secret: Boolean,
+    val value: String,
+    val source: String,
+    val restart: Boolean,
+    val hint: String,
+)
+
+data class ConfigTestResult(val ok: Boolean, val message: String)
+
+private fun JsonObject.flag(key: String, fallback: Boolean): Boolean {
+    val primitive = this[key] as? JsonPrimitive ?: return fallback
+    if (primitive is JsonNull) return fallback
+    return primitive.booleanOrNull ?: when (primitive.content.lowercase()) {
+        "true", "1", "yes" -> true
+        "false", "0", "no" -> false
+        else -> fallback
+    }
+}
+
+fun parseConfigItems(data: JsonElement?): List<ConfigItem> = data.asObjectList().mapNotNull { o ->
+    val key = o.str("key", "")
+    if (key.isBlank()) return@mapNotNull null
+    ConfigItem(
+        key = key,
+        group = o.str("group", "OTHER").uppercase(),
+        label = o.str("label", key),
+        secret = o.flag("secret", false),
+        value = o.str("value", ""),
+        source = o.str("source", "unset").lowercase(),
+        // 字段缺失时按「需重启」处理，宁可多提示一次
+        restart = o.flag("restart", true),
+        hint = o.str("hint", ""),
+    )
+}
+
+fun parseConfigTestResult(data: JsonElement?): ConfigTestResult {
+    val o = data as? JsonObject ?: return ConfigTestResult(false, "测试响应格式异常")
+    val ok = o.flag("ok", false)
+    return ConfigTestResult(ok, o.str("message", if (ok) "连接正常" else "连接失败"))
+}
+
+/** 分组中文名（未知分组原样显示）。 */
+fun configGroupLabel(group: String): String = when (group.uppercase()) {
+    "AI" -> "AI 大模型"
+    "SIS" -> "华为云 SIS 语音识别"
+    "OBS" -> "华为云 OBS 存储"
+    "REDIS" -> "Redis"
+    "OTHER" -> "其他"
+    else -> group
+}
+
+/** 支持「测试连接」的分组。 */
+fun configGroupTestable(group: String): Boolean = group.uppercase() in setOf("AI", "SIS", "OBS")
+
+fun configSourceLabel(source: String): String = when (source.lowercase()) {
+    "db" -> "云端配置"
+    "env" -> "服务器环境变量"
+    "default" -> "内置默认值"
+    "unset" -> "未设置"
+    else -> source
+}

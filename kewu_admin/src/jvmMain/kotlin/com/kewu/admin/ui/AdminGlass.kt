@@ -4,7 +4,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,6 +23,13 @@ import io.github.suqi8.coui.kmp.blur.highlight.LightSource
 import io.github.suqi8.coui.kmp.blur.isRuntimeShaderSupported
 import io.github.suqi8.coui.kmp.blur.rememberLayerBackdrop
 import io.github.suqi8.coui.kmp.blur.runtimeShaderEffect
+import io.github.suqi8.coui.kmp.blur.layerBackdrop
+import io.github.suqi8.coui.kmp.theme.COUITheme
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 
 /**
  * 总控端液态玻璃卡，和学生端 / 教师端 [KewuGlassCard] 使用同一官方 coui 范式：
@@ -43,8 +49,7 @@ fun AdminGlassCard(
     onClick: (() -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
-    val cs = MaterialTheme.colorScheme
-    val isDark = !cs.background.isAdminLight()
+    val isDark = !COUITheme.colorScheme.surface.isAdminLight()
     val blurPx = blurRadius.value * LocalDensity.current.density
     val refractPx = (blurRadius.value * 0.85f).dp
     val h = highlight ?: defaultAdminHighlight(isDark)
@@ -95,6 +100,27 @@ fun defaultAdminHighlight(isDark: Boolean): Highlight = Highlight(
         dualPeak = true,
     ),
 )
+
+/**
+ * 玻璃采样层：coui 灰底 + 三团柔和品牌色光（学生端 StudyLabPage 同款），让液态玻璃有东西可折射。
+ * ★ 必须作为玻璃的「兄弟层、位于其后」，不能是玻璃的祖先。
+ */
+@Composable
+fun AdminBackdropLayer(backdrop: LayerBackdrop, modifier: Modifier = Modifier, strength: Float = 1f) {
+    val cs = COUITheme.colorScheme
+    Box(modifier.fillMaxSize().layerBackdrop(backdrop).background(cs.surface)) {
+        Canvas(Modifier.fillMaxSize()) {
+            fun glow(c: Color, x: Float, y: Float, r: Float) {
+                val center = Offset(size.width * x, size.height * y)
+                val radius = size.maxDimension * r
+                drawCircle(Brush.radialGradient(listOf(c, Color.Transparent), center, radius), radius, center)
+            }
+            glow(KewuBlue.copy(alpha = 0.18f * strength), 0.06f, 0.08f, 0.55f)
+            glow(KewuGreen.copy(alpha = 0.13f * strength), 0.98f, 0.46f, 0.48f)
+            glow(Color(0xFFF5A623).copy(alpha = 0.09f * strength), 0.22f, 0.96f, 0.45f)
+        }
+    }
+}
 
 /** 创建总控端玻璃采样层。 */
 @Composable

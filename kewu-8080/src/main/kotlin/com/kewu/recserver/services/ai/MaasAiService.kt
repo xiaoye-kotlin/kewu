@@ -31,9 +31,10 @@ class MaasAiService : AiService {
 
     private val log = LoggerFactory.getLogger(MaasAiService::class.java)
 
-    private val apiUrl: String = env("MAAS_API_URL")
-    private val apiKey: String = env("MAAS_API_KEY")
-    private val modelName: String = env("MAAS_MODEL_NAME")
+    // 现读（2026-11-03）：总控端改了 AI 配置立即生效
+    private val apiUrl: String get() = env("MAAS_API_URL")
+    private val apiKey: String get() = env("MAAS_API_KEY")
+    private val modelName: String get() = env("MAAS_MODEL_NAME")
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(20))
@@ -332,7 +333,7 @@ class MaasAiService : AiService {
         return t.trim()
     }
 
-    private fun env(name: String): String = System.getenv(name)?.trim().orEmpty()
+    private fun env(name: String): String = com.kewu.infra.SecretStore.get(name)?.trim().orEmpty()
 
     private fun missingConfig(): String? {
         val missing = buildList {
