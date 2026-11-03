@@ -1628,7 +1628,11 @@ private fun ColumnScope.TeacherCardSheetContent(course: CourseInfo, close: () ->
     Spacer(Modifier.height(10.dp))
     KewuCardGroup {
         c.school?.takeIf { it.isNotBlank() }?.let { BasicComponent(title = "学校", summary = it, startAction = { IconBadge(COUIIcons.Home, AccentGreen) }) }
-        BasicComponent(title = "电话", summary = c.phone?.ifBlank { null } ?: "未公开", startAction = { IconBadge(COUIIcons.Phone, AccentOrange) })
+        BasicComponent(
+            title = "电话", summary = c.phone?.ifBlank { null } ?: "未公开",
+            startAction = { IconBadge(COUIIcons.Phone, AccentOrange) },
+            endActions = { DialButton(c.phone) }, // 电话旁边一键拨号（2026-11-03）
+        )
         c.email?.takeIf { it.isNotBlank() }?.let { BasicComponent(title = "邮箱", summary = it, startAction = { IconBadge(COUIIcons.Email, KewuSky) }) }
         c.bio?.takeIf { it.isNotBlank() }?.let { BasicComponent(title = "简介", summary = it, startAction = { IconBadge(COUIIcons.Edit, AccentPurple) }) }
     }

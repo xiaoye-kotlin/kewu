@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,6 +135,8 @@ fun NotificationSheet(
     val cs = COUITheme.colorScheme
     // 只在打开时读一次（旧版每次重组都读 kv + 解析 JSON，弹窗没打开也在读）
     val list = remember(show) { Notifications.load() } // 打开 / 关闭时各读一次，退场动画期间列表不清空
+    // 2026-11-03：一打开就全部已读——铃铛红点立刻消失；弹窗里仍按打开前的快照标出哪些是新的
+    LaunchedEffect(show) { if (show) Notifications.markAllRead() }
     OverlayDialog(
         show = show,
         title = "通知",
@@ -157,7 +160,7 @@ fun NotificationSheet(
                 contentPadding = PaddingValues(bottom = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                items(list.distinctBy { it.id }, key = { it.id }) { n -> NotificationRow(n, onOpenClassNote) }
+                items(list.distinctBy { it.id }, key = { it.id }) { n -> NotificationRow(n, onOpenClassNote, onDismiss) }
             }
         }
     }
@@ -167,6 +170,7 @@ fun NotificationSheet(
 private fun NotificationRow(
     n: Notifications.Info,
     onOpenClassNote: ((ClassNoteTarget) -> Unit)?,
+    onDismiss: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val (label, tint) = typeMeta(n.type)
@@ -176,7 +180,17 @@ private fun NotificationRow(
             KewuApi.classNoteTargetFromNotificationId(n.id)
         else null
     }
+    // B 站视频总结完成：回到该视频（播放页里可直接问小悟）
+    val biliVideo = remember(n.id) {
+        if (n.type == Notifications.TYPE_BILI_NOTE) com.kewu.app.BiliNoteWatcher.bvidOf(n.id)?.let { com.kewu.app.BiliNoteWatcher.video(it) } else null
+    }
     val open: (() -> Unit)? = noteTarget?.let { t -> { haptic(HapticKind.Tick); onOpenClassNote?.invoke(t) } }
+        ?: biliVideo?.let { v -> { haptic(HapticKind.Tick); onDismiss(); VideoPlayerHub.current = v } }
+    val action = when {
+        noteTarget != null -> "查看纪要"
+        biliVideo != null -> "回到视频"
+        else -> null
+    }
     Card(
         modifier = Modifier.fillMaxWidth(),
         cornerRadius = 16.dp,
@@ -220,9 +234,9 @@ private fun NotificationRow(
                 // 纪要全文去详情页看，这里只给一句话
                 val body = if (n.type == Notifications.TYPE_RECORDING_DONE) "课堂纪要已生成" else n.body
                 Text(body, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (open != null) {
+                if (open != null && action != null) {
                     Spacer(Modifier.height(10.dp))
-                    KewuSecondaryButton("查看纪要", open, Modifier.fillMaxWidth())
+                    KewuSecondaryButton(action, open, Modifier.fillMaxWidth())
                 }
             }
         }
@@ -233,7 +247,8 @@ private fun NotificationRow(
 private fun typeMeta(type: String): Pair<String, Color> = when (type) {
     Notifications.TYPE_NEW_ASSIGNMENT -> "新作业" to KewuBlue
     Notifications.TYPE_RECORDING_DONE -> "录音转写" to KewuGreen
-    Notifications.TYPE_GRADE_PUBLISHED -> "成绩" to Color(0xFFFF9500)
+    Notifications.TYPE_GRADE_PUBLISHED -> "作业批改" to Color(0xFFFF9500)
+    Notifications.TYPE_BILI_NOTE -> "视频总结" to Color(0xFFFB7299)
     Notifications.TYPE_COURSE_REMINDER -> "上课提醒" to KewuBlue
     Notifications.TYPE_NEW_SUBMISSION -> "新提交" to KewuBlue
     Notifications.TYPE_STUDENT_QUESTION -> "学生提问" to KewuGreen

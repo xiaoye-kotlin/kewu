@@ -117,6 +117,9 @@ import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import com.kewu.app.Notifications
+import com.kewu.app.NoticeCenter
+import com.kewu.app.SystemNotifier
+import com.kewu.app.BiliNoteWatcher
 import com.kewu.app.currentRole
 import com.kewu.app.ui.NotificationBellButton
 import com.kewu.app.ui.NotificationSheet
@@ -560,17 +563,29 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     var showNotif by remember { mutableStateOf(false) }
     var notifUnread by remember { mutableStateOf(0) }
     val notifSnackbar = LocalKewuSnackbar.current
+    // 2026-11-03：轮询改由进程级 NoticeCenter 负责（不依赖本页开着）；这里只显示未读数、前台新通知提示、
+    // 以及处理「点系统通知进入 App」的跳转
+    val notifUnreadFlow by Notifications.unread.collectAsState()
+    LaunchedEffect(notifUnreadFlow) { notifUnread = notifUnreadFlow }
     LaunchedEffect(Unit) {
-        // 2026-10-26：不再种入演示通知（「张三」「成绩已公布」等虚构数据会误导用户），后端通知接口上线前显示空态
-        notifUnread = Notifications.unreadCount()
-        // 2026-10-27：课堂纪要生成后写通知（首页在前台时每分钟查一次）
-        while (true) {
-            runCatching { Notifications.pollClassNotes() }.getOrNull()?.firstOrNull()?.let {
-                haptic(HapticKind.Light)
-                notifSnackbar.toast(it + "，点右上角铃铛查看")
-            }
-            notifUnread = Notifications.unreadCount()
-            kotlinx.coroutines.delay(60_000)
+        Notifications.refreshUnread()
+        NoticeCenter.incoming.collect {
+            haptic(HapticKind.Light)
+            notifSnackbar.toast(it.title + "，点右上角铃铛查看")
+        }
+    }
+    val openedNotice by SystemNotifier.opened.collectAsState()
+    LaunchedEffect(openedNotice) {
+        val id = openedNotice ?: return@LaunchedEffect
+        kotlinx.coroutines.delay(200) // 让主界面先切回首页 tab
+        SystemNotifier.opened.value = null
+        Notifications.markRead(id)
+        val note = KewuApi.classNoteTargetFromNotificationId(id)
+        val bili = BiliNoteWatcher.bvidOf(id)?.let { BiliNoteWatcher.video(it) }
+        when {
+            note != null -> { classNoteTarget = note; drill = ClassroomDrill.CLASS_NOTE }
+            bili != null -> com.kewu.app.ui.VideoPlayerHub.current = bili
+            else -> showNotif = true
         }
     }
 
@@ -781,12 +796,8 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
         }
         NotificationSheet(show = showNotif, onDismiss = {
             showNotif = false
-            Notifications.markAllRead()
-            notifUnread = 0
         }, onOpenClassNote = { target ->
             showNotif = false
-            Notifications.markAllRead()
-            notifUnread = 0
             classNoteTarget = target
             drill = ClassroomDrill.CLASS_NOTE
         })

@@ -287,7 +287,13 @@ fun ClassNoteDetailScreen(
                         if (c.phone.isNullOrBlank() && c.email.isNullOrBlank()) {
                             Text("教师未公开联系方式", color = cs.onSurfaceSecondary, fontSize = 13.sp)
                         } else {
-                            if (!c.phone.isNullOrBlank()) NoteMetaLine("电话", c.phone)
+                            if (!c.phone.isNullOrBlank()) {
+                                // 电话 + 一键拨号（与「我的 → 课程」老师名片一致）
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Box(Modifier.weight(1f)) { NoteMetaLine("电话", c.phone) }
+                                    DialButton(c.phone)
+                                }
+                            }
                             if (!c.email.isNullOrBlank()) NoteMetaLine("邮箱", c.email)
                         }
                     }

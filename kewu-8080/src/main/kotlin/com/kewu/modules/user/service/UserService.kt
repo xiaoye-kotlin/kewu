@@ -28,7 +28,7 @@ class UserService(private val repository: UserRepository, private val courseRepo
             id = UUID.randomUUID().toString(),
             username = req.username,
             passwordHash = BCrypt.withDefaults().hashToString(12, req.password.toCharArray()),
-            nickname = req.nickname ?: req.username,
+            nickname = req.nickname?.trim()?.ifBlank { null } ?: req.username,
             role = role,
             school = req.school?.trim()?.take(128)?.ifBlank { null }
         )

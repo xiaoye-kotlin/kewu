@@ -263,6 +263,9 @@ fun MainScreen(
         }
         onGoToTab(idx)
     }
+    // 点系统通知进入：先回首页 tab，由首页按通知类型跳到纪要 / 视频 / 通知列表（2026-11-03）
+    val openedNotice by com.kewu.app.SystemNotifier.opened.collectAsState()
+    LaunchedEffect(openedNotice) { if (openedNotice != null && selected != 0) goToTab(0) }
     // 2026-10-24：AI 助教代操作 —— 小悟的导航指令经 AiNav 总线到这里执行切 tab
     LaunchedEffect(Unit) {
         AiNav.studentTab.collect { idx ->

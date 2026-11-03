@@ -524,6 +524,7 @@ private fun LoginButton(
     onDone: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
+    val snackbar = LocalKewuSnackbar.current
     val scope = rememberCoroutineScope()
 
     var state by remember { mutableStateOf(0) } // 0=idle 1=loading 2=success
@@ -564,6 +565,10 @@ private fun LoginButton(
             val idLabel = if (role == 1) "工号" else "学号"
             if (acc.isEmpty()) { onError("请输入${idLabel}"); return@Button }
             if (pwd.length < 6) { onError("密码长度至少 6 位，请重新设置"); return@Button }
+            // 注册要真实姓名：老师据此自动认领「任课老师」写着自己名字的课程，学生据此在班级里显示
+            if (mode != 0 && name.isBlank()) {
+                onError(if (role == 1) "请输入姓名（用于自动关联你任教的课程）" else "请输入姓名"); return@Button
+            }
             state = 1
             scope.launch {
                 // ★ 真实请求：登录 / 注册（注册成功后自动登录拿 token）
@@ -584,6 +589,11 @@ private fun LoginButton(
                 if (msg == null) {
                     // 成功：拉取个人资料（最佳努力，失败不影响进入主界面）
                     KewuApi.me()
+                    // 老师注册：告诉他已自动关联了哪些课（后端按姓名认领课表 / 课程）
+                    if (mode != 0 && role == 1) {
+                        val cs = KewuApi.currentUser?.courses.orEmpty()
+                        if (cs.isNotEmpty()) snackbar.toast("已自动关联你任教的 ${cs.size} 门课程：" + cs.take(3).joinToString("、") { it.name })
+                    }
                     state = 2
                     // ★ 登录成功：线性马达中档震动 + 一次柔光闪（视觉印象）
                     haptic(HapticKind.Medium)

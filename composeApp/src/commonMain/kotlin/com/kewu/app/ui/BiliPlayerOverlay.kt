@@ -120,10 +120,13 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
     var note by remember(video) { mutableStateOf<BiliVideoNote?>(null) }
     // B 站直链带过期参数：重试时按标题重新搜一次、取同一 bvid 的新直链（拿不到就沿用旧的）
     var fresh by remember(video) { mutableStateOf(video) }
+    var fetching by remember(video) { mutableStateOf(video.videoUrl == null) }
     LaunchedEffect(retryToken) {
-        if (retryToken > 0) {
+        // 从通知回来的视频没有直链（早已过期）：进页先按标题重新取一次
+        if (retryToken > 0 || video.videoUrl == null) {
             KewuApi.getBilibiliVideos(video.title.take(30))?.firstOrNull { it.bvid == video.bvid && it.videoUrl != null }
                 ?.let { fresh = it }
+            fetching = false
         }
     }
     val sources = remember(fresh) { DashVideoSources(fresh.title, fresh.cover, fresh.videoUrl, fresh.audioUrl) }
@@ -163,7 +166,11 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                 } else {
                     Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            if (sources.playable) "播放链接已失效，点重试重新获取" else "该视频暂时无法播放",
+                            when {
+                                fetching -> "正在获取播放地址…"
+                                sources.playable -> "播放链接已失效，点重试重新获取"
+                                else -> "该视频暂时无法播放"
+                            },
                             color = Color(0xFFBBBBBB), fontSize = 14.sp,
                         )
                         if (sources.playable) {
@@ -199,7 +206,7 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                             Text(video.bvid, color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
                         }
                     } }
-                    VideoSummaryCard(backdrop, video.bvid, onNote = { note = it }, onAsk = { asking = true })
+                    VideoSummaryCard(backdrop, video, onNote = { note = it }, onAsk = { asking = true })
                     Spacer(Modifier.height(12.dp))
                 }
             }
@@ -214,12 +221,13 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
 @Composable
 private fun VideoSummaryCard(
     backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop,
-    bvid: String,
+    video: BilibiliVideoInfo,
     onNote: (BiliVideoNote) -> Unit,
     onAsk: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val scope = rememberCoroutineScope()
+    val bvid = video.bvid
     var note by remember(bvid) { mutableStateOf<BiliVideoNote?>(null) }
     var loaded by remember(bvid) { mutableStateOf(false) }
     var polling by remember(bvid) { mutableStateOf(false) }
@@ -243,7 +251,14 @@ private fun VideoSummaryCard(
             if (note?.status == "FINISHED" || note?.status == "FAILED") polling = false
         }
     }
-    LaunchedEffect(note?.status) { if (note?.status == "PROCESSING") polling = true }
+    LaunchedEffect(note?.status) {
+        when (note?.status) {
+            // 生成中：交给后台跟踪——用户中途退出也不丢，完成后首页通知（2026-11-03）
+            "PROCESSING" -> { polling = true; com.kewu.app.BiliNoteWatcher.watch(video) }
+            // 就在这页看着它完成了：不用再通知
+            "FINISHED", "FAILED" -> com.kewu.app.BiliNoteWatcher.unwatch(bvid)
+        }
+    }
 
     KewuGlassCard(
         backdrop = backdrop, shape = RoundedCornerShape(22.dp),

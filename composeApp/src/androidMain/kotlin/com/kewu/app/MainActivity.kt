@@ -13,7 +13,11 @@ import androidx.core.content.ContextCompat
 
 class MainActivity : ComponentActivity() {
 
+
     companion object {
+        private const val NOTICE_CHANNEL = "kewu_notice"
+        private const val NOTICE_TAG = "kewu_notice"
+        private const val EXTRA_NOTICE_ID = "kewu_notice_id"
         private var audioPermissionCallback: ((Boolean) -> Unit)? = null
         private var cameraPermissionCallback: ((Boolean) -> Unit)? = null
         private var notificationPermissionCallback: ((Boolean) -> Unit)? = null
@@ -192,9 +196,83 @@ class MainActivity : ComponentActivity() {
         //   显式关掉：系统栏区域只剩 App 自己的 M3 底色（MainScreen 底部 24dp 幕布），全透。
         window.isNavigationBarContrastEnforced = false
         window.isStatusBarContrastEnforced = false
+        registerNotifier()
+        handleNoticeIntent(intent)
         setContent {
             App()
         }
+    }
+
+    // ── 系统通知（2026-11-03）：App 在后台时，课堂纪要 / 作业批改 / 视频总结走系统通知栏 ──
+    private fun registerNotifier() {
+        val ctx = applicationContext
+        val nm = ctx.getSystemService(NOTIFICATION_SERVICE) as android.app.NotificationManager
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                android.app.NotificationChannel(NOTICE_CHANNEL, "课悟通知", android.app.NotificationManager.IMPORTANCE_HIGH).apply {
+                    description = "课堂纪要、作业批改、视频总结等提醒"
+                },
+            )
+        }
+        SystemNotifier.post = post@{ id, title, body ->
+            if (!isNotificationPermissionGranted()) return@post
+            val open = android.content.Intent(ctx, MainActivity::class.java).apply {
+                flags = android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP or android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(EXTRA_NOTICE_ID, id)
+            }
+            val pi = android.app.PendingIntent.getActivity(
+                ctx, id.hashCode(), open,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE,
+            )
+            val builder = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                android.app.Notification.Builder(ctx, NOTICE_CHANNEL)
+            } else {
+                @Suppress("DEPRECATION")
+                android.app.Notification.Builder(ctx).setDefaults(android.app.Notification.DEFAULT_ALL)
+                    .setPriority(android.app.Notification.PRIORITY_HIGH)
+            }
+            val n = builder
+                .setSmallIcon(android.R.drawable.stat_notify_chat)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setStyle(android.app.Notification.BigTextStyle().bigText(body))
+                .setContentIntent(pi)
+                .setAutoCancel(true)
+                .setWhen(System.currentTimeMillis())
+                .build()
+            runCatching { nm.notify(NOTICE_TAG, id.hashCode(), n) }
+        }
+        SystemNotifier.cancelAll = {
+            runCatching { nm.activeNotifications.filter { it.tag == NOTICE_TAG }.forEach { nm.cancel(NOTICE_TAG, it.id) } }
+        }
+        SystemNotifier.playSound = {
+            runCatching {
+                val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+                android.media.RingtoneManager.getRingtone(ctx, uri)?.play()
+            }
+        }
+    }
+
+    /** 从系统通知点进来：把通知 id 交给首页处理跳转。 */
+    private fun handleNoticeIntent(i: android.content.Intent?) {
+        val id = i?.getStringExtra(EXTRA_NOTICE_ID) ?: return
+        i.removeExtra(EXTRA_NOTICE_ID)
+        SystemNotifier.opened.value = id
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleNoticeIntent(intent)
+    }
+
+    override fun onStart() {
+        super.onStart()
+        SystemNotifier.foreground = true
+    }
+
+    override fun onStop() {
+        SystemNotifier.foreground = false
+        super.onStop()
     }
 
     // 2026-10-26：释放静态引用（旧版 appActivity / 各回调从不置空，Activity 销毁后仍被持有）

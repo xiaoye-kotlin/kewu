@@ -72,6 +72,17 @@ fun App() {
                 snackbar.toast(if (KewuApi.kickedByOtherDevice) "账号已在其他设备登录" else "登录已过期，请重新登录")
             }
         }
+        // 通知中心（2026-11-03）：登录后进程级轮询课堂纪要 / 作业批改 / B 站总结，退出登录即停
+        LaunchedEffect(loggedIn, role) {
+            if (loggedIn) NoticeCenter.start(teacher = role == ROLE_TEACHER) else NoticeCenter.stop()
+        }
+        // 系统通知权限（Android 13+）：登录后只主动问一次，之后可在「我的 → 通知设置」里开
+        LaunchedEffect(loggedIn) {
+            if (loggedIn && !isNotificationPermissionGranted() && kvGet("kewu_notif_asked") != "1") {
+                kvSet("kewu_notif_asked", "1")
+                platformActivity()?.let { act -> requestNotificationPermission(act) { } }
+            }
+        }
         // 单设备登录：登录态下每分钟探活一次，被同类设备挤下线时尽快回登录页（2026-11-02）
         LaunchedEffect(loggedIn) {
             while (loggedIn) {

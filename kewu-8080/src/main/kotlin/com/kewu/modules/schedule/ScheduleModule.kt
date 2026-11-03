@@ -217,7 +217,22 @@ object ScheduleService {
             transaction { CourseSchedules.update({ CourseSchedules.id eq sid }) { it[teacherId] = u.id } }
             bindCourse(u.id, cid)
         }
-        return rows.size
+        // 2026-11-03：课程表里「任课老师」写的就是我的名字（管理端 / 种子数据建的课，未必有课表行）→ 直接绑到我名下。
+        // 已被另一位同名老师账号认领的课不抢。
+        val names = listOf(name, u.username).map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        val courseIds = transaction {
+            Courses.selectAll().toList()
+                .filter { r -> r[Courses.teacher].trim() in names }
+                .map { it[Courses.id] }
+                .filter { cid ->
+                    val owners = UserCourses.selectAll().where { UserCourses.courseId eq cid }.map { it[UserCourses.userId] }
+                    owners.none { oid ->
+                        oid != u.id && Users.selectAll().where { Users.id eq oid }.firstOrNull()?.get(Users.role) == "TEACHER"
+                    }
+                }
+        }
+        courseIds.forEach { bindCourse(u.id, it) }
+        return rows.size + courseIds.size
     }
 
     /** 某班课表里出现的全部课程 id（学生加班时一并绑定）。 */
