@@ -51,7 +51,9 @@ try {
     $env:JAVA_HOME = $javaHome
     $env:Path = "$javaHome\bin;$env:Path"
     Push-Location $sourceDir
-    & cmd.exe /c "`"$gradlew`" --no-daemon clean shadowJar"
+    # 命令行 -D 显式锁定服务器 JDK，覆盖仓库 gradle.properties 里可能残留的
+    # org.gradle.java.home（开发机路径在服务器上不存在会导致构建直接失败）。
+    & cmd.exe /c "`"$gradlew`" --no-daemon -Dorg.gradle.java.home=`"$javaHome`" clean shadowJar"
     $buildCode = $LASTEXITCODE
     Pop-Location
     if ($buildCode -ne 0) { throw "Gradle shadowJar failed with exit code $buildCode" }
