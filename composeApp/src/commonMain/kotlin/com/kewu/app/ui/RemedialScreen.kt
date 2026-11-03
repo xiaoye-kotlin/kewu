@@ -196,7 +196,7 @@ internal fun RemedialScreen(assignmentId: String, onBack: () -> Unit) {
                                 }
                             }
                             Spacer(Modifier.height(10.dp))
-                            Text(analysis?.ifEmpty { "小悟正在分析各层的共性问题…" } ?: "", color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
+                            MarkdownText(analysis?.ifEmpty { "小悟正在分析各层的共性问题…" } ?: "", color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
                         }
                     }
                     tiers.filter { it.students.isNotEmpty() }.forEach { t ->

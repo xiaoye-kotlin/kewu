@@ -55,8 +55,11 @@ class ClassEndService(private val services: RecServices) {
         val asrMax: Int = System.getenv("KEWU_ASR_MAX")?.toIntOrNull()?.coerceIn(1, 60) ?: 12
 
         fun sessionRecordings(sessionId: String): List<SessionRecordingView> = transaction {
-            val tr = RecordingTranscripts.selectAll().where { RecordingTranscripts.sessionId eq sessionId }
-                .associateBy { it[RecordingTranscripts.recordingId] }
+            // 转写表读失败（老库缺表 / 列）不拖垮整页：录音照常列出，只是没有转写与专注结论
+            val tr = runCatching {
+                RecordingTranscripts.selectAll().where { RecordingTranscripts.sessionId eq sessionId }
+                    .associateBy { it[RecordingTranscripts.recordingId] }
+            }.onFailure { println("SESSION-RECS-WARN transcripts $sessionId: $it") }.getOrDefault(emptyMap())
             val fromDb = Recordings.selectAll().where { (Recordings.sessionId eq sessionId) and Recordings.deletedAt.isNull() }
                 .orderBy(Recordings.createdAt, SortOrder.ASC)
                 .map { r ->

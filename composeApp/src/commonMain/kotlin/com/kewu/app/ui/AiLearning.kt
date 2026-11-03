@@ -65,7 +65,11 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import com.kewu.app.KnowledgeTagger
 
 /*
  * 学生端 AI 学习中心（2026-10-26，ICT 创新赛 AI 智能体功能）：
@@ -282,19 +286,36 @@ private fun MistakeCard(m: Mistake, onMastered: () -> Unit) {
 
 private data class Mastery(val point: String, val rate: Double, val samples: Int)
 
-/** 按作业知识点统计掌握度（每份已判过的作业的正确率摊到它的每个知识点上）。 */
+/**
+ * 按知识点统计掌握度（2026-11-03 改）：知识点来自 [KnowledgeTagger]（AI 读题目内容识别），不再拿作业标题充数。
+ * 有逐题判定时按题统计（每道题的得分率记到它考查的知识点上）；只有总分时把整份得分率摊到全部知识点上。
+ * 还没识别出知识点的作业先跳过（识别完成后自动刷新）。
+ */
 private fun masteryOf(items: List<AssignmentRepo.Item>): List<Mastery> {
     val acc = mutableMapOf<String, MutableList<Double>>()
     items.forEach { it ->
         val sub = it.mine ?: return@forEach
-        val judged = sub.questionResults.filter { r -> r.correct != null }
+        val a = it.assignment
+        val tags = KnowledgeTagger.cached(a.id)
+        val wholePoints = (tags?.all ?: emptyList()).ifEmpty { a.knowledgePoints.filter { p -> p.isNotBlank() && p != a.title } }
+        if (wholePoints.isEmpty()) return@forEach
+        val judged = sub.questionResults.withIndex().filter { (_, r) -> r.correct != null || r.finalScore != null }
+        if (tags != null && tags.perQuestion.isNotEmpty() && judged.isNotEmpty()) {
+            judged.forEach { (i, r) ->
+                val rate = when {
+                    r.finalScore != null && r.fullScore > 0 -> (r.finalScore / r.fullScore).coerceIn(0.0, 1.0)
+                    else -> if (r.correct == true) 1.0 else 0.0
+                }
+                KnowledgeTagger.pointsOf(tags, a, r.questionId, i).forEach { p -> acc.getOrPut(p) { mutableListOf() } += rate }
+            }
+            return@forEach
+        }
         val rate = when {
-            judged.isNotEmpty() -> judged.count { r -> r.correct == true }.toDouble() / judged.size
-            sub.score != null && it.assignment.totalScore > 0 -> sub.score / it.assignment.totalScore
+            judged.isNotEmpty() -> judged.count { (_, r) -> r.correct == true }.toDouble() / judged.size
+            sub.score != null && a.totalScore > 0 -> sub.score / a.totalScore
             else -> return@forEach
         }
-        val points = it.assignment.knowledgePoints.ifEmpty { listOf(it.assignment.title) }
-        points.forEach { p -> acc.getOrPut(p) { mutableListOf() } += rate }
+        wholePoints.forEach { p -> acc.getOrPut(p) { mutableListOf() } += rate }
     }
     return acc.map { (p, l) -> Mastery(p, l.average(), l.size) }.sortedBy { it.rate }
 }
@@ -328,10 +349,24 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
     var selfVersion by remember { mutableStateOf(0) }
     val selfRates = remember(selfVersion) { MasteryStore.selfRates() }
     val history = remember(selfVersion) { MasteryStore.history() }
-    val mastery = remember(items, selfVersion) {
+    // 作业 → 知识点（AI 识别，按作业缓存）：有新作业就补识别，识别完 tagVersion++ 重算掌握度
+    var tagVersion by remember { mutableStateOf(0) }
+    var tagging by remember { mutableStateOf(false) }
+    LaunchedEffect(items) {
+        val todo = items.orEmpty().filter { it.mine != null && KnowledgeTagger.cached(it.assignment.id) == null }
+        if (todo.isEmpty()) return@LaunchedEffect
+        tagging = true
+        coroutineScope {
+            todo.map { async { KnowledgeTagger.tag(it.assignment) } }.awaitAll()
+        }
+        tagging = false
+        tagVersion++
+    }
+    val mastery = remember(items, selfVersion, tagVersion) {
         masteryOf(items.orEmpty()).map { m ->
             val self = selfRates[m.point] ?: 0
-            MasteryView(m, maxOf((m.rate * 100).toInt(), self), self >= 100)
+            val percent = maxOf((m.rate * 100).toInt(), self).coerceAtMost(100)
+            MasteryView(m, percent, percent >= 100)
         }.sortedWith(compareBy<MasteryView> { it.mastered }.thenBy { it.percent })
     }
     // 2026-11-02 用户口径：薄弱 = 作业正确率 < 60% 且还没自评到 100%；自评到 100% 就从薄弱里减掉
@@ -386,7 +421,8 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
             if (!plan.isNullOrBlank()) kvSet(cacheKey, plan) else plan = "小悟暂时连不上 AI 服务，请稍后重试"
         }
     }
-    LaunchedEffect(schedule) { if (schedule != null && plan == null) generate() }
+    // 等知识点识别完再排计划，计划里写的是具体知识点而不是作业标题
+    LaunchedEffect(schedule, tagging) { if (schedule != null && !tagging && plan == null) generate() }
 
     Box(Modifier.fillMaxSize()) {
         Box(Modifier.matchParentSize().layerBackdrop(pageBackdrop).background(cs.surface))
@@ -407,7 +443,8 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
             KewuCardGroup(Modifier.padding(horizontal = 12.dp)) {
                 Column(Modifier.padding(vertical = 8.dp)) {
                     if (mastery.isEmpty()) Text(
-                        "还没有批改过的作业，交几份作业后这里会画出你的知识画像", color = cs.onSurfaceSecondary, fontSize = 13.sp,
+                        if (tagging) "小悟正在识别作业里的知识点…" else "还没有批改过的作业，交几份作业后这里会画出你的知识画像",
+                        color = cs.onSurfaceSecondary, fontSize = 13.sp,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                     )
                     mastery.take(12).forEach { mv ->

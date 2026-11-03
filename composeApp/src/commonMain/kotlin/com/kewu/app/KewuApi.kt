@@ -1050,10 +1050,10 @@ object KewuApi {
     catch (_: Exception) { null }
 
     /** 教师端：一节课所有端上传的录音 + 课堂专注结论（需教师 token）。失败返回 null。 */
-    suspend fun getSessionRecordings(sessionId: String): List<SessionRecordingInfo>? = try {
+    suspend fun getSessionRecordings(sessionId: String): Result<List<SessionRecordingInfo>> = try {
         val el = getJson("$BASE_URL/api/class-recordings/${pathSegment(sessionId)}/recordings", auth = true)
         el.asDataOrThrow()
-        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
+        Result.success(el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
             SessionRecordingInfo(
                 recordingId = o["recordingId"].str(), role = o["role"].str(),
                 username = o["username"].strOrNull(), name = o["name"].strOrNull(),
@@ -1063,9 +1063,9 @@ object KewuApi {
                 focusVerdict = o["focusVerdict"].strOrNull(), focusEvidence = o["focusEvidence"].strOrNull(),
                 focusConfidence = o["focusConfidence"].strOrNull()?.toDoubleOrNull()?.toInt(),
             )
-        }
+        })
     } catch (e: CancellationException) { throw e }
-    catch (_: Exception) { null }
+    catch (e: Exception) { Result.failure(e) }
 
     /** 任课教师联系方式（需登录且与课程相关；接口未上线 / 403 / 404 / 网络失败均返回 null，UI 显示未公开或暂不可获取）。 */
     suspend fun getTeacherContact(courseId: String): TeacherContactInfo? = try {

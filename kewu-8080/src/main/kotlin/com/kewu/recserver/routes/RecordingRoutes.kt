@@ -184,7 +184,14 @@ fun Route.recordingRoutes() {
                 return@get
             }
             val sid = call.parameters["sessionId"]!!
-            call.respond(com.kewu.models.ApiResponse(0, "ok", com.kewu.recserver.ClassEndService.sessionRecordings(sid)))
+            // 2026-11-03：查询异常也回统一壳 + 具体原因（旧版直接 500，客户端只能显示「加载失败」，看不出原因）
+            val list = runCatching { com.kewu.recserver.ClassEndService.sessionRecordings(sid) }
+                .onFailure { println("SESSION-RECS-ERROR $sid: " + it.stackTraceToString()) }
+                .getOrElse {
+                    call.respond(com.kewu.models.ApiResponse<String>(1, "读取录音失败：${it.message ?: it::class.simpleName}"))
+                    return@get
+                }
+            call.respond(com.kewu.models.ApiResponse(0, "ok", list))
         }
     }
 

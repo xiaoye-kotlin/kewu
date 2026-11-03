@@ -441,7 +441,7 @@ private fun AiWorkSummaryCard(
             when {
                 running -> Text("分析中…", color = KewuBlue, fontSize = 13.5.sp)
                 failed && summary == null -> Text("AI 分析失败，请检查网络后重试", color = cs.error, fontSize = 13.5.sp)
-                summary != null -> Text(summary.orEmpty(), color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp)
+                summary != null -> MarkdownText(summary.orEmpty(), color = cs.onSurface, fontSize = 14.sp, lineHeight = 22.sp)
             }
             Spacer(Modifier.height(12.dp))
             KewuSecondaryButton(

@@ -36,6 +36,13 @@ object AssistantHub {
     /** 教师端「当天简报已播报」标记（存当天 00:00 的 epoch ms），由助教页写、这里读来算红点。 */
     const val KEY_TA_BRIEF_DAY = "kewu_ta_brief_day"
 
+    /**
+     * 教师端「今天已进过助教页」标记（当天 00:00 的 epoch ms）。2026-11-03：红点的「简报 3 条」改看这个，
+     * 进页即写；旧版看 [KEY_TA_BRIEF_DAY]，而它要等助教页一串网络请求（课程/作业/签到…）都回来才写，
+     * 网络慢或老师没等完就切走，标记永远写不上 → 红点 3 一直在。
+     */
+    private const val KEY_TA_BRIEF_SEEN = "kewu_ta_brief_seen"
+
     /** 教师简报未播报时在红点上计入的条数（与助教页简报气泡条数一致）。 */
     private const val BRIEF_BUBBLES = 3
 
@@ -108,6 +115,7 @@ object AssistantHub {
         val was = visible[key] == true
         visible[key] = isVisible
         if (isVisible || was) ChatHistory.markAllAssistantRead(key)
+        if (isVisible && key == ChatHistory.KEY_TEACHER) kvSet(KEY_TA_BRIEF_SEEN, todayStart().toString())
         refreshUnread(key)
     }
 
@@ -117,11 +125,14 @@ object AssistantHub {
     }
 
     private fun extraUnread(key: String): Int =
-        if (key == ChatHistory.KEY_TEACHER && !teacherBriefPlayedToday()) BRIEF_BUBBLES else 0
+        if (key == ChatHistory.KEY_TEACHER && !teacherBriefSeenToday()) BRIEF_BUBBLES else 0
 
     private fun todayStart(): Long = ChatHistory.dayStart(Clock.System.now().toEpochMilliseconds())
 
     fun teacherBriefPlayedToday(): Boolean = kvGet(KEY_TA_BRIEF_DAY)?.toLongOrNull() == todayStart()
+
+    private fun teacherBriefSeenToday(): Boolean =
+        teacherBriefPlayedToday() || kvGet(KEY_TA_BRIEF_SEEN)?.toLongOrNull() == todayStart()
 
     /**
      * 投递一条助手消息：落盘 → 页面在前台就推进已读游标 → 广播 → 重算红点。

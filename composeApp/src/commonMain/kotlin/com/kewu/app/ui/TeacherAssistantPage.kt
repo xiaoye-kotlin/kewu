@@ -742,13 +742,13 @@ private fun TaBubble(
                     msg.blocks.forEach { block ->
                         when (block) {
                             is TaBlock.Text -> {
-                                Text(
-                                    block.s,
-                                    color = if (block.emphasis) cs.onSurface else cs.onSurfaceSecondary,
+                                if (block.emphasis) Text(
+                                    stripMarkdown(block.s),
+                                    color = cs.onSurface,
                                     fontSize = 13.5.sp,
-                                    fontWeight = if (block.emphasis) FontWeight.SemiBold else FontWeight.Normal,
+                                    fontWeight = FontWeight.SemiBold,
                                     lineHeight = 20.sp,
-                                )
+                                ) else MarkdownText(block.s, color = cs.onSurfaceSecondary, fontSize = 13.5.sp, lineHeight = 20.sp)
                                 Spacer(Modifier.height(4.dp))
                             }
                             is TaBlock.Students -> {

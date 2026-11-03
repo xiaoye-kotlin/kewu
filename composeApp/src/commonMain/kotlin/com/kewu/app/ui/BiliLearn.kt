@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -310,7 +311,37 @@ internal fun KnowledgeVideoDialog(
     var videos by remember(point) { mutableStateOf<List<BilibiliVideoInfo>?>(null) }
     var refreshSeq by remember(point) { mutableStateOf(0) }
     LaunchedEffect(point, show, refreshSeq) {
-        if (show && point.isNotBlank() && videos == null) videos = BiliRecommend.forKnowledgePoint(point, course, refresh = refreshSeq > 0)
+        // 2026-11-03：已 100% 掌握的知识点不再搜视频，弹窗只道喜
+        if (show && !mastered && point.isNotBlank() && videos == null) videos = BiliRecommend.forKnowledgePoint(point, course, refresh = refreshSeq > 0)
+    }
+    if (mastered) {
+        OverlayDialog(
+            show = show,
+            title = point.ifBlank { "知识点" },
+            summary = "掌握度 100%",
+            onDismissRequest = onDismiss,
+            onDismissFinished = { },
+        ) {
+            Column(Modifier.fillMaxWidth()) {
+                Column(
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    MasteryBar(1f, true)
+                    Text(
+                        "恭喜你，已完全掌握这个知识点",
+                        color = KewuGreen, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(vertical = 10.dp),
+                    )
+                }
+                KewuSecondaryButton(
+                    "好的", { haptic(HapticKind.Light); onDismiss() },
+                    Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 12.dp, bottom = 20.dp),
+                )
+            }
+        }
+        return
     }
     OverlayDialog(
         show = show,

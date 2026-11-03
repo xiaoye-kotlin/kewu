@@ -12,6 +12,7 @@ import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -35,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -173,11 +175,18 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
     val cs = COUITheme.colorScheme
     val backdrop = rememberGlassBackdrop()
     var recs by remember(s.sessionId) { mutableStateOf<List<SessionRecordingInfo>?>(null) }
-    var failed by remember(s.sessionId) { mutableStateOf(false) }
-    LaunchedEffect(s.sessionId) {
-        val r = KewuApi.getSessionRecordings(s.sessionId)
-        failed = r == null
-        recs = r.orEmpty()
+    var failed by remember(s.sessionId) { mutableStateOf<String?>(null) }
+    var reload by remember(s.sessionId) { mutableStateOf(0) }
+    LaunchedEffect(s.sessionId, reload) {
+        recs = null
+        failed = null
+        KewuApi.getSessionRecordings(s.sessionId)
+            .onSuccess { recs = it }
+            .onFailure { e ->
+                // 显示真实原因（网络 / 权限 / 服务端异常），并可点重试
+                failed = e.message?.takeIf { it.isNotBlank() && it.length < 60 } ?: "加载失败"
+                recs = emptyList()
+            }
     }
     BackHandler { onBack() }
 
@@ -193,7 +202,20 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
                 val list = recs
                 when {
                     list == null -> Loading()
-                    failed -> KewuEmpty("加载失败，请稍后重试")
+                    failed != null -> Column(
+                        Modifier.fillMaxWidth().padding(top = 48.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        KewuEmpty(failed!!)
+                        Text(
+                            "重试",
+                            color = cs.primary,
+                            fontSize = 15.sp,
+                            modifier = Modifier.clip(RoundedCornerShape(12.dp))
+                                .clickable { haptic(HapticKind.Light); reload++ }
+                                .padding(horizontal = 20.dp, vertical = 10.dp),
+                        )
+                    }
                     list.isEmpty() -> KewuEmpty("这节课还没有录音")
                     else -> {
                         val students = list.filter { !it.role.equals("teacher", true) }

@@ -295,7 +295,7 @@ private fun SummaryText(content: String) {
             if (line.startsWith("【")) {
                 Text(line, color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 6.dp))
             } else {
-                Text(line.replace("**", ""), color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
+                MarkdownText(line, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
             }
         }
     }

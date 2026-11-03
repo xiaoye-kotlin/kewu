@@ -207,7 +207,7 @@ internal data class AiChatMsg(
 ) {
     /** 复制/引用/分享用的纯文本（语音消息给可读描述）。 */
     val displayText: String
-        get() = if (isVoice) "语音消息 · ${fmtClock(voiceSecs)}" else aiVisibleText(text)
+        get() = if (isVoice) "语音消息 · ${fmtClock(voiceSecs)}" else if (isUser) aiVisibleText(text) else stripMarkdown(aiVisibleText(text))
 }
 
 // ───────────────────────── 通用按压 Q 弹 ─────────────────────────
@@ -350,7 +350,7 @@ internal fun ChatAiBubble(
                         Text("小悟", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
                     }
                     Spacer(Modifier.height(5.dp))
-                    Text(aiVisibleText(msg.text), color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
+                    MarkdownText(aiVisibleText(msg.text), color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
                     msg.formula?.let { f ->
                         Spacer(Modifier.height(7.dp))
                         Surface(

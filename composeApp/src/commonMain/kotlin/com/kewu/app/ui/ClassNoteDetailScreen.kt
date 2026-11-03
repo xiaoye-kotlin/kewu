@@ -197,7 +197,7 @@ fun ClassNoteDetailScreen(
                         insideMargin = PaddingValues(16.dp),
                         colors = kewuCardColors(),
                     ) {
-                        Text(rec.summary, color = cs.onSurface, fontSize = 14.sp, lineHeight = 21.sp)
+                        MarkdownText(rec.summary, color = cs.onSurface, fontSize = 14.sp, lineHeight = 21.sp)
                     }
                 }
 
