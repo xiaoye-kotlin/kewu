@@ -31,6 +31,17 @@ class DeploymentService {
             if (looksLikeServerRoot(dir)) return dir.absolutePath
         }
 
+        // 面板类服务器（如小皮/phpStudy）常把站点放在 C:/wwwroot/<域名>/ 下，向下扫两层。
+        for (basePath in listOf("C:/wwwroot", "D:/wwwroot")) {
+            val base = File(basePath)
+            val children = base.listFiles { f -> f.isDirectory } ?: continue
+            for (child in children) {
+                if (looksLikeServerRoot(child)) return child.absolutePath
+                val nested = File(child, "kewu-server")
+                if (looksLikeServerRoot(nested)) return nested.absolutePath
+            }
+        }
+
         val candidates = listOf(
             "C:/kewu-server", "D:/kewu-server",
             "C:/wwwroot/kewu-server", "D:/wwwroot/kewu-server",

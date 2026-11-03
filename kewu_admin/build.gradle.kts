@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.kewu"
-version = "1.0.0"
+version = "1.0.1"
 
 repositories {
     mavenCentral()
@@ -59,7 +59,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
-            packageVersion = "1.0.0"
+            packageVersion = "1.0.1"
             description = "课悟平台总控端"
             vendor = "Kewu"
         }

@@ -44,16 +44,53 @@ try {
     if (-not $javaHome -or -not (Test-Path (Join-Path $javaHome 'bin\java.exe'))) {
         throw 'Java not found. Expected $ServerRoot\jdk21 or JAVA_HOME.'
     }
+    # 清掉上次卡死残留的 Gradle 守护进程（按命令行匹配 gradle，不会碰线上 8080 后端）。
+    $leftovers = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -and ($_.CommandLine -match 'gradle') }
+    foreach ($p in $leftovers) {
+        Log ("  stopping leftover gradle java pid=" + $p.ProcessId)
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+
+    # 国内服务器直连 Maven Central / Gradle Plugin Portal 极慢，注入阿里云镜像 init 脚本。
+    $initScript = Join-Path $work 'aliyun-mirror.init.gradle'
+    @'
+allprojects {
+    buildscript {
+        repositories {
+            maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+        }
+    }
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        maven { url 'https://maven.aliyun.com/repository/central' }
+    }
+}
+settingsEvaluated { settings ->
+    settings.pluginManagement {
+        repositories {
+            maven { url 'https://maven.aliyun.com/repository/gradle-plugin' }
+            maven { url 'https://maven.aliyun.com/repository/public' }
+            mavenCentral()
+            gradlePluginPortal()
+        }
+    }
+}
+'@ | Set-Content -Path $initScript -Encoding UTF8
+
     $gradlew = Join-Path $sourceDir 'gradlew.bat'
     if (-not (Test-Path $gradlew)) { throw "Gradle wrapper not found: $gradlew" }
 
-    Log '[2/4] Building kewu-8080 shadowJar on server...'
+    Log '[2/4] Building kewu-8080 shadowJar on server (first run downloads deps via Aliyun mirror, usually a few minutes)...'
     $env:JAVA_HOME = $javaHome
     $env:Path = "$javaHome\bin;$env:Path"
     Push-Location $sourceDir
     # 命令行 -D 显式锁定服务器 JDK，覆盖仓库 gradle.properties 里可能残留的
-    # org.gradle.java.home（开发机路径在服务器上不存在会导致构建直接失败）。
-    & cmd.exe /c "`"$gradlew`" --no-daemon -Dorg.gradle.java.home=`"$javaHome`" clean shadowJar"
+    # org.gradle.java.home（开发机路径在服务器上不存在会导致构建直接失败）；
+    # 低内存服务器上把 Gradle/Kotlin 守护进程堆压到 1G/768M，避免与线上 8080 抢内存换页。
+    & cmd.exe /c "`"$gradlew`" --no-daemon -Dorg.gradle.java.home=`"$javaHome`" `"-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=256m -Dfile.encoding=UTF-8`" `"-Dkotlin.daemon.jvmargs=-Xmx768m`" -I `"$initScript`" clean shadowJar"
     $buildCode = $LASTEXITCODE
     Pop-Location
     if ($buildCode -ne 0) { throw "Gradle shadowJar failed with exit code $buildCode" }
