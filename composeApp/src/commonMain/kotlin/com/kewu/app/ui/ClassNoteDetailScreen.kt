@@ -1,6 +1,10 @@
 package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -31,7 +35,9 @@ import com.kewu.app.ClassRecordingInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
+import com.kewu.app.ROLE_TEACHER
 import com.kewu.app.TeacherContactInfo
+import com.kewu.app.currentRole
 import com.kewu.app.formatPlayTime
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -44,6 +50,7 @@ import io.github.suqi8.coui.kmp.icon.extended.ChevronForward
 import io.github.suqi8.coui.kmp.icon.extended.ExpandLess
 import io.github.suqi8.coui.kmp.icon.extended.ExpandMore
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -58,6 +65,7 @@ import kotlinx.coroutines.launch
  * - 主录音播放条（[AudioPlayerBar]）+ 录音元信息（时长 / 音源数 / 择优策略 / 结束原因 / 生成时间）
  * - 完整转写（transcript，默认折叠）
  * - 任课教师联系方式（受保护接口；未公开 / 无权限统一降级文案，不显示原始错误）
+ * - 学生端：「今日复习」卡 + 每天首次进入自动弹出的复习流程（[DailyReviewFlow]）；教师端不出现
  *
  * 兼容：老后端没有 durationSec / teacher-contact 时接口整体失败或字段缺失，
  * 时长用 OBS HEAD 元数据兜底，联系方式显示「暂不可获取」，不阻断纪要展示。
@@ -82,8 +90,9 @@ fun ClassNoteDetailScreen(
     var courseName by remember { mutableStateOf("") }
     // 「问小悟 · 本节复习」页内覆盖层
     var showTutor by remember { mutableStateOf(false) }
-    // AI 学习工具（2026-11-03）：0 无 / 1 课后自测 / 2 记忆卡片 / 3 讲给小悟听
-    var labTool by remember { mutableStateOf(0) }
+    // 今日复习（2026-11-03，仅学生）：每天第一次进来自动弹出，之后可在「今日复习」卡里手动再来
+    val student = remember { currentRole() != ROLE_TEACHER }
+    var showReview by remember { mutableStateOf(false) }
 
     fun reload() {
         scope.launch {
@@ -112,6 +121,18 @@ fun ClassNoteDetailScreen(
     }
     var selectedId by remember { mutableStateOf<String?>(null) }
     val rec = daySessions.firstOrNull { it.sessionId == selectedId } ?: daySessions.firstOrNull()
+
+    // 今日复习：学生每天第一次打开这节纪要就自动弹出（内容通常已在后台提前生成好）；当天再进不弹
+    LaunchedEffect(rec?.sessionId, loaded) {
+        val r = rec ?: return@LaunchedEffect
+        if (!student || !loaded || r.transcriptStatus != "DONE" || (r.summary.isBlank() && r.transcript.isBlank())) return@LaunchedEffect
+        DailyReview.ensure(r.sessionId, courseName, r.date, r.summary, r.transcript)
+        if (DailyReview.shouldAutoShow(r.sessionId)) {
+            delay(650) // 先让纪要页落定，再升起复习层
+            DailyReview.markShown(r.sessionId)
+            showReview = true
+        }
+    }
 
     // 老数据没有 durationSec：对主录音 OBS HEAD 一次兜底（每换一节课探测一次）
     var probedSec by remember(rec?.sessionId) { mutableStateOf<Int?>(null) }
@@ -327,27 +348,24 @@ fun ClassNoteDetailScreen(
                             color = cs.onSurfaceSecondary, fontSize = 12.sp,
                         )
                     }
-                    Spacer(Modifier.height(10.dp))
-                    StudyLabEntries(
-                        rec.sessionId,
-                        refresh = labTool,
-                        onQuiz = { labTool = 1 },
-                        onCards = { labTool = 2 },
-                        onFeynman = { labTool = 3 },
-                    )
+                    if (student && rec.transcriptStatus == "DONE") {
+                        Spacer(Modifier.height(10.dp))
+                        DailyReviewCard(rec, courseName) { showReview = true }
+                    }
                 }
                 Spacer(Modifier.height(24.dp))
             }
         }
 
-        // AI 学习工具：页内全屏覆盖层
-        SlideOverlay(rec?.takeIf { labTool != 0 }?.let { it to labTool }) { (r, tool) ->
-            val close = { labTool = 0 }
-            when (tool) {
-                1 -> ClassQuizScreen(r.sessionId, courseName, date, r.summary, r.transcript, onBack = close)
-                2 -> FlashcardsScreen(r.sessionId, "$courseName $date".trim(), courseName, r.summary, r.transcript, onBack = close)
-                else -> FeynmanScreen(emptyList(), r.summary, r.transcript, subtitle = "$courseName $date".trim(), onBack = close)
-            }
+        // 今日复习：从底部升起的全屏层（层里有液态玻璃，只做位移）
+        var reviewRec by remember { mutableStateOf<ClassRecordingInfo?>(null) }
+        if (showReview && rec != null) reviewRec = rec
+        AnimatedVisibility(
+            visible = showReview && rec != null,
+            enter = slideInVertically(spring(dampingRatio = 0.86f, stiffness = 320f)) { it },
+            exit = slideOutVertically(tween(240)) { it },
+        ) {
+            reviewRec?.let { r -> DailyReviewFlow(r, courseName, onClose = { showReview = false }) }
         }
 
         // 「问小悟 · 本节复习」页内全屏覆盖层（自带 BackHandler，优先消费返回键）

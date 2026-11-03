@@ -183,9 +183,11 @@ object Notifications {
     internal suspend fun pollClassNotes(): List<Draft> {
         val now = nowMs()
         val out = mutableListOf<Draft>()
+        val ready = mutableListOf<Pair<String, ClassRecordingInfo>>()
         for (c in KewuApi.myCourses().orEmpty()) {
             val recs = KewuApi.getClassRecordings(c.id).orEmpty()
                 .filter { it.transcriptStatus == "DONE" && (it.summary.isNotBlank() || it.transcript.isNotBlank()) }
+            recs.forEach { ready += c.name to it }
             recs.groupBy { it.date }.forEach { (date, sessions) ->
                 val ts = sessions.mapNotNull { parseTs(it.decidedAt) }.maxOrNull() ?: dateTs(date) ?: now
                 out += Draft(
@@ -198,8 +200,13 @@ object Notifications {
                 )
             }
         }
+        readyNotes = ready
         return out
     }
+
+    /** 最近一轮轮询到的已出纪要（课程名 + 节次），供学生端「今日复习」后台预生成。 */
+    var readyNotes: List<Pair<String, ClassRecordingInfo>> = emptyList()
+        private set
 
     /** 作业批改（学生端）：老师批改 / 打回后一条（同一版本只提醒一次；重交再批会再提醒）。 */
     internal suspend fun pollGrades(): List<Draft> {
@@ -308,6 +315,8 @@ object NoticeCenter {
         collect { Notifications.pollClassNotes() }
         if (!teacher) collect { Notifications.pollGrades() }
         collect { BiliNoteWatcher.poll() }
+        // 学生：顺手把近几天纪要的「今日复习」提前生成好（后台进行，不阻塞通知）
+        if (!teacher) com.kewu.app.ui.DailyReview.prefetch(Notifications.readyNotes)
         val fresh = Notifications.addAll(drafts)
         if (fresh.isEmpty()) return
         withContext(Dispatchers.Main) {

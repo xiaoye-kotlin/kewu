@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -51,6 +52,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.offset
+import io.github.suqi8.coui.kmp.icon.extended.Mic
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -95,20 +101,18 @@ import kotlinx.serialization.json.put
 /*
  * AI 学习工具（2026-11-03）：把「课堂录音 → 转写 → 纪要」往后延伸成学习闭环。
  *
- * - 课后自测 [ClassQuizScreen]：AI 读整节转写出 5 道单选，每题附「老师原话」出处；结果计入知识点掌握度。
- * - 记忆卡片 [FlashcardsScreen]：AI 把本节课做成问答卡，按遗忘曲线（10 分钟 / 1 / 2 / 4 / 7 / 15 / 30 天）安排复习；
- *   自测错题可一键转成卡片。
- * - 讲给小悟听 [FeynmanScreen]：费曼学习法——学生用文字或语音讲一个知识点，AI 按准确 / 完整 / 清晰 / 通俗打分、
- *   指出漏洞并追问；讲到 85 分计入掌握度。
+ * - 学生端三步（自测 / 记忆卡片 / 讲给小悟听）已合并成「今日复习」，每天首次打开纪要自动弹出、内容后台预生成，
+ *   见 DailyReview.kt；本文件提供共用部件：题目解析与选项、翻面卡 [ReviewSession]、语音讲解 [VoiceSpeakPanel] / [FeynmanSession]。
+ * - 学习规划页仍保留「今日复习」（全部到期卡片，[FlashcardsScreen]）和「讲给小悟听」（挑薄弱点，[FeynmanScreen]）。
  * - 教师 AI 课堂复盘 [TeachingReviewScreen]：读整节转写 + 学生专注结论，给教学评分、课堂脉络、提问互动、
  *   学生易错预警、下节课建议和课后作业草稿。
  *
  * 数据都存本地 kv（按账号），不新增后端接口；AI 走 [AiClient]（直连 → 后端中转）。
  */
 
-private val labJson = Json { ignoreUnknownKeys = true; isLenient = true }
+internal val labJson = Json { ignoreUnknownKeys = true; isLenient = true }
 
-private fun labNow(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
+internal fun labNow(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
 /** 从 AI 回答里截出第一个 JSON 对象（容忍前后多余文字 / 代码块）。 */
 internal fun aiJsonObject(text: String?): JsonObject? {
@@ -260,7 +264,18 @@ internal fun StudyLabPage(
     val backdrop = rememberGlassBackdrop()
     BackHandler { onBack() }
     Box(Modifier.fillMaxSize()) {
-        Box(Modifier.matchParentSize().layerBackdrop(backdrop).background(cs.surface))
+        // 采样层：灰底 + 三团柔和色光，让上面的液态玻璃有东西可折射
+        Box(Modifier.matchParentSize().layerBackdrop(backdrop).background(cs.surface)) {
+            Canvas(Modifier.fillMaxSize()) {
+                fun glow(c: Color, x: Float, y: Float, r: Float) {
+                    val center = Offset(size.width * x, size.height * y)
+                    drawCircle(Brush.radialGradient(listOf(c, Color.Transparent), center, size.width * r), size.width * r, center)
+                }
+                glow(KewuBlue.copy(alpha = 0.20f), 0.08f, 0.10f, 0.75f)
+                glow(KewuGreen.copy(alpha = 0.14f), 0.98f, 0.42f, 0.65f)
+                glow(Color(0xFFF5A623).copy(alpha = 0.12f), 0.15f, 0.88f, 0.7f)
+            }
+        }
         Column(Modifier.fillMaxSize()) {
             KewuTopBar(title, onBack = onBack, subtitle = subtitle)
             Column(
@@ -274,7 +289,7 @@ internal fun StudyLabPage(
 
 /** 白卡（coui Card）。 */
 @Composable
-private fun LabCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
+internal fun LabCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = modifier.fillMaxWidth(),
         cornerRadius = 20.dp,
@@ -286,7 +301,7 @@ private fun LabCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null
 
 /** 液态玻璃卡：凝结入场（只做位移，祖先禁 alpha）。 */
 @Composable
-private fun LabGlass(backdrop: LayerBackdrop, index: Int = 0, content: @Composable ColumnScope.() -> Unit) {
+internal fun LabGlass(backdrop: LayerBackdrop, index: Int = 0, content: @Composable ColumnScope.() -> Unit) {
     val p = rememberEnterProgress(index, baseDelayMs = 80L)
     KewuGlassCard(
         backdrop = backdrop, shape = RoundedCornerShape(24.dp),
@@ -296,13 +311,13 @@ private fun LabGlass(backdrop: LayerBackdrop, index: Int = 0, content: @Composab
 }
 
 @Composable
-private fun LabTitle(text: String, color: Color = COUITheme.colorScheme.onSurface) {
+internal fun LabTitle(text: String, color: Color = COUITheme.colorScheme.onSurface) {
     Text(text, color = color, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
 }
 
 /** 环形分数：从 0 弹到 [fraction]。 */
 @Composable
-private fun ScoreRing(fraction: Float, label: String, sub: String, color: Color, size: Int = 120) {
+internal fun ScoreRing(fraction: Float, label: String, sub: String, color: Color, size: Int = 120) {
     val cs = COUITheme.colorScheme
     val anim = remember { Animatable(0f) }
     LaunchedEffect(fraction) { anim.animateTo(fraction.coerceIn(0f, 1f), tween(900, easing = FastOutSlowInEasing)) }
@@ -323,7 +338,7 @@ private fun ScoreRing(fraction: Float, label: String, sub: String, color: Color,
 
 /** 横向分数条（0..100）：宽度弹性增长。 */
 @Composable
-private fun ScoreBar(name: String, score: Int, note: String = "", index: Int = 0) {
+internal fun ScoreBar(name: String, score: Int, note: String = "", index: Int = 0) {
     val cs = COUITheme.colorScheme
     val target = (score.coerceIn(0, 100)) / 100f
     var go by remember { mutableStateOf(false) }
@@ -346,7 +361,7 @@ private fun ScoreBar(name: String, score: Int, note: String = "", index: Int = 0
     }
 }
 
-private fun scoreColor(score: Int): Color = when {
+internal fun scoreColor(score: Int): Color = when {
     score >= 85 -> KewuGreen
     score >= 60 -> Color(0xFFF5A623)
     else -> Color(0xFFE5484D)
@@ -354,7 +369,7 @@ private fun scoreColor(score: Int): Color = when {
 
 /** 圆点列表。 */
 @Composable
-private fun DotList(items: List<String>, dot: Color) {
+internal fun DotList(items: List<String>, dot: Color) {
     val cs = COUITheme.colorScheme
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         items.forEach { t ->
@@ -369,7 +384,7 @@ private fun DotList(items: List<String>, dot: Color) {
 
 /** 引用条：左侧竖线 + 原话。 */
 @Composable
-private fun QuoteBlock(label: String, text: String) {
+internal fun QuoteBlock(label: String, text: String) {
     val cs = COUITheme.colorScheme
     Row(
         Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(cs.secondaryContainer)
@@ -387,7 +402,7 @@ private fun QuoteBlock(label: String, text: String) {
 
 /** AI 处理中：转圈 + 文案 + 轮换小贴士（等待时不显得卡住）。 */
 @Composable
-private fun LabWorking(text: String, tips: List<String>) {
+internal fun LabWorking(text: String, tips: List<String>) {
     val cs = COUITheme.colorScheme
     var i by remember { mutableIntStateOf(0) }
     LaunchedEffect(Unit) { while (true) { delay(2_600); i = (i + 1) % tips.size.coerceAtLeast(1) } }
@@ -407,7 +422,7 @@ private fun LabWorking(text: String, tips: List<String>) {
 }
 
 @Composable
-private fun LabError(text: String, onRetry: () -> Unit) {
+internal fun LabError(text: String, onRetry: () -> Unit) {
     val cs = COUITheme.colorScheme
     LabCard {
         Text(text, color = cs.error, fontSize = 13.5.sp)
@@ -418,13 +433,13 @@ private fun LabError(text: String, onRetry: () -> Unit) {
 
 // ───────────────────────── 课后自测 ─────────────────────────
 
-private data class QuizQ(
+internal data class QuizQ(
     val stem: String, val options: List<String>, val answer: Int,
     val explain: String, val point: String, val quote: String,
 )
 
 /** 解析题目；每题选项按题干做确定性乱序（模型爱把答案放 A），并重映射答案。 */
-private fun parseQuiz(raw: String?): List<QuizQ> {
+internal fun parseQuiz(raw: String?): List<QuizQ> {
     val o = aiJsonObject(raw) ?: return emptyList()
     return o.list("q").mapNotNull { q ->
         val opts = q.texts("options").map { it.replace(Regex("^[A-Da-d][.、．:：)）]\\s*"), "") }
@@ -439,167 +454,9 @@ private fun parseQuiz(raw: String?): List<QuizQ> {
     }.take(5)
 }
 
-private suspend fun generateQuiz(courseName: String, summary: String, transcript: String): String? {
-    val system = "你是课悟的出题助手。根据下面这节《${courseName.ifBlank { "课程" }}》的课堂纪要和转写，出 5 道单项选择题，检验学生是否真正听懂了本节课。" +
-        "要求：每题考一个本节课真正讲到的知识点，由浅到深；4 个选项只有一个正确，干扰项要像学生常见的误解；" +
-        "explain 用 1–2 句话讲清为什么选它；point 为考查的知识点（2–10 字标准术语，如「矩阵的秩」）；" +
-        "quote 为转写里能支撑答案的老师原话（≤40 字，没有就给空串，不得编造）。" +
-        "只输出一个 JSON 对象，不要任何其他文字、不要 markdown 代码块：" +
-        "{\"q\":[{\"stem\":\"\",\"options\":[\"\",\"\",\"\",\"\"],\"answer\":0,\"explain\":\"\",\"point\":\"\",\"quote\":\"\"}]}，answer 为正确选项下标 0–3。"
-    return AiClient.chat(system, lessonMaterial(summary, transcript), maxTokens = 3_000)
-}
-
-@Composable
-internal fun ClassQuizScreen(
-    sessionId: String,
-    courseName: String,
-    date: String,
-    summary: String,
-    transcript: String,
-    onBack: () -> Unit,
-) {
-    val cs = COUITheme.colorScheme
-    val scope = rememberCoroutineScope()
-    val snackbar = LocalKewuSnackbar.current
-    var questions by remember { mutableStateOf(parseQuiz(StudyLabStore.quizSet(sessionId))) }
-    var loading by remember { mutableStateOf(false) }
-    var failed by remember { mutableStateOf(false) }
-    var index by remember { mutableIntStateOf(0) }
-    var picks by remember { mutableStateOf<Map<Int, Int>>(emptyMap()) }
-    var finished by remember { mutableStateOf(false) }
-
-    fun load(fresh: Boolean) {
-        if (loading) return
-        loading = true
-        failed = false
-        scope.launch {
-            val raw = generateQuiz(courseName, summary, transcript)
-            val qs = parseQuiz(raw)
-            if (qs.size >= 3) {
-                StudyLabStore.saveQuizSet(sessionId, raw!!)
-                questions = qs
-                index = 0
-                picks = emptyMap()
-                finished = false
-            } else if (!fresh || questions.isEmpty()) {
-                failed = true
-            } else {
-                snackbar.toast("出题失败，先用上一组")
-            }
-            loading = false
-        }
-    }
-    LaunchedEffect(Unit) { if (questions.isEmpty()) load(fresh = false) }
-
-    StudyLabPage("课后自测", onBack, subtitle = "$courseName · $date") { backdrop ->
-        when {
-            loading -> LabWorking(
-                "小悟正在读整节课的转写出题…",
-                listOf("题目只考本节课真正讲过的内容", "每道题都会标出老师的原话出处", "做完的结果会计入知识点掌握度"),
-            )
-            failed -> LabError("出题失败了，可能是网络不稳定") { load(fresh = false) }
-            questions.isEmpty() -> Unit
-            finished -> QuizResult(
-                backdrop, questions, picks,
-                onCards = {
-                    val wrong = questions.withIndex().filter { (i, q) -> picks[i] != q.answer }
-                    StudyLabStore.putDeck(
-                        sessionId, "$courseName $date",
-                        wrong.map { (_, q) -> Triple(q.stem, q.options[q.answer] + "\n" + q.explain, q.point) },
-                        append = true,
-                    )
-                    scope.launch { snackbar.toast("已把 ${wrong.size} 道错题加入记忆卡片") }
-                },
-                onAgain = { load(fresh = true) },
-                onDone = onBack,
-            )
-            else -> {
-                val q = questions[index]
-                val picked = picks[index]
-                // 顶部：进度（玻璃）
-                LabGlass(backdrop) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("第 ${index + 1} / ${questions.size} 题", color = cs.onSurface, fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                        if (q.point.isNotBlank()) KewuTag(q.point, KewuBlue.copy(alpha = 0.14f), KewuBlue)
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    val prog by animateFloatAsState(
-                        (index + if (picked != null) 1 else 0).toFloat() / questions.size,
-                        spring(dampingRatio = 0.8f, stiffness = 200f), label = "quizProg",
-                    )
-                    Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(cs.dividerLine)) {
-                        Box(Modifier.fillMaxWidth(prog.coerceIn(0f, 1f)).height(6.dp).clip(CircleShape).background(KewuGreen))
-                    }
-                }
-                AnimatedContent(
-                    index,
-                    transitionSpec = {
-                        slideInHorizontally(spring(dampingRatio = 0.86f, stiffness = 380f)) { it } togetherWith
-                            slideOutHorizontally(tween(200)) { -it }
-                    },
-                    label = "quizQ",
-                ) { i ->
-                    val qq = questions[i]
-                    val pk = picks[i]
-                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        LabCard { Text(qq.stem, color = cs.onSurface, fontSize = 15.5.sp, lineHeight = 23.sp, fontWeight = FontWeight.Medium) }
-                        qq.options.forEachIndexed { k, opt ->
-                            QuizOption(
-                                letter = "ABCD"[k].toString(), text = opt,
-                                state = when {
-                                    pk == null -> 0
-                                    k == qq.answer -> 1
-                                    k == pk -> 2
-                                    else -> 3
-                                },
-                            ) {
-                                if (pk == null) {
-                                    haptic(if (k == qq.answer) HapticKind.Light else HapticKind.Medium)
-                                    picks = picks + (i to k)
-                                }
-                            }
-                        }
-                        AnimatedVisibility(pk != null, enter = expandVertically(spring(dampingRatio = 0.9f, stiffness = 300f)) + fadeIn()) {
-                            LabCard {
-                                val right = pk == qq.answer
-                                Text(if (right) "答对了" else "正确答案是 ${"ABCD"[qq.answer]}",
-                                    color = if (right) KewuGreen else cs.error, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                                if (qq.explain.isNotBlank()) {
-                                    Spacer(Modifier.height(6.dp))
-                                    MarkdownText(qq.explain, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
-                                }
-                                if (qq.quote.isNotBlank()) {
-                                    Spacer(Modifier.height(10.dp))
-                                    QuoteBlock("老师课上原话", qq.quote)
-                                }
-                            }
-                        }
-                    }
-                }
-                if (picked != null) {
-                    KewuPrimaryButton(if (index == questions.lastIndex) "查看结果" else "下一题", {
-                        haptic(HapticKind.Tick)
-                        if (index == questions.lastIndex) {
-                            val score = questions.indices.count { picks[it] == questions[it].answer }
-                            StudyLabStore.saveQuizBest(sessionId, score, questions.size)
-                            StudyLabStore.addQuizSamples(questions.mapIndexed { k, qq ->
-                                qq.point to (if (picks[k] == qq.answer) 1.0 else 0.0)
-                            })
-                            finished = true
-                        } else {
-                            index++
-                        }
-                    }, Modifier.fillMaxWidth())
-                }
-            }
-        }
-    }
-}
-
 /** 选项。[state]：0 未作答 / 1 正确答案 / 2 选错 / 3 其它。 */
 @Composable
-private fun QuizOption(letter: String, text: String, state: Int, onClick: () -> Unit) {
+internal fun QuizOption(letter: String, text: String, state: Int, onClick: () -> Unit) {
     val cs = COUITheme.colorScheme
     val accent = when (state) { 1 -> KewuGreen; 2 -> cs.error; else -> cs.onSurfaceSecondary }
     val bg by animateColorAsState(
@@ -639,58 +496,6 @@ private fun QuizOption(letter: String, text: String, state: Int, onClick: () -> 
         Spacer(Modifier.width(12.dp))
         Text(text, color = if (state == 3) cs.onSurfaceSecondary else cs.onSurface, fontSize = 14.sp, lineHeight = 20.sp)
     }
-}
-
-@Composable
-private fun QuizResult(
-    backdrop: LayerBackdrop,
-    questions: List<QuizQ>,
-    picks: Map<Int, Int>,
-    onCards: () -> Unit,
-    onAgain: () -> Unit,
-    onDone: () -> Unit,
-) {
-    val cs = COUITheme.colorScheme
-    val score = questions.indices.count { picks[it] == questions[it].answer }
-    val pct = score * 100 / questions.size.coerceAtLeast(1)
-    var carded by remember { mutableStateOf(false) }
-    LabGlass(backdrop) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            ScoreRing(score.toFloat() / questions.size, "$score/${questions.size}", "答对", scoreColor(pct))
-            Spacer(Modifier.height(12.dp))
-            Text(
-                when {
-                    pct == 100 -> "全对！这节课你掌握得很扎实"
-                    pct >= 60 -> "大部分听懂了，错的那几个点再巩固一下"
-                    else -> "这节课还有不少没吃透，建议先问问小悟再复习"
-                },
-                color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text("结果已计入「AI 学习规划」的知识点掌握度", color = cs.onSurfaceSecondary, fontSize = 12.sp)
-        }
-    }
-    LabCard {
-        LabTitle("逐题回顾")
-        Spacer(Modifier.height(10.dp))
-        questions.forEachIndexed { i, q ->
-            val right = picks[i] == q.answer
-            Row(Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    Modifier.size(20.dp).clip(CircleShape).background(if (right) KewuGreen else cs.error),
-                    contentAlignment = Alignment.Center,
-                ) { Text(if (right) "✓" else "✕", color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold) }
-                Spacer(Modifier.width(10.dp))
-                Text(q.point.ifBlank { "第 ${i + 1} 题" }, color = cs.onSurface, fontSize = 13.5.sp, modifier = Modifier.weight(1f))
-                Text(q.stem.take(14) + if (q.stem.length > 14) "…" else "", color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
-            }
-        }
-    }
-    if (score < questions.size && !carded) {
-        KewuPrimaryButton("把错题做成记忆卡片", { carded = true; onCards() }, Modifier.fillMaxWidth())
-    }
-    KewuSecondaryButton("再来一组新题", onAgain, Modifier.fillMaxWidth())
-    KewuSecondaryButton("完成", onDone, Modifier.fillMaxWidth())
 }
 
 // ───────────────────────── 记忆卡片 ─────────────────────────
@@ -747,7 +552,7 @@ internal fun FlashcardsScreen(
     StudyLabPage(if (deck == null) "今日复习" else "记忆卡片", onBack, subtitle = deckTitle) { backdrop ->
         val q = queue
         when {
-            q != null && q.isNotEmpty() -> ReviewSession(q.first(), done, done + q.size, turn) { remembered ->
+            q != null && q.isNotEmpty() -> ReviewSession(backdrop, q.first(), done, done + q.size, turn) { remembered ->
                 val c = q.first()
                 StudyLabStore.review(c.id, remembered)
                 // 没记住：放回队尾，本轮再见一次
@@ -774,7 +579,7 @@ internal fun FlashcardsScreen(
                 LabCard {
                     LabTitle("还没有记忆卡片")
                     Spacer(Modifier.height(6.dp))
-                    Text("在任意一节课的课堂纪要里点「记忆卡片」，小悟会把整节课做成问答卡。", color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 19.sp)
+                    Text("打开任意一节课的课堂纪要，「今日复习」会把这节课做成问答卡，之后按遗忘曲线出现在这里。", color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 19.sp)
                 }
             }
             all.isEmpty() -> {
@@ -837,7 +642,7 @@ internal fun FlashcardsScreen(
 }
 
 @Composable
-private fun LabStat(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
+internal fun LabStat(label: String, value: String, color: Color, modifier: Modifier = Modifier) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, color = color, fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(label, color = COUITheme.colorScheme.onSurfaceSecondary, fontSize = 12.sp)
@@ -854,65 +659,169 @@ private fun dueText(ts: Long): String {
     }
 }
 
-/** 单张复习：点卡片 3D 翻面，翻过来后选「没记住 / 记住了」。 */
+/**
+ * 单张复习（2026-11-03 重做，coui + 液态玻璃）：顶部玻璃进度条；中间是带牌堆层次的翻面卡，
+ * 点一下 3D 翻面，翻面后左滑「没记住」/ 右滑「记住了」，也可点底部两个 coui 胶囊按钮。
+ * 卡片本身不是玻璃（翻面要 rotationY），玻璃只放在不做 alpha / 旋转的进度条上。
+ */
 @Composable
-private fun ReviewSession(card: StudyLabStore.Flashcard, done: Int, total: Int, turn: Int, onAnswer: (Boolean) -> Unit) {
+internal fun ReviewSession(
+    backdrop: LayerBackdrop,
+    card: StudyLabStore.Flashcard,
+    done: Int,
+    total: Int,
+    turn: Int,
+    onAnswer: (Boolean) -> Unit,
+) {
     val cs = COUITheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val red = Color(0xFFE5484D)
     var flipped by remember(turn) { mutableStateOf(false) }
     val rot by animateFloatAsState(if (flipped) 180f else 0f, spring(dampingRatio = 0.75f, stiffness = 220f), label = "flip")
-    Text("$done / $total", color = cs.onSurfaceSecondary, fontSize = 12.5.sp, modifier = Modifier.padding(start = 4.dp))
+    val drag = remember(turn) { Animatable(0f) }
+    var answered by remember(turn) { mutableStateOf(false) }
+
+    fun answer(remembered: Boolean) {
+        if (answered) return
+        answered = true
+        haptic(if (remembered) HapticKind.Light else HapticKind.Medium)
+        scope.launch {
+            drag.animateTo(if (remembered) 1_400f else -1_400f, tween(220))
+            onAnswer(remembered)
+        }
+    }
+
+    LabGlass(backdrop) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("记忆卡片", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+            Text("$done / $total", color = KewuBlue, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Spacer(Modifier.height(10.dp))
+        val prog by animateFloatAsState(
+            done.toFloat() / total.coerceAtLeast(1), spring(dampingRatio = 0.8f, stiffness = 200f), label = "cardProg",
+        )
+        Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(cs.dividerLine)) {
+            Box(Modifier.fillMaxWidth(prog.coerceIn(0f, 1f)).height(6.dp).clip(CircleShape).background(KewuBlue))
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            if (flipped) "右滑记住了 · 左滑没记住" else "先自己想一想，再点卡片看答案",
+            color = cs.onSurfaceSecondary, fontSize = 12.sp,
+        )
+    }
     AnimatedContent(
         turn,
         transitionSpec = {
             slideInHorizontally(spring(dampingRatio = 0.86f, stiffness = 380f)) { it } togetherWith
-                slideOutHorizontally(tween(200)) { -it }
+                slideOutHorizontally(tween(160)) { -it }
         },
         label = "card",
     ) { _ ->
-        Box(
-            Modifier.fillMaxWidth().heightIn(min = 260.dp)
-                .graphicsLayer { rotationY = rot; cameraDistance = 14f * density }
-                .clip(RoundedCornerShape(24.dp))
-                .background(if (rot <= 90f) cs.surfaceContainer else KewuBlue.copy(alpha = 0.10f))
-                .border(1.dp, cs.dividerLine, RoundedCornerShape(24.dp))
-                .clickable { haptic(HapticKind.Tick); flipped = !flipped }
-                .padding(22.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (rot <= 90f) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    if (card.point.isNotBlank()) KewuTag(card.point, KewuBlue.copy(alpha = 0.14f), KewuBlue)
-                    Spacer(Modifier.height(14.dp))
-                    Text(card.front, color = cs.onSurface, fontSize = 18.sp, lineHeight = 26.sp, fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(18.dp))
-                    Text("点一下看答案", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+        Box(Modifier.fillMaxWidth().height(320.dp)) {
+            // 牌堆：身后两层，提示「还有卡」
+            if (total - done > 2) Box(
+                Modifier.fillMaxWidth().height(292.dp).padding(horizontal = 28.dp).offset(y = 26.dp)
+                    .clip(RoundedCornerShape(26.dp)).background(cs.surfaceContainer.copy(alpha = 0.55f)),
+            )
+            if (total - done > 1) Box(
+                Modifier.fillMaxWidth().height(292.dp).padding(horizontal = 14.dp).offset(y = 13.dp)
+                    .clip(RoundedCornerShape(26.dp)).background(cs.surfaceContainer.copy(alpha = 0.8f)),
+            )
+            val tilt = drag.value
+            val faceFront = rot <= 90f
+            Box(
+                Modifier.fillMaxWidth().height(292.dp)
+                    .graphicsLayer {
+                        rotationY = rot
+                        translationX = tilt
+                        rotationZ = tilt / 45f
+                        cameraDistance = 14f * density
+                    }
+                    .clip(RoundedCornerShape(26.dp))
+                    .background(
+                        if (faceFront) Brush.verticalGradient(listOf(KewuBlue.copy(alpha = 0.16f), cs.surfaceContainer, cs.surfaceContainer))
+                        else Brush.verticalGradient(listOf(KewuGreen.copy(alpha = 0.18f), cs.surfaceContainer, cs.surfaceContainer)),
+                    )
+                    .border(1.dp, if (faceFront) KewuBlue.copy(alpha = 0.22f) else KewuGreen.copy(alpha = 0.28f), RoundedCornerShape(26.dp))
+                    .pointerInput(turn, flipped) {
+                        if (!flipped) return@pointerInput
+                        detectHorizontalDragGestures(
+                            onDragEnd = {
+                                when {
+                                    drag.value > 180f -> answer(true)
+                                    drag.value < -180f -> answer(false)
+                                    else -> scope.launch { drag.animateTo(0f, spring(dampingRatio = 0.6f, stiffness = 400f)) }
+                                }
+                            },
+                        ) { _, d -> if (!answered) scope.launch { drag.snapTo(drag.value + d) } }
+                    }
+                    .clickable { haptic(HapticKind.Tick); flipped = !flipped }
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (faceFront) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        if (card.point.isNotBlank()) KewuTag(card.point, KewuBlue.copy(alpha = 0.14f), KewuBlue)
+                        Spacer(Modifier.height(16.dp))
+                        Text(card.front, color = cs.onSurface, fontSize = 19.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
+                        Spacer(Modifier.height(20.dp))
+                        Text("点一下翻面", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+                    }
+                } else {
+                    // 背面内容反向翻一次，避免镜像
+                    Column(Modifier.graphicsLayer { rotationY = 180f }, horizontalAlignment = Alignment.CenterHorizontally) {
+                        KewuTag("答案", KewuGreen.copy(alpha = 0.14f), KewuGreen)
+                        Spacer(Modifier.height(14.dp))
+                        MarkdownText(card.back, color = cs.onSurface, fontSize = 15.5.sp, lineHeight = 24.sp)
+                    }
                 }
-            } else {
-                // 背面内容反向翻一次，避免镜像
-                Column(Modifier.graphicsLayer { rotationY = 180f }, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("答案", color = KewuBlue, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                    Spacer(Modifier.height(10.dp))
-                    MarkdownText(card.back, color = cs.onSurface, fontSize = 15.sp, lineHeight = 23.sp)
+                // 滑动方向提示
+                if (!faceFront && kotlin.math.abs(tilt) > 40f) {
+                    val ok = tilt > 0
+                    Box(
+                        Modifier.align(Alignment.TopCenter).graphicsLayer { rotationY = 180f }
+                            .clip(RoundedCornerShape(50))
+                            .background((if (ok) KewuGreen else red).copy(alpha = 0.16f))
+                            .padding(horizontal = 14.dp, vertical = 6.dp),
+                    ) {
+                        Text(if (ok) "记住了" else "没记住", color = if (ok) KewuGreen else red, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
                 }
             }
         }
     }
     AnimatedVisibility(flipped, enter = expandVertically(spring(dampingRatio = 0.9f, stiffness = 320f)) + fadeIn()) {
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            KewuPrimaryButton("没记住", { haptic(HapticKind.Medium); onAnswer(false) }, Modifier.weight(1f), danger = true)
-            KewuPrimaryButton("记住了", { haptic(HapticKind.Light); onAnswer(true) }, Modifier.weight(1f))
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            AnswerPill("没记住", red, Modifier.weight(1f)) { answer(false) }
+            AnswerPill("记住了", KewuGreen, Modifier.weight(1f)) { answer(true) }
+        }
+    }
+}
+
+/** coui 胶囊按钮（淡色底 + 同色字）。 */
+@Composable
+private fun AnswerPill(text: String, color: Color, modifier: Modifier, onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(50.dp),
+        shape = RoundedCornerShape(50),
+        color = color.copy(alpha = 0.14f),
+        contentColor = color,
+    ) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(text, color = color, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }
 
 // ───────────────────────── 讲给小悟听（费曼学习法） ─────────────────────────
 
-private data class FeynmanResult(
+internal data class FeynmanResult(
     val score: Int, val dims: List<Pair<String, Int>>, val good: List<String>, val gaps: List<String>,
     val followup: String, val better: String,
 )
 
-private suspend fun evaluateFeynman(point: String, material: String, rounds: List<Pair<String, String>>): FeynmanResult? {
+internal suspend fun evaluateFeynman(point: String, material: String, rounds: List<Pair<String, String>>): FeynmanResult? {
     val system = "你是课悟的「费曼学习法」教练小悟。学生在用自己的话向一个完全没学过的同学讲解知识点「$point」。" +
         "请严格评估这段讲解：准确（有没有概念错误）、完整（关键条件 / 步骤有没有漏）、清晰（逻辑顺序）、通俗（能不能让外行听懂、有没有举例）。" +
         "各项 0–100 分，总分取加权（准确 40%、完整 30%、清晰 15%、通俗 15%）。" +
@@ -938,7 +847,189 @@ private suspend fun evaluateFeynman(point: String, material: String, rounds: Lis
 }
 
 /**
- * 讲给小悟听。[points] 候选知识点（为空且有 [summary] 时让 AI 从纪要里提炼）；[summary]/[transcript] 为课堂材料，可空。
+ * 语音讲解面板（2026-11-03 用户：不要打字，点一下说话就行）：大圆麦克风，点一下开始说、再点一下结束，
+ * 录音走 OBS + SIS 转文字后交给 [onText]；录满 60 秒自动结束。录音中外圈呼吸波纹（非玻璃元素，可用 alpha）。
+ */
+@Composable
+internal fun VoiceSpeakPanel(
+    prompt: String,
+    hint: String,
+    busy: Boolean,
+    busyText: String,
+    onText: (String) -> Unit,
+) {
+    val cs = COUITheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
+    val recorder = rememberChatVoiceRecorder()
+    var transcribing by remember { mutableStateOf(false) }
+    var recSecs by remember { mutableIntStateOf(0) }
+    var autoStop by remember { mutableIntStateOf(0) }
+    val recording = recorder.recording
+
+    LaunchedEffect(recording) {
+        recSecs = 0
+        while (recorder.recording) { delay(1_000); recSecs++; if (recSecs >= CHAT_VOICE_MAX_SECS) break }
+        if (recorder.recording) autoStop++
+    }
+
+    fun stopAndSend() {
+        scope.launch {
+            val r = recorder.stop() ?: run { snackbar.toast("录音保存失败，请重试"); return@launch }
+            if (r.second < 2) { platformDeleteFile(r.first); snackbar.toast("说话时间太短，多讲几句"); return@launch }
+            transcribing = true
+            val res = KewuApi.sendChatVoice(r.first)
+            transcribing = false
+            val t = res.text.trim()
+            if (t.isEmpty()) snackbar.toast(res.error ?: "没听清，再说一次") else onText(t)
+        }
+    }
+    LaunchedEffect(autoStop) { if (autoStop > 0 && recorder.recording) stopAndSend() }
+
+    val working = busy || transcribing
+    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(prompt, color = cs.onSurface, fontSize = 15.5.sp, fontWeight = FontWeight.SemiBold, lineHeight = 22.sp)
+        if (hint.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(hint, color = cs.onSurfaceSecondary, fontSize = 12.5.sp, lineHeight = 18.sp)
+        }
+        Spacer(Modifier.height(16.dp))
+        Box(Modifier.size(140.dp), contentAlignment = Alignment.Center) {
+            if (recording) {
+                val inf = androidx.compose.animation.core.rememberInfiniteTransition(label = "mic")
+                listOf(0, 550).forEach { lag ->
+                    val t by inf.animateFloat(
+                        0f, 1f,
+                        androidx.compose.animation.core.infiniteRepeatable(
+                            tween(1_100, easing = FastOutSlowInEasing),
+                            initialStartOffset = androidx.compose.animation.core.StartOffset(lag),
+                        ),
+                        label = "ring$lag",
+                    )
+                    Box(
+                        Modifier.size(88.dp)
+                            .graphicsLayer { scaleX = 1f + t * 0.55f; scaleY = 1f + t * 0.55f; alpha = 0.4f * (1f - t) }
+                            .clip(CircleShape).background(cs.error),
+                    )
+                }
+            }
+            val bump by animateFloatAsState(if (recording) 1.08f else 1f, spring(dampingRatio = 0.45f, stiffness = 420f), label = "micBump")
+            Surface(
+                onClick = {
+                    if (working) return@Surface
+                    haptic(HapticKind.Light)
+                    if (recording) stopAndSend() else scope.launch {
+                        com.kewu.app.AudioPlayback.stop()
+                        recorder.start()?.let { snackbar.toast(it) }
+                    }
+                },
+                modifier = Modifier.size(88.dp).graphicsLayer { scaleX = bump; scaleY = bump },
+                shape = CircleShape,
+                color = when { working -> cs.secondaryContainer; recording -> cs.error; else -> cs.primary },
+                contentColor = Color.White,
+            ) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    when {
+                        working -> InfiniteProgressIndicator(color = cs.primary, size = 30.dp)
+                        recording -> Box(Modifier.size(26.dp).clip(RoundedCornerShape(7.dp)).background(Color.White))
+                        else -> io.github.suqi8.coui.kmp.basic.Icon(
+                            io.github.suqi8.coui.kmp.icon.COUIIcons.Mic, contentDescription = "开始说话",
+                            tint = Color.White, modifier = Modifier.size(34.dp),
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            when {
+                transcribing -> "正在把你说的话转成文字…"
+                busy -> busyText
+                recording -> "正在听 · ${recSecs}s · 讲完再点一下"
+                else -> "点一下开始讲"
+            },
+            color = if (recording) cs.error else cs.onSurfaceSecondary, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+        )
+    }
+}
+
+/**
+ * 一个知识点的费曼讲解（选题之后的部分，讲给小悟听页和每日复习共用）：语音讲 → AI 打分 / 指漏洞 / 追问 → 语音回答追问。
+ * 讲到 85 分计入掌握度；每次出分回调 [onScored]。
+ */
+@Composable
+internal fun FeynmanSession(
+    backdrop: LayerBackdrop,
+    point: String,
+    material: String,
+    lead: String = "",
+    onScored: (FeynmanResult) -> Unit = {},
+) {
+    val cs = COUITheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
+    var rounds by remember(point) { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+    var result by remember(point) { mutableStateOf<FeynmanResult?>(null) }
+    var judging by remember(point) { mutableStateOf(false) }
+
+    fun submit(said: String) {
+        if (said.length < 10) { scope.launch { snackbar.toast("多讲几句，至少讲清楚是什么、为什么") }; return }
+        val next = rounds + (result?.followup.orEmpty() to said)
+        judging = true
+        scope.launch {
+            val r = evaluateFeynman(point, material, next)
+            judging = false
+            if (r == null) { snackbar.toast("小悟暂时连不上 AI 服务，请再讲一次"); return@launch }
+            rounds = next
+            result = r
+            haptic(HapticKind.Light)
+            if (r.score >= 85) MasteryStore.setRate(point, r.score, 0)
+            onScored(r)
+        }
+    }
+
+    val r = result
+    if (r != null) {
+        LabGlass(backdrop) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                ScoreRing(r.score / 100f, "${r.score}", "综合得分", scoreColor(r.score), size = 104)
+                Spacer(Modifier.width(16.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    r.dims.forEachIndexed { i, (n, s) -> ScoreBar(n, s, index = i) }
+                }
+            }
+            if (r.score >= 85) {
+                Spacer(Modifier.height(10.dp))
+                Text("讲得很好！「$point」已计入掌握度", color = KewuGreen, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+            }
+        }
+        rounds.lastOrNull()?.second?.let { said -> LabCard { QuoteBlock("你刚才讲的", said) } }
+        if (r.good.isNotEmpty()) LabCard { LabTitle("讲得好的地方", KewuGreen); Spacer(Modifier.height(8.dp)); DotList(r.good, KewuGreen) }
+        if (r.gaps.isNotEmpty()) LabCard { LabTitle("漏洞和不准确", cs.error); Spacer(Modifier.height(8.dp)); DotList(r.gaps, cs.error) }
+        if (r.better.isNotBlank()) LabCard {
+            LabTitle("小悟示范讲法")
+            Spacer(Modifier.height(8.dp))
+            MarkdownText(r.better, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 21.sp)
+        }
+    }
+    LabCard {
+        val ask = r?.followup.orEmpty()
+        if (ask.isNotBlank()) {
+            QuoteBlock("小悟追问", ask)
+            Spacer(Modifier.height(14.dp))
+        }
+        VoiceSpeakPanel(
+            prompt = if (ask.isNotBlank()) "用语音回答小悟的追问" else "讲讲「$point」",
+            hint = if (ask.isNotBlank()) "" else lead.ifBlank { "假装小悟完全没学过：是什么、为什么、怎么用，最好举个例子" },
+            busy = judging,
+            busyText = "小悟正在认真听你讲…",
+            onText = { submit(it) },
+        )
+    }
+}
+
+/**
+ * 讲给小悟听（学习规划入口）。[points] 候选知识点（为空且有 [summary] 时让 AI 从纪要里提炼）；[summary]/[transcript] 为课堂材料，可空。
  */
 @Composable
 internal fun FeynmanScreen(
@@ -949,8 +1040,6 @@ internal fun FeynmanScreen(
     onBack: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
-    val scope = rememberCoroutineScope()
-    val snackbar = LocalKewuSnackbar.current
     val material = remember(summary, transcript) {
         if (summary.isBlank() && transcript.isBlank()) "" else lessonMaterial(summary, transcript, budget = 8_000)
     }
@@ -958,14 +1047,6 @@ internal fun FeynmanScreen(
     var extracting by remember { mutableStateOf(false) }
     var point by remember { mutableStateOf<String?>(null) }
     var custom by remember { mutableStateOf("") }
-    var input by remember { mutableStateOf("") }
-    var rounds by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
-    var result by remember { mutableStateOf<FeynmanResult?>(null) }
-    var judging by remember { mutableStateOf(false) }
-    val recorder = rememberChatVoiceRecorder()
-    var transcribing by remember { mutableStateOf(false) }
-    var recSecs by remember { mutableIntStateOf(0) }
-    var autoStop by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(Unit) {
         if (candidates.isEmpty() && summary.isNotBlank()) {
@@ -978,56 +1059,14 @@ internal fun FeynmanScreen(
             extracting = false
         }
     }
-    LaunchedEffect(recorder.recording) {
-        recSecs = 0
-        while (recorder.recording) { delay(1_000); recSecs++; if (recSecs >= CHAT_VOICE_MAX_SECS) break }
-        if (recorder.recording) autoStop++
-    }
 
-    fun stopAndTranscribe() {
-        scope.launch {
-            val r = recorder.stop() ?: run { snackbar.toast("录音保存失败，请重试"); return@launch }
-            if (r.second < 1) { platformDeleteFile(r.first); snackbar.toast("说话时间太短"); return@launch }
-            transcribing = true
-            val res = KewuApi.sendChatVoice(r.first)
-            transcribing = false
-            val t = res.text.trim()
-            if (t.isEmpty()) snackbar.toast(res.error ?: "没听清，再说一次") else input = (input.trimEnd() + t).trim()
-        }
-    }
-
-    // 录满 60 秒自动结束并转文字
-    LaunchedEffect(autoStop) { if (autoStop > 0 && recorder.recording) stopAndTranscribe() }
-
-    fun submit() {
-        val p = point ?: return
-        val said = input.trim()
-        if (said.length < 10) { scope.launch { snackbar.toast("多讲几句，至少讲清楚是什么、为什么") }; return }
-        val ask = result?.followup.orEmpty()
-        val next = rounds + (ask to said)
-        judging = true
-        scope.launch {
-            val r = evaluateFeynman(p, material, next)
-            judging = false
-            if (r == null) { snackbar.toast("小悟暂时连不上 AI 服务，请重试"); return@launch }
-            rounds = next
-            input = ""
-            result = r
-            haptic(HapticKind.Light)
-            if (r.score >= 85) MasteryStore.setRate(p, r.score, 0)
-        }
-    }
-
-    StudyLabPage("讲给小悟听", {
-        if (recorder.recording) scope.launch { recorder.cancel() }
-        onBack()
-    }, subtitle = subtitle.ifBlank { "费曼学习法" }) { backdrop ->
+    StudyLabPage("讲给小悟听", onBack, subtitle = subtitle.ifBlank { "费曼学习法" }) { backdrop ->
         val p = point
         if (p == null) {
             LabGlass(backdrop) {
                 LabTitle("能讲清楚，才是真的懂")
                 Spacer(Modifier.height(6.dp))
-                Text("选一个知识点，假装小悟是完全没学过的同学，用自己的话（打字或说话）讲给它听。小悟会按准确、完整、清晰、通俗打分，指出漏洞并追问。",
+                Text("选一个知识点，假装小悟是完全没学过的同学，点麦克风用自己的话讲给它听。小悟会按准确、完整、清晰、通俗打分，指出漏洞并追问。",
                     color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 20.sp)
             }
             LabCard {
@@ -1054,82 +1093,8 @@ internal fun FeynmanScreen(
             }
             return@StudyLabPage
         }
-        val r = result
-        if (r != null) {
-            LabGlass(backdrop) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    ScoreRing(r.score / 100f, "${r.score}", "综合得分", scoreColor(r.score), size = 104)
-                    Spacer(Modifier.width(16.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        r.dims.forEachIndexed { i, (n, s) -> ScoreBar(n, s, index = i) }
-                    }
-                }
-                if (r.score >= 85) {
-                    Spacer(Modifier.height(10.dp))
-                    Text("讲得很好！「$p」已计入掌握度", color = KewuGreen, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
-                }
-            }
-            if (r.good.isNotEmpty()) LabCard { LabTitle("讲得好的地方", KewuGreen); Spacer(Modifier.height(8.dp)); DotList(r.good, KewuGreen) }
-            if (r.gaps.isNotEmpty()) LabCard { LabTitle("漏洞和不准确", cs.error); Spacer(Modifier.height(8.dp)); DotList(r.gaps, cs.error) }
-            if (r.better.isNotBlank()) LabCard {
-                LabTitle("小悟示范讲法")
-                Spacer(Modifier.height(8.dp))
-                MarkdownText(r.better, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 21.sp)
-            }
-        }
-        // 讲解输入（首轮 / 回答追问）
-        LabCard {
-            val ask = r?.followup.orEmpty()
-            if (ask.isNotBlank()) {
-                QuoteBlock("小悟追问", ask)
-                Spacer(Modifier.height(10.dp))
-            } else {
-                Text("讲讲「$p」", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(4.dp))
-                Text("是什么、为什么、怎么用，最好举个例子", color = cs.onSurfaceSecondary, fontSize = 12.5.sp)
-                Spacer(Modifier.height(10.dp))
-            }
-            TextField(input, { input = it }, Modifier.fillMaxWidth(), backgroundMode = TextFieldMode.Rectangle,
-                label = if (ask.isNotBlank()) "回答小悟的追问…" else "用自己的话讲…", minLines = 4, enabled = !judging)
-            Spacer(Modifier.height(10.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                // 语音：点一下开始，再点结束 → SIS 转文字填进输入框
-                val recording = recorder.recording
-                Row(
-                    Modifier.clip(RoundedCornerShape(50))
-                        .background(if (recording) cs.error.copy(alpha = 0.12f) else cs.secondaryContainer)
-                        .clickable(enabled = !transcribing && !judging) {
-                            haptic(HapticKind.Tick)
-                            if (recording) stopAndTranscribe() else scope.launch {
-                                com.kewu.app.AudioPlayback.stop()
-                                recorder.start()?.let { snackbar.toast(it) }
-                            }
-                        }
-                        .padding(horizontal = 14.dp, vertical = 9.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (transcribing) InfiniteProgressIndicator(size = 14.dp)
-                    else Box(Modifier.size(8.dp).clip(CircleShape).background(if (recording) cs.error else KewuBlue))
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        when {
-                            transcribing -> "正在转文字…"
-                            recording -> "说完了 · ${recSecs}s"
-                            else -> "用语音讲"
-                        },
-                        color = if (recording) cs.error else cs.onSurface, fontSize = 13.sp,
-                    )
-                }
-                Spacer(Modifier.weight(1f))
-                if (judging) InfiniteProgressIndicator(size = 22.dp)
-            }
-            Spacer(Modifier.height(12.dp))
-            KewuPrimaryButton(if (judging) "小悟在听…" else if (ask.isNotBlank()) "回答追问" else "讲完了，请小悟打分",
-                { submit() }, Modifier.fillMaxWidth(), enabled = !judging && !recorder.recording && !transcribing && input.isNotBlank())
-        }
-        if (r != null) KewuSecondaryButton("换一个知识点", {
-            point = null; result = null; rounds = emptyList(); input = ""
-        }, Modifier.fillMaxWidth())
+        FeynmanSession(backdrop, p, material)
+        KewuSecondaryButton("换一个知识点", { point = null }, Modifier.fillMaxWidth())
     }
 }
 
@@ -1273,52 +1238,6 @@ private fun FlowRow(stage: String, content: String, last: Boolean) {
         Column(Modifier.weight(1f).padding(bottom = if (last) 0.dp else 8.dp)) {
             Text(stage, color = KewuBlue, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
             Text(content, color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 19.sp)
-        }
-    }
-}
-
-// ───────────────────────── 入口卡片（纪要详情页） ─────────────────────────
-
-/** 课堂纪要详情页的「AI 学习工具」入口组。 */
-@Composable
-internal fun StudyLabEntries(sessionId: String, refresh: Int, onQuiz: () -> Unit, onCards: () -> Unit, onFeynman: () -> Unit) {
-    val best = remember(sessionId, refresh) { StudyLabStore.quizBest(sessionId) }
-    val deck = remember(sessionId, refresh) { StudyLabStore.cards().filter { it.deck == sessionId } }
-    val due = deck.count { it.due <= labNow() }
-    KewuSectionTitle("AI 学习工具")
-    Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        EntryCard(0, "课后自测", "AI 读整节转写出 5 道题，附老师原话出处",
-            best?.let { "最好 ${it.first}/${it.second}" }, KewuGreen, onQuiz)
-        EntryCard(1, "记忆卡片", "按遗忘曲线提醒复习本节重点",
-            when { deck.isEmpty() -> null; due > 0 -> "$due 张待复习"; else -> "${deck.size} 张" }, KewuBlue, onCards)
-        EntryCard(2, "讲给小悟听", "费曼学习法：讲清楚才算真懂，AI 打分追问", null, Color(0xFFF5A623), onFeynman)
-    }
-    Spacer(Modifier.height(4.dp))
-}
-
-@Composable
-private fun EntryCard(index: Int, title: String, desc: String, badge: String?, color: Color, onClick: () -> Unit) {
-    val cs = COUITheme.colorScheme
-    val p = rememberEnterProgress(index, baseDelayMs = 160L)
-    Card(
-        modifier = Modifier.fillMaxWidth().riseEnter(p, 24f),
-        cornerRadius = 18.dp,
-        insideMargin = PaddingValues(16.dp),
-        colors = kewuCardColors(),
-        onClick = { haptic(HapticKind.Light); onClick() },
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(10.dp).clip(CircleShape).background(color))
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(title, color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-                Spacer(Modifier.height(2.dp))
-                Text(desc, color = cs.onSurfaceSecondary, fontSize = 12.sp)
-            }
-            if (badge != null) {
-                Spacer(Modifier.width(8.dp))
-                KewuTag(badge, color.copy(alpha = 0.14f), color)
-            }
         }
     }
 }
