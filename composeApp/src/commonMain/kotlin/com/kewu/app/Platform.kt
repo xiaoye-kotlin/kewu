@@ -30,6 +30,15 @@ expect fun platformFileSize(path: String): Long
 /** 以流读取文件：录音 / 附件上传用，避免把上百 MB 的文件整个读进内存。 */
 expect fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel
 
+/**
+ * 按偏移读取文件片段（2026-11-04 录音分段上传用）：从 offset 起最多读 len 字节。
+ * 文件不足 len 时返回实际可读部分；offset 越界 / 失败返回 null。
+ */
+expect fun platformReadFileRange(path: String, offset: Long, len: Int): ByteArray?
+
+/** 把字节写入文件（录音分段 WAV 落盘用），返回是否成功。 */
+expect fun platformWriteFile(path: String, bytes: ByteArray): Boolean
+
 /** 删除本地文件（上传成功后清理缓存副本），失败静默。 */
 expect fun platformDeleteFile(path: String)
 

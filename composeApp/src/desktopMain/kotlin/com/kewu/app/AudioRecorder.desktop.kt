@@ -81,7 +81,7 @@ actual class AudioRecorder actual constructor(context: Any) {
             file?.let { raw ->
                 val wav = File(raw.parent, raw.nameWithoutExtension + ".wav")
                 if (convertPcmToWav(raw, wav)) {
-                    raw.delete()
+                    // 2026-11-04：PCM 不再删除——RecordingManager 停止后还要按偏移切尾段，切完由它清理
                     wav.absolutePath
                 } else {
                     raw.absolutePath
@@ -139,4 +139,8 @@ actual class AudioRecorder actual constructor(context: Any) {
     actual fun isRecording(): Boolean = recording
 
     actual fun getSampleRate(): Int = SAMPLE_RATE
+
+    actual fun rawAudioPath(outputFile: String): String = outputFile
+
+    actual fun rawDataOffset(): Int = 0
 }

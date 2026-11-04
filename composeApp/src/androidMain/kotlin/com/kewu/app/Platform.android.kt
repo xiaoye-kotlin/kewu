@@ -141,6 +141,32 @@ actual fun platformFileSize(path: String): Long = try {
 actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
     java.io.File(path).readChannel()
 
+actual fun platformReadFileRange(path: String, offset: Long, len: Int): ByteArray? = try {
+    java.io.RandomAccessFile(path, "r").use { raf ->
+        val size = raf.length()
+        if (offset >= size) return null
+        raf.seek(offset)
+        val toRead = minOf(len.toLong(), size - offset).toInt()
+        val buf = ByteArray(toRead)
+        var read = 0
+        while (read < toRead) {
+            val n = raf.read(buf, read, toRead - read)
+            if (n < 0) break
+            read += n
+        }
+        if (read == toRead) buf else buf.copyOf(read)
+    }
+} catch (_: Exception) {
+    null
+}
+
+actual fun platformWriteFile(path: String, bytes: ByteArray): Boolean = try {
+    java.io.File(path).let { it.parentFile?.mkdirs(); it.writeBytes(bytes) }
+    true
+} catch (_: Exception) {
+    false
+}
+
 actual fun platformDeleteFile(path: String) {
     runCatching { java.io.File(path).delete() }
 }

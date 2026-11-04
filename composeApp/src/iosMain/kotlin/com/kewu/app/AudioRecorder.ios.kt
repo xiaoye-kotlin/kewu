@@ -61,6 +61,10 @@ actual class AudioRecorder actual constructor(context: Any) {
     actual fun isRecording(): Boolean = recorder?.isRecording() == true
 
     actual fun getSampleRate(): Int = 16000
+
+    actual fun rawAudioPath(outputFile: String): String = outputFile.removeSuffix(".pcm") + ".wav"
+
+    actual fun rawDataOffset(): Int = 44
 }
 
 actual fun requestAudioPermission(activity: Any, onResult: (Boolean) -> Unit) {

@@ -76,6 +76,10 @@ fun App() {
         LaunchedEffect(loggedIn, role) {
             if (loggedIn) NoticeCenter.start(teacher = role == ROLE_TEACHER) else NoticeCenter.stop()
         }
+        // 2026-11-04（任务 #15）：登录后恢复续传上次未传完的录音段（退出软件 / 断网不丢段）
+        LaunchedEffect(loggedIn) {
+            if (loggedIn) RecordingManager.resumePendingUploads()
+        }
         // 系统通知权限（Android 13+）：登录后只主动问一次，之后可在「我的 → 通知设置」里开
         LaunchedEffect(loggedIn) {
             if (loggedIn && !isNotificationPermissionGranted() && kvGet("kewu_notif_asked") != "1") {

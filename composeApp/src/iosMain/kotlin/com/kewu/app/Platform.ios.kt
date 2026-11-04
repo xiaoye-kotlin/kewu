@@ -2,8 +2,10 @@ package com.kewu.app
 
 import io.ktor.client.HttpClient
 import kotlinx.cinterop.ByteVar
+import kotlinx.cinterop.addressOf
 import kotlinx.cinterop.readBytes
 import kotlinx.cinterop.reinterpret
+import kotlinx.cinterop.usePinned
 import platform.Foundation.create
 import io.ktor.client.engine.darwin.Darwin
 import platform.UIKit.UIDevice
@@ -86,6 +88,37 @@ actual fun platformFileSize(path: String): Long {
 
 actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
     io.ktor.utils.io.ByteReadChannel(platformReadFile(path) ?: ByteArray(0))
+
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+actual fun platformReadFileRange(path: String, offset: Long, len: Int): ByteArray? {
+    val handle = platform.Foundation.NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
+    return try {
+        handle.seekToFileOffset(offset.toULong())
+        val data = handle.readDataOfLength(len.toULong())
+        val n = data.length.toInt()
+        if (n == 0) ByteArray(0)
+        else {
+            val bytes = data.bytes ?: return null
+            bytes.reinterpret<ByteVar>().readBytes(n)
+        }
+    } catch (_: Exception) {
+        null
+    } finally {
+        runCatching { handle.closeFile() }
+    }
+}
+
+@OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
+actual fun platformWriteFile(path: String, bytes: ByteArray): Boolean {
+    return try {
+        val data = bytes.usePinned { pinned ->
+            platform.Foundation.NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
+        }
+        data.writeToFile(path, atomically = true)
+    } catch (_: Exception) {
+        false
+    }
+}
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 actual fun platformDeleteFile(path: String) {

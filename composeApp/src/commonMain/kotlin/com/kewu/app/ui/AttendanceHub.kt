@@ -46,6 +46,7 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
+import com.kewu.app.RecordingManager
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -191,7 +192,11 @@ fun AttendanceDetailScreen(
             )
             checking = false
             checkMsg = if (err == null) "签到成功" else err
-            if (err == null) reload(silent = true)
+            if (err == null) {
+                reload(silent = true)
+                // 2026-11-04（任务 #14）：签到成功自动开启课堂录音（幂等，没权限静默跳过）
+                session?.courseId?.let { RecordingManager.autoStartAfterCheckIn(it) }
+            }
         }
     }
 

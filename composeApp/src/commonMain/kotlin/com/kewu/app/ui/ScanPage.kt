@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
+import com.kewu.app.RecordingManager
 import com.kewu.app.haptic
 import com.kewu.app.platformActivity
 import com.kewu.app.requestCameraPermission
@@ -181,6 +182,8 @@ fun ScanPage(
                 courseId = courseId,
             )
             state = if (err == null) ScanState.Success(sid) else ScanState.Error(err)
+            // 2026-11-04（任务 #14）：签到成功自动开启课堂录音（幂等，没权限静默跳过）
+            if (err == null) courseId?.let { RecordingManager.autoStartAfterCheckIn(it) }
         }
     }
 

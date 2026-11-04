@@ -1633,11 +1633,50 @@ object KewuApi {
         avgLevel: Double? = null,
         /** 录音结束时刻（epoch ms）：服务端多端转写按时间对齐互补用。 */
         endedAt: Long? = null,
+        /** 2026-11-04 分段上传：segGroup 为同一次录音各段共享的分组 key（后端拼接用），segIndex 为段序号。 */
+        segGroup: String? = null,
+        segIndex: Int? = null,
     ): RecordingUploadResult? = try {
+        uploadRecordingImpl(path, filename, classId, sessionId, durationSec, role, avgLevel, endedAt, segGroup, segIndex)
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 段上传三态结果（2026-11-04 分段上传）：Ok 成功 / Sealed 会话已封口（教师已融合，放弃剩余段）/ Failed 网络类失败可重试。 */
+    sealed interface SegmentUploadResult {
+        data class Ok(val result: RecordingUploadResult) : SegmentUploadResult
+        data object Sealed : SegmentUploadResult
+        data class Failed(val msg: String) : SegmentUploadResult
+    }
+
+    /** 分段上传专用入口：与 [uploadRecording] 同通道，但把「会话已封口」从普通失败里区分出来。 */
+    suspend fun uploadRecordingSegment(
+        path: String, filename: String, classId: String, sessionId: String,
+        segGroup: String, segIndex: Int, durationSec: Double, role: String, endedAt: Long?,
+        sampleRate: Int,
+    ): SegmentUploadResult = try {
+        SegmentUploadResult.Ok(
+            uploadRecordingImpl(path, filename, classId, sessionId, durationSec, role, null, endedAt, segGroup, segIndex, sampleRate)
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) {
+        if (e.message.orEmpty().contains("SESSION_SEALED")) SegmentUploadResult.Sealed
+        else SegmentUploadResult.Failed(e.message.orEmpty())
+    } catch (e: Exception) { SegmentUploadResult.Failed(e.message.orEmpty()) }
+
+    private suspend fun uploadRecordingImpl(
+        path: String, filename: String, classId: String, sessionId: String?, durationSec: Double?,
+        role: String,
+        avgLevel: Double? = null,
+        endedAt: Long? = null,
+        segGroup: String? = null,
+        segIndex: Int? = null,
+        /** 实际采样率（WAV 头/服务端分析用；旧调用默认 44100 保持兼容，分段上传必须传真实值）。 */
+        sampleRate: Int = 44100,
+    ): RecordingUploadResult = try {
         val content = MultiPartFormDataContent(formData {
             append("classId", classId)
             append("deviceId", platformDeviceId())
-            append("sampleRate", "44100")
+            append("sampleRate", sampleRate.toString())
             append("format", "wav")
             // 10.3：role 不传默认 student；教师端必须显式传 teacher，融合时才会「教师端优先」
             append("role", role)
@@ -1646,6 +1685,8 @@ object KewuApi {
             if (avgLevel != null) append("avgLevel", avgLevel.toString())
             username?.let { append("username", it) }
             if (endedAt != null) append("endedAt", endedAt.toString())
+            if (segGroup != null) append("segGroup", segGroup)
+            if (segIndex != null) append("segIndex", segIndex.toString())
             // ★ 2026-10-26：流式上传（ChannelProvider 按需读文件），不再把整段录音读进内存
             val size = platformFileSize(path)
             if (size <= 0) throw ApiException("录音文件不存在或为空")
@@ -1672,7 +1713,20 @@ object KewuApi {
             snrDb = (el["snrDb"] as? JsonPrimitive)?.content?.toDoubleOrNull(),
         )
     } catch (e: CancellationException) { throw e }
-    catch (_: Exception) { null }
+    catch (e: ApiException) { throw e }
+    catch (_: Exception) { throw ApiException("录音上传失败，请稍后重试") }
+
+    /**
+     * 教师融合录音（2026-11-04，任务 R5/R6）：把该课堂会话已上传的录音段封口拼接 → 择优 → 转写 → 置下课。
+     * 后端仅教师 JWT 可调。成功返回 null，失败返回可展示文案。
+     */
+    suspend fun finalizeClassSession(sessionId: String): String? = try {
+        val resp = client.post("$OBS_URL/api/class-recordings/${pathSegment(sessionId)}/finalize")
+        val o = json.parseToJsonElement(resp.bodyAsText()) as? JsonObject
+        if (o != null && (o["code"]?.int() ?: 0) == 0) null
+        else o?.get("message")?.jsonPrimitive?.content ?: "融合失败，请稍后重试"
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { "融合失败，请检查网络后重试" }
 
     /**
      * 8081 Redis 缓存类写接口（纪要 / 会话 / 简易签到）的统一 POST：成功返回 null，失败返回可展示文案。

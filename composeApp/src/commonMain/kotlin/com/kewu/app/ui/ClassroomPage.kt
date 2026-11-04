@@ -1060,6 +1060,8 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
 
     // 录音状态单源：单例 StateFlow（旋屏 / 切 tab / 页面销毁均不影响录音进程）
     val st = RecordingManager.status.collectAsState().value
+    // 2026-11-04（任务 #15）：排队中的录音段数（分段上传后台续传提示）
+    val pendingSegs = RecordingManager.pendingUploads.collectAsState().value.size
 
     // ★ 2026-10-26 用户口径：只有「老师发起了签到（正在上课）+ 我已经签到」的那门课才出现课堂录音按钮，
     //   录音也绑定到这门课（旧版无条件显示、固定绑第一门课）。每 20 秒复查一次；录音 / 上传进行中不受影响。
@@ -1153,13 +1155,20 @@ private fun RecordingOverlay(backdrop: LayerBackdrop, courseInfos: List<CourseIn
                     )
                     Spacer(Modifier.height(2.dp))
                     val sub = when (st) {
-                        is RecordingStatus.Recording -> "录音中 ${fmtTime(st.elapsedSec)}"
+                        is RecordingStatus.Recording -> "自动录音中 ${fmtTime(st.elapsedSec)}"
                         is RecordingStatus.Uploading -> "录音完成，正在上传"
                         is RecordingStatus.Success -> "已上传 ✓"
                         is RecordingStatus.Error -> st.msg
-                        RecordingStatus.Idle -> "点击右侧按钮开始录音"
+                        RecordingStatus.Idle -> "签到成功后自动开始录音"
                     }
                     Text(sub, color = cs.onSurfaceSecondary, fontSize = 13.sp, maxLines = 1)
+                    if (pendingSegs > 0) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "后台续传中 · 剩余 $pendingSegs 段",
+                            color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1,
+                        )
+                    }
                     if (collabOn) {
                         Spacer(Modifier.height(2.dp))
                         Text(

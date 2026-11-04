@@ -31,6 +31,18 @@ expect class AudioRecorder(context: Any) {
      * 获取采样率
      */
     fun getSampleRate(): Int
+
+    /**
+     * 录音期间持续追加写入的原始音频文件（2026-11-04 分段上传按偏移读用）。
+     * Android/Desktop = [outputFile] 本身（裸 PCM）；iOS = 实际写入的 .wav。
+     */
+    fun rawAudioPath(outputFile: String): String
+
+    /**
+     * 原始文件里音频数据的起始偏移：iOS WAV 头 44 字节，Android/Desktop 裸 PCM = 0。
+     * 分段上传读 [rawAudioPath] 时 = 数据流偏移 + 本值。
+     */
+    fun rawDataOffset(): Int
 }
 
 /**
