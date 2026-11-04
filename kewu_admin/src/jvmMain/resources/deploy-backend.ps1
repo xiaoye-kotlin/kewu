@@ -1,6 +1,9 @@
 param(
     [Parameter(Mandatory=$true)][string]$ServerRoot,
-    [Parameter(Mandatory=$true)][string]$ZipUrl
+    [Parameter(Mandatory=$true)][string]$ZipUrl,
+    [switch]$OnlineBuild,
+    [string]$PrebuiltJarUrl = '',
+    [string]$DeployTemplate = ''
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -46,7 +49,8 @@ try {
         Where-Object { $_.IPAddress -notlike '127.*' -and $_.IPAddress -notlike '169.254.*' } |
         ForEach-Object { $_.IPAddress }
     Log ('host: ' + $env:COMPUTERNAME + '   IPv4: ' + ($ips -join ', '))
-    if (Test-Path (Join-Path $root 'deploy-8080.ps1')) { Log 'found existing deploy-8080.ps1 (will reuse)' } else { Log 'deploy-8080.ps1 missing (will bootstrap from source archive)' }
+    if ($OnlineBuild) { Log 'mode: ONLINE BUILD (download source and build with Gradle on server)' } else { Log 'mode: PREBUILT JAR (download ready-made jar from GitHub Release, no Gradle on server)' }
+    if (Test-Path (Join-Path $root 'deploy-8080.ps1')) { Log 'found existing deploy-8080.ps1 (will reuse)' } else { Log 'deploy-8080.ps1 missing (will bootstrap from template)' }
     if (Test-Path (Join-Path $root 'kewu.env')) { Log 'found existing kewu.env (will reuse)' } else { Log 'kewu.env missing (will generate with random secrets)' }
     if (Test-Path (Join-Path $root 'kewu-8080.jar')) { Log 'found existing kewu-8080.jar (upgrade deploy)' } else { Log 'kewu-8080.jar missing (first-time deploy)' }
     if (-not (Test-Tcp 3306)) { Log '[WARN] MySQL 3306 not listening. Please install MySQL and create database `kewu` before deploying.' }
@@ -61,7 +65,7 @@ try {
         if ($javaHome -and (Test-Path (Join-Path $javaHome 'bin\java.exe'))) {
             Log "using JAVA_HOME: $javaHome"
         } else {
-            Log '[1/5] No JDK found. Downloading OpenJDK 21 from Tsinghua mirror...'
+            Log '[1/4] No JDK found. Downloading OpenJDK 21 from Tsinghua mirror...'
             $mirrorDir = 'https://mirrors.tuna.tsinghua.edu.cn/Adoptium/21/jdk/x64/windows/'
             $idx = Invoke-WebRequest -UseBasicParsing -Uri $mirrorDir -TimeoutSec 60
             $jdkZip = ($idx.Links | Where-Object { $_.href -match '^OpenJDK21U-jdk_x64_windows_hotspot_.*\.zip$' } | Select-Object -First 1).href
@@ -82,35 +86,54 @@ try {
         }
     }
 
-    # ------------------------------------------------ 2. download + extract source
-    Log '[2/5] Downloading backend source from GitHub...'
-    Invoke-WebRequest -UseBasicParsing -Uri $ZipUrl -OutFile $zipPath -TimeoutSec 300
-    Log ('  downloaded ' + (Get-Item $zipPath).Length + ' bytes')
-    if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
-    Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
-    Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+    # ------------------------------------------------ 2. obtain the new jar
+    $newJar = Join-Path $root 'kewu-8080-new.jar'
+    $sourceDir = $null
+    if (-not $OnlineBuild) {
+        if ($PrebuiltJarUrl) {
+            Log '[2/4] Downloading prebuilt backend jar from GitHub Release...'
+            Invoke-WebRequest -UseBasicParsing -Uri $PrebuiltJarUrl -OutFile $newJar -TimeoutSec 900
+            Log ('  downloaded ' + (Get-Item $newJar).Length + ' bytes')
+        } elseif (Test-Path $newJar) {
+            Log ('[2/4] using existing jar in server root: ' + (Get-Item $newJar).Length + ' bytes')
+        } else {
+            throw "Prebuilt jar mode: no download URL and $newJar not found."
+        }
+    } else {
+        Log '[2/4] Downloading backend source from GitHub...'
+        Invoke-WebRequest -UseBasicParsing -Uri $ZipUrl -OutFile $zipPath -TimeoutSec 300
+        Log ('  downloaded ' + (Get-Item $zipPath).Length + ' bytes')
+        if (Test-Path $extractRoot) { Remove-Item $extractRoot -Recurse -Force }
+        Expand-Archive -LiteralPath $zipPath -DestinationPath $extractRoot -Force
+        Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
 
-    $sourceDir = Get-ChildItem -Path $extractRoot -Directory | ForEach-Object { Join-Path $_.FullName 'kewu-8080' } | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $sourceDir) { throw 'kewu-8080 source directory not found in GitHub archive' }
-    Log "  source: $sourceDir"
+        $sourceDir = Get-ChildItem -Path $extractRoot -Directory | ForEach-Object { Join-Path $_.FullName 'kewu-8080' } | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if (-not $sourceDir) { throw 'kewu-8080 source directory not found in GitHub archive' }
+        Log "  source: $sourceDir"
 
-    # Gradle 发行版走腾讯镜像，避免 services.gradle.org 国际线路龟速。
-    $wrapperProps = Join-Path $sourceDir 'gradle\wrapper\gradle-wrapper.properties'
-    if (Test-Path $wrapperProps) {
-        $wp = Get-Content $wrapperProps -Raw
-        $wp = $wp -replace 'https\\?:\\/\\/services\.gradle\.org\\/distributions\\/', 'https\://mirrors.cloud.tencent.com/gradle/'
-        Set-Content -Path $wrapperProps -Value $wp -Encoding ASCII
+        # Gradle 发行版走腾讯镜像，避免 services.gradle.org 国际线路龟速。
+        $wrapperProps = Join-Path $sourceDir 'gradle\wrapper\gradle-wrapper.properties'
+        if (Test-Path $wrapperProps) {
+            $wp = Get-Content $wrapperProps -Raw
+            $wp = $wp -replace 'https\\?:\\/\\/services\.gradle\.org\\/distributions\\/', 'https\://mirrors.cloud.tencent.com/gradle/'
+            Set-Content -Path $wrapperProps -Value $wp -Encoding ASCII
+        }
     }
 
     # ------------------------------------------------ 3. bootstrap server files on first run
     $deployPs1 = Join-Path $root 'deploy-8080.ps1'
     if (-not (Test-Path $deployPs1)) {
-        $template = Join-Path $sourceDir 'deploy\deploy-8080.ps1'
-        if (Test-Path $template) {
+        $template = ''
+        if ($sourceDir) {
+            $t = Join-Path $sourceDir 'deploy\deploy-8080.ps1'
+            if (Test-Path $t) { $template = $t }
+        }
+        if (-not $template -and $DeployTemplate -and (Test-Path $DeployTemplate)) { $template = $DeployTemplate }
+        if ($template) {
             Copy-Item $template $deployPs1 -Force
-            Log "  bootstrapped deploy-8080.ps1 from source archive"
+            Log "  bootstrapped deploy-8080.ps1 from template"
         } else {
-            throw 'deploy-8080.ps1 missing and no template found in source archive.'
+            throw 'deploy-8080.ps1 missing and no template available.'
         }
     }
     if (-not (Test-Path (Join-Path $root 'kewu.env'))) {
@@ -157,19 +180,20 @@ Start-Sleep -Seconds 1
         Log '  created scheduled task KewuBackend8080 (auto start on boot)'
     }
 
-    # 清掉上次卡死残留的 Gradle 守护进程（按命令行匹配 gradle，不会碰线上 8080 后端）。
-    $leftovers = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-        Where-Object { $_.CommandLine -and ($_.CommandLine -match 'gradle') }
-    foreach ($p in $leftovers) {
-        Log ("  stopping leftover gradle java pid=" + $p.ProcessId)
-        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
-    }
+    # ------------------------------------------------ 4. (online mode only) build
+    if ($OnlineBuild) {
+        # 清掉上次卡死残留的 Gradle 守护进程（按命令行匹配 gradle，不会碰线上 8080 后端）。
+        $leftovers = Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and ($_.CommandLine -match 'gradle') }
+        foreach ($p in $leftovers) {
+            Log ("  stopping leftover gradle java pid=" + $p.ProcessId)
+            Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        }
 
-    # 国内服务器直连 Maven Central / Gradle Plugin Portal 极慢，注入阿里云镜像 init 脚本。
-    # 必须 ASCII 写出：PS5.1 的 -Encoding UTF8 会带 BOM，而 Gradle 的 init 脚本读取器不剥 BOM，
-    # 会报 "Unexpected character: '' @ line 1, column 1"。内容为纯 ASCII，无 BOM 即可。
-    $initScript = Join-Path $work 'aliyun-mirror.init.gradle'
-    @'
+        # 国内服务器直连 Maven Central / Gradle Plugin Portal 极慢，注入阿里云镜像 init 脚本。
+        # 必须 ASCII 写出：PS5.1 的 -Encoding UTF8 会带 BOM，而 Gradle 的 init 脚本读取器不剥 BOM。
+        $initScript = Join-Path $work 'aliyun-mirror.init.gradle'
+        @'
 allprojects {
     buildscript {
         repositories {
@@ -195,32 +219,29 @@ settingsEvaluated { settings ->
 }
 '@ | Set-Content -Path $initScript -Encoding ASCII
 
-    # ------------------------------------------------ 4. build
-    $gradlew = Join-Path $sourceDir 'gradlew.bat'
-    if (-not (Test-Path $gradlew)) { throw "Gradle wrapper not found: $gradlew" }
+        $gradlew = Join-Path $sourceDir 'gradlew.bat'
+        if (-not (Test-Path $gradlew)) { throw "Gradle wrapper not found: $gradlew" }
 
-    Log '[3/5] Building kewu-8080 shadowJar on server (first run downloads deps via Aliyun mirror, usually a few minutes)...'
-    $env:JAVA_HOME = $javaHome
-    $env:Path = "$javaHome\bin;$env:Path"
-    Push-Location $sourceDir
-    # 命令行 -D 显式锁定服务器 JDK，覆盖仓库 gradle.properties 里可能残留的
-    # org.gradle.java.home（开发机路径在服务器上不存在会导致构建直接失败）；
-    # 低内存服务器上把 Gradle/Kotlin 守护进程堆压到 1G/768M，避免与线上 8080 抢内存换页。
-    & cmd.exe /c "`"$gradlew`" --no-daemon -Dorg.gradle.java.home=`"$javaHome`" `"-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=256m -Dfile.encoding=UTF-8`" `"-Dkotlin.daemon.jvmargs=-Xmx768m`" -I `"$initScript`" clean shadowJar"
-    $buildCode = $LASTEXITCODE
-    Pop-Location
-    if ($buildCode -ne 0) { throw "Gradle shadowJar failed with exit code $buildCode" }
+        Log '[3/4] Building kewu-8080 shadowJar on server (first run downloads deps via Aliyun mirror)...'
+        $env:JAVA_HOME = $javaHome
+        $env:Path = "$javaHome\bin;$env:Path"
+        Push-Location $sourceDir
+        # -D 锁定服务器 JDK；堆收敛到 1G/768M 避免与线上 8080 抢内存；
+        # kotlin 编译改 in-process，避免 Kotlin 编译守护进程在低内存服务器上挂起。
+        & cmd.exe /c "`"$gradlew`" --no-daemon -Dorg.gradle.java.home=`"$javaHome`" `"-Dorg.gradle.jvmargs=-Xmx1024m -XX:MaxMetaspaceSize=256m -Dfile.encoding=UTF-8`" `"-Dkotlin.daemon.jvmargs=-Xmx768m`" `"-Dkotlin.compiler.execution.strategy=in-process`" -I `"$initScript`" clean shadowJar"
+        $buildCode = $LASTEXITCODE
+        Pop-Location
+        if ($buildCode -ne 0) { throw "Gradle shadowJar failed with exit code $buildCode" }
 
-    $builtJar = Join-Path $sourceDir 'build\libs\kewu-8080.jar'
-    if (-not (Test-Path $builtJar)) { throw "Built jar not found: $builtJar" }
-    Log ("  built " + (Get-Item $builtJar).Length + ' bytes')
+        $builtJar = Join-Path $sourceDir 'build\libs\kewu-8080.jar'
+        if (-not (Test-Path $builtJar)) { throw "Built jar not found: $builtJar" }
+        Log ("  built " + (Get-Item $builtJar).Length + ' bytes')
+        Copy-Item $builtJar $newJar -Force
+        Log "  copied to $newJar"
+    }
 
     # ------------------------------------------------ 5. safe deploy (8090 smoke -> swap -> verify -> rollback)
-    $newJar = Join-Path $root 'kewu-8080-new.jar'
-    Copy-Item $builtJar $newJar -Force
-    Log "  copied to $newJar"
-
-    Log '[4/5] Running safe deploy script (8090 smoke test, backup, swap, verify, rollback)...'
+    Log '[3/4] Running safe deploy script (8090 smoke test, backup, swap, verify, rollback)...'
     $sanitizedDeploy = Join-Path $work 'deploy-8080-safe.ps1'
     $deploySource = Get-Content $deployPs1 -Raw
     # 原脚本按自身位置推导 $root；复制到临时目录执行会错根目录，显式锁定为服务器后端目录。

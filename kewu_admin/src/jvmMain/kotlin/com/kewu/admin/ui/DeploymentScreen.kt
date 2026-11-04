@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.SkipNext
 import io.github.suqi8.coui.kmp.basic.Icon
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import io.github.suqi8.coui.kmp.basic.Text
 import androidx.compose.runtime.Composable
@@ -105,6 +106,8 @@ private fun DeploymentContent(
     var detectedRoot by remember { mutableStateOf<String?>(null) }
     var serverRoot by remember { mutableStateOf("") }
     var zipUrl by remember { mutableStateOf(service.defaultBackendZipUrl) }
+    var jarUrl by remember { mutableStateOf(service.defaultPrebuiltJarUrl) }
+    var onlineBuild by remember { mutableStateOf(false) }
     var deploying by remember { mutableStateOf(false) }
     var success by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
@@ -128,8 +131,8 @@ private fun DeploymentContent(
             success = false
             error = null
             logs.clear()
-            logs.add("开始从 GitHub 拉取后端源码并部署……")
-            val result = service.deploy(serverRoot.trim(), zipUrl.trim()) { logs.add(it) }
+            logs.add(if (onlineBuild) "开始从 GitHub 拉取源码并在服务器构建部署……" else "开始从 GitHub Release 下载预构建后端包并部署……")
+            val result = service.deploy(serverRoot.trim(), jarUrl.trim(), zipUrl.trim(), onlineBuild) { logs.add(it) }
             deploying = false
             result.onSuccess {
                 logs.add("部署完成，稍后进入管理界面。")
@@ -205,11 +208,33 @@ private fun DeploymentContent(
             )
         }
         Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            FilterChip(
+                selected = !onlineBuild,
+                onClick = { onlineBuild = false },
+                label = { Text("预构建包部署（推荐）") },
+                enabled = !deploying,
+            )
+            FilterChip(
+                selected = onlineBuild,
+                onClick = { onlineBuild = true },
+                label = { Text("服务器在线构建") },
+                enabled = !deploying,
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            if (onlineBuild) "从 GitHub 拉源码，在服务器本机跑 Gradle 构建（慢、依赖多，仅作备选）。"
+            else "直接下载 GitHub Release 上由开发机构建验证过的 jar，服务器不跑 Gradle，几分钟完成。",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.height(8.dp))
         OutlinedTextField(
-            value = zipUrl,
-            onValueChange = { zipUrl = it },
+            value = if (onlineBuild) zipUrl else jarUrl,
+            onValueChange = { if (onlineBuild) zipUrl = it else jarUrl = it },
             modifier = Modifier.fillMaxWidth(),
-            label = "后端源码 ZIP 地址",
+            label = if (onlineBuild) "后端源码 ZIP 地址" else "预构建 jar 下载地址（GitHub Release）",
             singleLine = true,
             enabled = !deploying,
         )
