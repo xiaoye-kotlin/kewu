@@ -78,8 +78,10 @@ function UploadTest([int]$port) {
     $tmp = Join-Path $env:TEMP 'kewu-upload-probe.txt'
     Set-Content -Path $tmp -Value 'kewu upload probe' -Encoding ascii
     $resp = & curl.exe -s --max-time 60 -F "kind=FILE" -F "uploader=deploy-probe" -F "file=@$tmp;type=text/plain" "http://127.0.0.1:$port/api/uploads"
-    Log ("  $port/api/uploads -> " + ([string]$resp -replace "`r?`n", ' ').Substring(0, [Math]::Min(300, ([string]$resp).Length)))
-    if ($resp -match '"url"\s*:\s*"([^"]+)"') {
+    # curl 的多行输出在 PS5.1 里是字符串数组，必须先拼成单串再正则，否则 $Matches 为空。
+    $respText = ($resp | Out-String)
+    Log ("  $port/api/uploads -> " + ($respText -replace "`r?`n", ' ').Substring(0, [Math]::Min(300, $respText.Length)))
+    if ($respText -match '"url"\s*:\s*"([^"]+)"') {
         $u = $Matches[1]
         $p = Probe $u
         Log ("  uploaded url public GET -> " + $p.code + '  ' + $p.body)
@@ -105,7 +107,7 @@ $smokeErr = Join-Path $logDir 'smoke-8090.err.log'
 $proc = Start-Process -FilePath $java -ArgumentList @('-Xmx384m', '-XX:+UseSerialGC', '-Dfile.encoding=UTF-8',
     '-Djava.net.useSystemProxies=false', '-jar', "`"$newJar`"") -WorkingDirectory $root -PassThru -WindowStyle Hidden `
     -RedirectStandardOutput $smokeLog -RedirectStandardError $smokeErr
-$smokeOk = WaitHealth 8090 120
+$smokeOk = WaitHealth 8090 240
 foreach ($c in $checks) {
     $p = Probe ("http://127.0.0.1:8090" + $c)
     Log ("  8090$c -> " + $p.code + '  ' + ($p.body -replace "`r?`n", ' '))
@@ -130,14 +132,14 @@ Copy-Item $liveJar $bak -Force
 Log "  previous jar backed up to $bak"
 Copy-Item $newJar $liveJar -Force
 schtasks /run /tn KewuBackend8080 | Out-Null
-if (-not (WaitHealth 8080 150)) {
+if (-not (WaitHealth 8080 420)) {
     Log '[FAIL] 8080 not healthy with the new jar -> restoring the previous jar'
     Get-Content (Join-Path $logDir 'server8080.log') -Tail 40 | ForEach-Object { Add-Content -Path $out -Value $_ -Encoding utf8 }
     KillPort 8080
     Start-Sleep -Seconds 2
     Copy-Item $bak $liveJar -Force
     schtasks /run /tn KewuBackend8080 | Out-Null
-    $back = WaitHealth 8080 150
+    $back = WaitHealth 8080 420
     Log ('  previous jar restored, healthy=' + $back)
     Read-Host 'Enter to close'; exit 1
 }
