@@ -550,13 +550,14 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     val scrollState = rememberScrollState()
 
     LaunchedEffect(scrollState) {
-        var last = 0
+        // 2026-11-05（A2）：基线重建首帧不动作（与「我的」页同款修复），防子页返回时误判下滑藏导航。
+        var last = -1
         snapshotFlow { scrollState.value }.collect { cur ->
             if (cur <= 0) {
                 onNavHide(false)
             } else {
                 val delta = cur - last
-                if (delta > 6) onNavHide(true) else if (delta < -6) onNavHide(false)
+                if (last >= 0 && delta > 6) onNavHide(true) else if (delta < -6) onNavHide(false)
             }
             last = cur
         }

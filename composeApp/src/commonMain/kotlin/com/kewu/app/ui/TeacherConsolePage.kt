@@ -235,14 +235,14 @@ fun TeacherConsolePage(
         }
     }
 
-    // 导航栏随滚动收起（与学生端同款增量判断）
+    // 导航栏随滚动收起（与学生端同款增量判断）；2026-11-05（A2）基线重建首帧不动作
     LaunchedEffect(scrollState) {
-        var last = 0
+        var last = -1
         snapshotFlow { scrollState.value }.collect { cur ->
             if (cur <= 0) onNavHide(false)
             else {
                 val d = cur - last
-                if (d > 6) onNavHide(true) else if (d < -6) onNavHide(false)
+                if (last >= 0 && d > 6) onNavHide(true) else if (d < -6) onNavHide(false)
             }
             last = cur
         }

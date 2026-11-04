@@ -164,6 +164,13 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
     var screen by remember { mutableStateOf(0) }
     LockTabSwipe(screen != 0)
 
+    // ★ A2（2026-11-05）：进入「我的」任一子页（校园功能/编辑资料等）时把底部导航栏放出来。
+    // 用户先下滑把导航藏起来、再点进「查看班级」等子页，返回主页时期望导航栏重新出现而不是继续隐藏
+    // （此前 navHidden 只在切 tab 时重置，MainScreen.goToTab / 导航 onSelect 两处）。
+    LaunchedEffect(screen) {
+        if (screen != 0) onNavHide(false)
+    }
+
     // 2026-10-24：AI 助教代操作 —— 小悟可经 AiNav 直接打开「我的」的子页（录音管理/课程绑定/加入班级等）
     LaunchedEffect(AiNav.studentMyScreen.value) {
         val req = AiNav.studentMyScreen.value
@@ -327,12 +334,14 @@ private fun MyHome(
 ) {
     val cs = COUITheme.colorScheme
     LaunchedEffect(scrollState) {
-        var last = 0
+        // 2026-11-05（A2）：last=-1 表示尚未建基线——从子页返回主页时本 effect 重启，持久化的
+        // scrollState.value 可能很大，若按旧 d=cur-0 会误判「向下滚动」又把导航藏起来。首帧只记基线不动作。
+        var last = -1
         snapshotFlow { scrollState.value }.collect { cur ->
             if (cur <= 0) onNavHide(false)
             else {
                 val d = cur - last
-                if (d > 6) onNavHide(true) else if (d < -6) onNavHide(false)
+                if (last >= 0 && d > 6) onNavHide(true) else if (d < -6) onNavHide(false)
             }
             last = cur
         }

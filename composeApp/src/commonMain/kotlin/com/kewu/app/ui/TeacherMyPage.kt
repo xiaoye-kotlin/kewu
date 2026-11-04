@@ -73,6 +73,11 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     var screen by remember { mutableStateOf(0) }
     LockTabSwipe(screen != 0)
 
+    // ★ A2（2026-11-05）：进子页时展开底部导航栏（与学生端「我的」同款修复）
+    LaunchedEffect(screen) {
+        if (screen != 0) onNavHide(false)
+    }
+
     // 2026-10-24：AI 助教代操作 —— 小悟可经 AiNav 直接打开教师「我的」的子页（发起签到/发布笔记/班级管理等）
     LaunchedEffect(AiNav.teacherMyScreen.value) {
         val req = AiNav.teacherMyScreen.value
@@ -123,12 +128,13 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
     BackHandler(enabled = screen != 0) { screen = 0 }
 
     LaunchedEffect(scrollState) {
-        var last = 0
+        // 2026-11-05（A2）：基线重建首帧不动作（与学生端同款修复），防子页返回时误判下滑藏导航。
+        var last = -1
         snapshotFlow { scrollState.value }.collect { cur ->
             if (cur <= 0) onNavHide(false)
             else {
                 val d = cur - last
-                if (d > 6) onNavHide(true) else if (d < -6) onNavHide(false)
+                if (last >= 0 && d > 6) onNavHide(true) else if (d < -6) onNavHide(false)
             }
             last = cur
         }
