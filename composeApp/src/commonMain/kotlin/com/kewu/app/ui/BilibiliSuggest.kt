@@ -474,9 +474,9 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
             if (info?.videoUrl == null) {
                 val kw = (if (isSeason) video.seasonTitle else video.title).ifBlank { ep.title }
                 val list = KewuApi.getBilibiliVideos(kw).orEmpty()
-                val fallback = list.firstOrNull { it.bvid == ep.bvid && it.videoUrl != null }
-                    ?: list.firstOrNull { it.videoUrl != null }
-                if (fallback != null) info = fallback
+                // ★ W4：只接受**同一 bvid** 的直链。旧版 `?: list.firstOrNull { videoUrl != null }`
+                //   会随便拿搜索结果里另一条视频的流，造成「有画面但不是点的那一集」。
+                info = list.firstOrNull { it.bvid == ep.bvid && it.videoUrl != null }
             }
             fetchingKey = null
             if (info?.videoUrl != null) {

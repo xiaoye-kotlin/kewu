@@ -102,9 +102,15 @@ fun App() {
                 } else {
                     MainScreen(onLogout = doLogout)
                 }
-                com.kewu.app.ui.BilibiliPlayerHost()
                 // 合集 / 分P 分集列表面板（2026-11-04）：与播放层同款「根部唯一宿主」，页面只管设置 BiliEpisodesHub
                 com.kewu.app.ui.BiliEpisodesHost()
+                // ★ W4（2026-11-04 晚 3）：播放层必须**最后**渲染，盖在分集面板之上。
+                //   旧顺序把 BilibiliPlayerHost 放在 BiliEpisodesHost 前面 → 用户点合集里某一集时，
+                //   VideoPlayerHub.current 已设置、ExoPlayer 在下面 prepare/play 正常出声，
+                //   但 BilibiliPlayOverlay 被后渲染的全屏选集面板整个盖住 —— 表现就是
+                //   「声音是有的，视频没出现，也没进入新界面，还是停留在选集界面」。
+                //   退出播放后 current 置空，自动回到下面的选集面板继续选集。
+                com.kewu.app.ui.BilibiliPlayerHost()
             }
         } else {
             LoginScreen(onLogin = {
