@@ -16,6 +16,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpMethod
 import io.ktor.http.content.TextContent
 import io.ktor.http.encodeURLPath
+import java.net.Proxy
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -35,6 +36,9 @@ class AdminApi(
         private set
     private val client = HttpClient(OkHttp) {
         expectSuccess = false
+        // 强制直连：服务器上装有 CCProxy 等系统代理时，OkHttp 默认会走系统代理，
+        // 连 127.0.0.1:8080 / 公网 8080 都可能被代理劫持而报「无法连接服务器」。
+        engine { proxy = Proxy.NO_PROXY }
         install(HttpTimeout) {
             requestTimeoutMillis = 30_000
             connectTimeoutMillis = 10_000
@@ -47,7 +51,7 @@ class AdminApi(
     /** 登录前探活：优先本机 127.0.0.1（服务器本机运行时公网 IP 回环不通），其次当前 baseUrl。
      *  每个候选的结果（含失败原因）都会写入本地诊断日志；全部不可达时返回原地址。 */
     suspend fun resolveBaseUrl(): String {
-        val candidates = listOf("http://127.0.0.1:8080", baseUrl).distinct()
+        val candidates = listOf("http://127.0.0.1:8080", "http://localhost:8080", baseUrl).distinct()
         val results = mutableListOf<Pair<String, String>>()
         for (candidate in candidates) {
             val error = probeHealthError(candidate)
