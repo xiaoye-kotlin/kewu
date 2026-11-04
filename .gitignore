@@ -36,3 +36,4 @@ replay_pid*.log
 
 # 总控端 kewu_admin 现已并入本仓库（原为独立仓库 xiaoye-kotlin/kewu-admin），
 # 其自身忽略规则见 kewu_admin/.gitignore，此处不再整体忽略。
+bili_test.json
