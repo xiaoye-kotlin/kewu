@@ -13,6 +13,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -57,6 +62,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -72,6 +78,7 @@ import com.kewu.app.AiClient
 import com.kewu.app.BackHandler
 import com.kewu.app.BiliVideoNote
 import com.kewu.app.BilibiliVideoInfo
+import com.kewu.app.ChatHistory
 import com.kewu.app.DashVideoSources
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
@@ -263,7 +270,41 @@ private fun VideoTutorPanel(
     var cancelled by remember(bvid) { mutableStateOf(false) }
 
     // 对话状态
-    var msgs by remember(bvid) { mutableStateOf(listOf<AiChatMsg>()) }
+    // ★ G1（2026-11-05）：这个视频的对话按视频落盘（key 随账号隔离）——默认只显示今天，
+    // 列表顶部下拉按天加载更早，与助教页「下拉查看更多聊天记录」同款（Voice/图片不落盘，纯文字）。
+    val chatKey = "kewu_chat_bili_$bvid"
+    val chatStore = remember(bvid) { ChatHistory.loadAll(chatKey) }
+    var visibleCutoff by remember(bvid) {
+        mutableStateOf(ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds()))
+    }
+    var hasMoreHistory by remember(bvid) { mutableStateOf(chatStore.any { it.ts < visibleCutoff }) }
+    fun entryToMsg(e: ChatHistory.Entry) = AiChatMsg(
+        text = e.text, isUser = e.role == "user", id = e.id, ts = e.ts, quote = e.quote,
+    )
+    var msgs by remember(bvid) {
+        mutableStateOf(chatStore.filter { it.ts >= visibleCutoff }.map(::entryToMsg))
+    }
+    fun persistConversation() {
+        val entries = msgs.filter { it.id > 0 && !it.isVoice && it.image == null }.map { m ->
+            ChatHistory.Entry(
+                id = m.id, role = if (m.isUser) "user" else "assistant", text = m.text,
+                ts = if (m.ts != 0L) m.ts else kotlin.time.Clock.System.now().toEpochMilliseconds(), quote = m.quote,
+            )
+        }
+        ChatHistory.upsert(chatKey, entries)
+        hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
+    }
+    // 顶部下拉加载更早一天（与助教页同款 110dp 阈值）
+    fun loadOlderDay() {
+        val older = chatStore.filter { it.ts < visibleCutoff }
+        if (older.isEmpty()) return
+        val nextCutoff = ChatHistory.dayStart(visibleCutoff - 1)
+        msgs = older.filter { it.ts >= nextCutoff }.map(::entryToMsg) + msgs
+        visibleCutoff = nextCutoff
+        hasMoreHistory = chatStore.any { it.ts < nextCutoff }
+    }
+    // 对话内容变化即落盘（欢迎语 id=-1 不入盘）
+    LaunchedEffect(msgs) { persistConversation() }
     var stream by remember(bvid) { mutableStateOf<String?>(null) }
     var input by remember(bvid) { mutableStateOf("") }
     var quote by remember(bvid) { mutableStateOf<String?>(null) }
@@ -297,10 +338,11 @@ private fun VideoTutorPanel(
                 }
             }
             if (msgs.isEmpty()) {
-                msgs = listOf(AiChatMsg("我正在帮你总结这个视频（一般 1–3 分钟），总结好了就能细聊内容；有别的学习问题现在也可以问我～", isUser = false, id = newChatId()))
+                // id=-1：欢迎语是本地状态提示，不落盘（G1），否则重进时会和新欢迎语叠两条
+                msgs = listOf(AiChatMsg("我正在帮你总结这个视频（一般 1–3 分钟），总结好了就能细聊内容；有别的学习问题现在也可以问我～", isUser = false, id = -1L))
             }
         } else if (msgs.isEmpty()) {
-            msgs = listOf(AiChatMsg("视频我看完了，哪里没看懂直接问我。", isUser = false, id = newChatId()))
+            msgs = listOf(AiChatMsg("视频我看完了，哪里没看懂直接问我。", isUser = false, id = -1L))
         }
     }
 
@@ -327,7 +369,7 @@ private fun VideoTutorPanel(
     // 总结好了：若还停留在「正在总结」欢迎语，换成完成态
     LaunchedEffect(ready) {
         if (ready && msgs.size == 1 && msgs[0].text.startsWith("我正在帮你总结")) {
-            msgs = listOf(AiChatMsg("视频总结好了，直接问我就行。", isUser = false, id = newChatId()))
+            msgs = listOf(AiChatMsg("视频总结好了，直接问我就行。", isUser = false, id = -1L))
         }
     }
 
@@ -498,12 +540,39 @@ private fun VideoTutorPanel(
             if (startError != null) {
                 Text(startError ?: "", color = cs.error, fontSize = 12.5.sp, modifier = Modifier.padding(bottom = 4.dp))
             }
+            // ★ G1（2026-11-05）：顶部下拉按天加载更早对话（与助教页同款 nestedScroll 阈值 110dp）
+            val pullLoadPx = with(LocalDensity.current) { 110.dp.toPx() }
+            var pullAcc by remember { mutableFloatStateOf(0f) }
+            val pullConnection = remember {
+                object : NestedScrollConnection {
+                    override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                        val atTop = listState.firstVisibleItemIndex == 0 &&
+                            listState.firstVisibleItemScrollOffset == 0
+                        if (atTop && available.y > 0 && hasMoreHistory) {
+                            pullAcc += available.y
+                            if (pullAcc >= pullLoadPx) {
+                                pullAcc = 0f
+                                loadOlderDay()
+                            }
+                            return Offset(0f, available.y)
+                        }
+                        if (available.y < 0) pullAcc = 0f
+                        return Offset.Zero
+                    }
+
+                    override suspend fun onPreFling(available: Velocity): Velocity {
+                        pullAcc = 0f
+                        return Velocity.Zero
+                    }
+                }
+            }
             LazyColumn(
                 state = listState,
-                modifier = Modifier.weight(1f).fillMaxWidth(),
+                modifier = Modifier.weight(1f).fillMaxWidth().nestedScroll(pullConnection),
                 contentPadding = PaddingValues(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
                 msgs.distinctBy { it.id }.forEach { m ->
                     item(key = m.id, contentType = m.isUser) {
                         ChatMessageItem(m, backdrop, menu)
