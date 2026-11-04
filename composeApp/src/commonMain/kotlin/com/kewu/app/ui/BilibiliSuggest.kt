@@ -2,6 +2,9 @@ package com.kewu.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -42,6 +45,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -49,6 +53,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
@@ -205,27 +210,53 @@ internal fun BilibiliVideoCard(
                     )
                 }
             }
-            // ★ W5：收藏星标（独立点击区，优先消费点击，不触发整卡进分集面板）
-            val fav = BiliFavorites.isFavorite(video)
-            Box(
-                Modifier
-                    .size(28.dp)
-                    .clip(CircleShape)
-                    .clickable { haptic(HapticKind.Tick); BiliFavorites.toggle(video) },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    if (fav) "★" else "☆",
-                    color = if (fav) BILI_PINK else cs.onSurfaceSecondary,
-                    fontSize = 17.sp,
-                )
-            }
+            // ★ W5：收藏星标（独立点击区，优先消费点击，不触发整卡进分集面板）；A1（2026-11-05）换带动画的 BiliFavStar
+            BiliFavStar(video)
             Spacer(Modifier.width(2.dp))
             Icon(
                 COUIIcons.ChevronForward, contentDescription = null,
                 tint = BILI_PINK, modifier = Modifier.size(16.dp),
             )
         }
+    }
+}
+
+// ───────────────────────── A1 收藏星标（带动画） ─────────────────────────
+
+/**
+ * ★ A1（2026-11-05）：收藏星标 —— 延续全 app 动画语言的三层叠加：
+ * 1. 按压 Q 弹：[pressBounce]（0.88，spring 0.32/480，跑完过冲）；
+ * 2. 切换「星弹出」：fav 每变一次 tick+1，`key(tick)` 重置动画器播一次 0.55→1 带过冲（首帧不播）；
+ * 3. 颜色弹簧过渡：☆ 灰 ↔ ★ 粉，animateColorAsState 低阻尼弹簧。
+ */
+@Composable
+private fun BiliFavStar(video: BilibiliVideoInfo) {
+    val cs = COUITheme.colorScheme
+    val fav = BiliFavorites.isFavorite(video)
+    var tick by remember { mutableStateOf(0) }
+    LaunchedEffect(fav) { tick++ }
+    val pop = if (tick <= 1) 1f else key(tick) {
+        var grown by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { grown = true }
+        animateFloatAsState(
+            targetValue = if (grown) 1f else 0.55f,
+            animationSpec = spring(dampingRatio = 0.38f, stiffness = 560f, visibilityThreshold = 0.0005f),
+            label = "favPop",
+        ).value
+    }
+    val tint by animateColorAsState(
+        targetValue = if (fav) BILI_PINK else cs.onSurfaceSecondary,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
+        label = "favTint",
+    )
+    Box(
+        Modifier
+            .size(28.dp)
+            .scale(pop)
+            .pressBounce { BiliFavorites.toggle(video) },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(if (fav) "★" else "☆", color = tint, fontSize = 17.sp)
     }
 }
 
@@ -575,25 +606,36 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
                     }
                 }
             }
-            // ★ W5：收藏这个合集（在分集面板里收藏最自然；卡片上也有星标）
+            // ★ W5：收藏这个合集（在分集面板里收藏最自然；卡片上也有星标）；A1（2026-11-05）按压+底色+文字三层动画
             val fav = BiliFavorites.isFavorite(video)
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.Center,
             ) {
+                val bg by animateColorAsState(
+                    targetValue = if (fav) BILI_PINK.copy(alpha = 0.14f) else cs.secondaryContainer,
+                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
+                    label = "favBg",
+                )
+                val labelColor by animateColorAsState(
+                    targetValue = if (fav) BILI_PINK else cs.onSurface,
+                    animationSpec = spring(dampingRatio = 0.5f, stiffness = 420f),
+                    label = "favLabel",
+                )
                 Box(
                     Modifier
                         .clip(RoundedCornerShape(18.dp))
-                        .background(if (fav) BILI_PINK.copy(alpha = 0.14f) else cs.secondaryContainer)
-                        .clickable { haptic(HapticKind.Tick); BiliFavorites.toggle(video) }
+                        .background(bg)
+                        .pressBounce { BiliFavorites.toggle(video) }
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(
-                        if (fav) "★ 已收藏 · 点此取消" else "☆ 收藏这个合集",
-                        color = if (fav) BILI_PINK else cs.onSurface,
-                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
-                    )
+                    Crossfade(targetState = fav, animationSpec = tween(200), label = "favTxt") { f ->
+                        Text(
+                            if (f) "★ 已收藏 · 点此取消" else "☆ 收藏这个合集",
+                            color = labelColor, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                        )
+                    }
                 }
             }
             // ★ V8：取直链失败给可见反馈 + 一键重试（旧版静默打开空白播放层，看着像「点了没效果」）

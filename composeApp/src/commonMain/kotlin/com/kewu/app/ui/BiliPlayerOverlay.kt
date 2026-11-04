@@ -1,6 +1,7 @@
 package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
@@ -226,11 +227,14 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
 @Composable
 private fun BiliFavoriteButton(video: BilibiliVideoInfo) {
     val isFav = BiliFavorites.isFavorite(video)
-    KewuPrimaryButton(
-        text = if (isFav) "已收藏 · 点击取消" else "收藏这个视频",
-        onClick = { BiliFavorites.toggle(video) },
-        modifier = Modifier.fillMaxWidth(),
-    )
+    // ★ A1（2026-11-05）：文字 Crossfade 过渡，切换不突兀（coui TextButton 自带按压 Q 弹）
+    Crossfade(targetState = isFav, animationSpec = tween(200), label = "favBtn") { fav ->
+        KewuPrimaryButton(
+            text = if (fav) "已收藏 · 点击取消" else "收藏这个视频",
+            onClick = { BiliFavorites.toggle(video) },
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
 }
 
 /**
