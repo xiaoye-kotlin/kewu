@@ -454,22 +454,36 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
     val isSeason = video.seasonId != 0L && video.seasonTitle.isNotBlank()
     val title = if (isSeason) video.seasonTitle else video.title
     val cover = if (isSeason && video.seasonCover.isNotBlank()) video.seasonCover else video.cover
-    // 正在取直链的集（bvid）；同一时刻只允许一集在取
-    var fetchingBvid by remember { mutableStateOf<String?>(null) }
+    // 正在取直链的集（bvid:cid，分P 多集共享 bvid 时也能区分）；同一时刻只允许一集在取
+    var fetchingKey by remember { mutableStateOf<String?>(null) }
+    // ★ V8：取直链失败时给可见反馈，别再静默打开一个没有直链的空白播放层（用户说「点了没效果」）
+    var errorMsg by remember { mutableStateOf<String?>(null) }
+    var lastFailedEp by remember { mutableStateOf<com.kewu.app.BiliEpisodeInfo?>(null) }
 
     fun play(ep: com.kewu.app.BiliEpisodeInfo) {
-        if (fetchingBvid != null) return
+        val key = "${ep.bvid}:${ep.cid}"
+        if (fetchingKey != null) return
         haptic(HapticKind.Tick)
+        errorMsg = null
         scope.launch {
-            fetchingBvid = ep.bvid
-            // 现取这一集的播放直链（合集分集 bvid 各不相同；分P 用 cid 区分）
-            val info = KewuApi.getBilibiliPlay(ep.bvid, ep.cid)
-            fetchingBvid = null
-            VideoPlayerHub.current = if (info != null && info.videoUrl != null) {
-                info
+            fetchingKey = key
+            // 1) 新后端：现取这一集直链（/api/bilibili/play）
+            var info = KewuApi.getBilibiliPlay(ep.bvid, ep.cid)
+            // 2) 兼容旧后端（该端点旧 jar 因 mapOf 序列化器 bug 返回 code:1）：
+            //    退回学科搜索结果里按 bvid 找直链，让每一集点下去都真的能播
+            if (info?.videoUrl == null) {
+                val kw = (if (isSeason) video.seasonTitle else video.title).ifBlank { ep.title }
+                val list = KewuApi.getBilibiliVideos(kw).orEmpty()
+                val fallback = list.firstOrNull { it.bvid == ep.bvid && it.videoUrl != null }
+                    ?: list.firstOrNull { it.videoUrl != null }
+                if (fallback != null) info = fallback
+            }
+            fetchingKey = null
+            if (info?.videoUrl != null) {
+                VideoPlayerHub.current = info
             } else {
-                // 兜底：交给播放层按标题重搜刷新直链，再不行由播放层报「重试」
-                BilibiliVideoInfo(ep.bvid, ep.title, video.cover, null, null)
+                lastFailedEp = ep
+                errorMsg = "这一集暂时取不到播放地址（服务器可能还是旧版本），点重试再试一次"
             }
         }
     }
@@ -505,6 +519,32 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
                     }
                 }
             }
+            // ★ V8：取直链失败给可见反馈 + 一键重试（旧版静默打开空白播放层，看着像「点了没效果」）
+            if (errorMsg != null) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(BILI_PINK.copy(alpha = 0.10f))
+                        .padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(errorMsg.orEmpty(), color = BILI_PINK, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        "重试", color = Color.White, fontSize = 12.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(BILI_PINK)
+                            .clickable {
+                                errorMsg = null
+                                lastFailedEp?.let { play(it) }
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    )
+                }
+            }
             // 分集列表
             androidx.compose.foundation.lazy.LazyColumn(
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
@@ -512,7 +552,7 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
             ) {
                 items(video.episodes.size) { i ->
                     val ep = video.episodes[i]
-                    val fetching = fetchingBvid == ep.bvid
+                    val fetching = fetchingKey == "${ep.bvid}:${ep.cid}"
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         cornerRadius = 12.dp,

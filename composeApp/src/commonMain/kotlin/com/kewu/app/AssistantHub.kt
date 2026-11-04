@@ -139,9 +139,14 @@ object AssistantHub {
      * 页面自己生成并落盘的消息（如教师简报）不走这里。
      */
     fun deliver(key: String, text: String, payload: Any? = null): ChatHistory.Entry {
+        // ★ V7：AI 回答里的 B 站推荐关键词必须随 Entry 一起落盘。
+        //   旧版只有 _incoming 的 payload 带它，页面不在前台 / 切页重建消息时标记就丢了，
+        //   表现为「AI 刚发的 B 站视频卡片消失」。
+        val biliKw = (payload as? com.kewu.app.ui.BiliSuggest)?.keyword?.takeIf { it.isNotBlank() }
         val entry = ChatHistory.Entry(
             id = ChatHistory.nextId(), role = "assistant", text = text,
             ts = Clock.System.now().toEpochMilliseconds(),
+            biliKeyword = biliKw,
         )
         ChatHistory.append(key, entry)
         if (isVisible(key)) ChatHistory.markAllAssistantRead(key)

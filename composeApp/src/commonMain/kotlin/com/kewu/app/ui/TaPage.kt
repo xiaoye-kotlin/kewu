@@ -178,6 +178,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             id = if (e.id != 0L) e.id else ChatHistory.nextId(), ts = e.ts,
             quote = e.quote,
             image = e.image, voice = e.voice, isVoice = e.voice != null, voiceSecs = e.voiceSecs,
+            // ★ V7：从历史恢复 B 站推荐标记，切页 / 下拉加载更早消息后卡片仍在
+            biliKeyword = e.biliKeyword,
         )
     }
     fun persistHistory(current: List<ChatMsg>) {
@@ -187,6 +189,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 id = if (m.id != 0L) m.id else ChatHistory.nextId(),
                 role = if (m.isUser) "user" else "assistant",
                 text = m.text, ts = if (m.ts != 0L) m.ts else nowMs(), quote = m.quote,
+                // ★ V7：回写历史时别把 B 站标记抹掉（upsert 按 id 覆盖，漏写会直接丢卡片）
+                biliKeyword = m.biliKeyword,
             )
         }
         // 按 id 合并写入（不覆盖页面没加载的更早消息 / 页面不在时 AssistantHub 追加的回复）
@@ -326,7 +330,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         if (missed.isNotEmpty()) messages = messages + entriesToMsgs(missed)
         AssistantHub.incoming.collect { inc ->
             if (inc.key == ChatHistory.KEY_STUDENT && messages.none { it.id == inc.entry.id }) {
-                val kw = (inc.payload as? BiliSuggest)?.keyword?.takeIf { it.isNotBlank() }
+                // ★ V7：优先用已落盘的标记，payload 仅作旧链路兜底
+                val kw = inc.entry.biliKeyword
+                    ?: (inc.payload as? BiliSuggest)?.keyword?.takeIf { it.isNotBlank() }
                 messages = messages + ChatMsg(inc.entry.text, isUser = false, id = inc.entry.id, ts = inc.entry.ts, biliKeyword = kw)
             }
         }

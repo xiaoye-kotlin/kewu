@@ -79,6 +79,12 @@ object ChatHistory {
         /** 语音消息：OBS 链接 + 时长；[text] 存识别出的文字。 */
         val voice: String? = null,
         val voiceSecs: Int = 0,
+        /**
+         * ★ V7（2026-11-04 晚 2）：AI 回答携带的 B 站推荐关键词。
+         * 旧版只存在内存 `AiChatMsg.biliKeyword`，不落盘 —— 切页 / 重建消息后标记丢失，
+         * 「AI 刚发的 B 站视频卡片消失」的真正根因。必须与消息一起持久化。
+         */
+        val biliKeyword: String? = null,
     )
 
     private var idSeq = 0L
@@ -111,6 +117,8 @@ object ChatHistory {
                 image = o["image"]?.jsonPrimitive?.content,
                 voice = o["voice"]?.jsonPrimitive?.content,
                 voiceSecs = o["voiceSecs"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0,
+                // 旧存档没有这个字段；JsonNull 时 jsonPrimitive 会抛，runCatching 兜成 null
+                biliKeyword = runCatching { o["biliKeyword"]?.jsonPrimitive?.content }.getOrNull(),
             )
         }.sortedBy { it.ts }
     } catch (_: Exception) {
@@ -154,6 +162,8 @@ object ChatHistory {
                             put("voice", e.voice)
                             put("voiceSecs", e.voiceSecs)
                         }
+                        // ★ V7：B 站推荐标记随消息一起落盘，切页/重建后才能恢复卡片
+                        if (e.biliKeyword != null) put("biliKeyword", e.biliKeyword)
                     })
                 }
             }
