@@ -54,6 +54,9 @@ object AiContext {
         val profile = ProfileStore.load(uname)
         buildString {
             appendLine("【当前时间】${nowCn()}")
+            // ★ W7（2026-11-04 晚 3）：注入学生收藏的 B 站合集 —— 用户「AI 也能知道我收藏的内容」。
+            //   AiContext.student() 被助教页 / 通话页 / 各问小悟页共用，一处注入即可全覆盖。
+            com.kewu.app.ui.BiliFavorites.contextLine().takeIf { it.isNotBlank() }?.let { appendLine(it) }
             appendLine("【我】${KewuApi.displayName("同学")}，学号 $uname" +
                 (profile?.school?.takeIf { it.isNotBlank() }?.let { "，学校 $it" } ?: "") +
                 (profile?.className?.takeIf { it.isNotBlank() }?.let { "，班级 $it" } ?: ""))

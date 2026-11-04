@@ -205,6 +205,22 @@ internal fun BilibiliVideoCard(
                     )
                 }
             }
+            // ★ W5：收藏星标（独立点击区，优先消费点击，不触发整卡进分集面板）
+            val fav = BiliFavorites.isFavorite(video)
+            Box(
+                Modifier
+                    .size(28.dp)
+                    .clip(CircleShape)
+                    .clickable { haptic(HapticKind.Tick); BiliFavorites.toggle(video) },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    if (fav) "★" else "☆",
+                    color = if (fav) BILI_PINK else cs.onSurfaceSecondary,
+                    fontSize = 17.sp,
+                )
+            }
+            Spacer(Modifier.width(2.dp))
             Icon(
                 COUIIcons.ChevronForward, contentDescription = null,
                 tint = BILI_PINK, modifier = Modifier.size(16.dp),
@@ -278,8 +294,8 @@ internal fun BilibiliSuggestRow(keyword: String, modifier: Modifier = Modifier) 
 
 // ───────────────────────── 手动浏览面板 ─────────────────────────
 
-/** 顶部标签的「推荐」项（选中时显示为你推荐列表）。 */
-private const val BILI_TAB_REC = "推荐"
+/** ★ W6：顶部第一个标签 = 「收藏」（用户「把推荐改成收藏，不要推荐了」）。 */
+private const val BILI_TAB_FAV = "收藏"
 
 private val BILI_SUBJECTS = listOf(
     "高等数学", "线性代数", "概率论", "大学物理", "C 语言", "数据结构", "英语四级", "思修", "近代史",
@@ -300,7 +316,7 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
     var searching by remember { mutableStateOf(false) }
     var searchSeq by remember { mutableStateOf(0) }
     // 当前选中的顶部标签：「推荐」/ 某学科 / ""（搜索框自定义搜索）
-    var tab by remember { mutableStateOf(BILI_TAB_REC) }
+    var tab by remember { mutableStateOf(BILI_TAB_FAV) }
 
     // 切标签 / 再搜时取消上一次搜索，免得旧结果晚到盖掉当前标签
     var searchJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
@@ -317,12 +333,13 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
             searchSeq++
         }
     }
-    fun showRecommend() {
+    /** ★ W6：回到「收藏」tab（清空搜索结果即可，收藏列表由 BiliFavorites 自己驱动）。 */
+    fun showFavorites() {
         searchJob?.cancel()
         searching = false
         results = null
         query = ""
-        tab = BILI_TAB_REC
+        tab = BILI_TAB_FAV
     }
 
     BackHandler { onDismiss() }
@@ -363,7 +380,7 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                         enter = scaleIn(spring(dampingRatio = 0.6f, stiffness = 500f)) + fadeIn(),
                         exit = scaleOut(tween(120)) + fadeOut(tween(120)),
                     ) {
-                        IconButton(onClick = { haptic(HapticKind.Tick); showRecommend() }, minWidth = 32.dp, minHeight = 32.dp, cornerRadius = 16.dp) {
+                        IconButton(onClick = { haptic(HapticKind.Tick); showFavorites() }, minWidth = 32.dp, minHeight = 32.dp, cornerRadius = 16.dp) {
                             Icon(COUIIcons.Close, contentDescription = "清空", tint = cs.onSurfaceSecondary, modifier = Modifier.size(14.dp))
                         }
                     }
@@ -388,9 +405,9 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Chip(
-                    selected = tab == BILI_TAB_REC,
-                    onClick = { haptic(HapticKind.Tick); showRecommend() },
-                    label = BILI_TAB_REC,
+                    selected = tab == BILI_TAB_FAV,
+                    onClick = { haptic(HapticKind.Tick); showFavorites() },
+                    label = BILI_TAB_FAV,
                 )
                 BILI_SUBJECTS.forEach { s ->
                     Chip(
@@ -411,7 +428,7 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 when {
-                    !searching && results == null -> BiliRecommendSection()
+                    !searching && results == null -> BiliFavoritesSection()
                     searching -> Row(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         InfiniteProgressIndicator(Modifier.size(18.dp))
                         Spacer(Modifier.width(10.dp))
@@ -428,6 +445,45 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                 }
                 // 底部给悬浮导航栏让位（2026-11-02 用户报「换一批推荐」被导航栏挡住点不到）
                 Spacer(Modifier.height(KewuNavClearance))
+            }
+        }
+    }
+}
+
+/**
+ * ★ W6（2026-11-04 晚 3）：浏览面板首个 tab「收藏」的内容。
+ * 用户「把推荐改成收藏，不要推荐了，收藏可以看自己收藏的合集」——
+ * 这里不再调 BiliRecommendSection（带「换一批推荐」），改为直接列出 BiliFavorites 里的合集，
+ * 点卡片经 BiliEpisodesHub 打开分集面板，右侧「移除」取消收藏。
+ */
+@Composable
+private fun BiliFavoritesSection(modifier: Modifier = Modifier) {
+    val cs = COUITheme.colorScheme
+    val list = BiliFavorites.all()
+    Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (list.isEmpty()) {
+            Text(
+                "还没有收藏的合集。点开一个合集后按「☆ 收藏这个合集」，或在视频卡上点 ☆，就会出现在这里。",
+                color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 19.sp,
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 12.dp),
+            )
+        } else {
+            Text(
+                "已收藏 ${list.size} 个合集", color = cs.onSurfaceSecondary, fontSize = 12.sp,
+                modifier = Modifier.padding(start = 4.dp),
+            )
+            list.forEachIndexed { i, v ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { BilibiliVideoCard(v, index = i) }
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        "移除", color = BILI_PINK, fontSize = 12.sp,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { haptic(HapticKind.Tick); BiliFavorites.remove(v) }
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
     }
@@ -517,6 +573,27 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
                             color = BILI_PINK, fontSize = 12.sp, maxLines = 1,
                         )
                     }
+                }
+            }
+            // ★ W5：收藏这个合集（在分集面板里收藏最自然；卡片上也有星标）
+            val fav = BiliFavorites.isFavorite(video)
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Box(
+                    Modifier
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(if (fav) BILI_PINK.copy(alpha = 0.14f) else cs.secondaryContainer)
+                        .clickable { haptic(HapticKind.Tick); BiliFavorites.toggle(video) }
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        if (fav) "★ 已收藏 · 点此取消" else "☆ 收藏这个合集",
+                        color = if (fav) BILI_PINK else cs.onSurface,
+                        fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                    )
                 }
             }
             // ★ V8：取直链失败给可见反馈 + 一键重试（旧版静默打开空白播放层，看着像「点了没效果」）
