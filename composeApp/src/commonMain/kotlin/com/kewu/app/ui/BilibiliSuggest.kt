@@ -92,6 +92,16 @@ import kotlinx.coroutines.launch
 internal data class BiliSuggest(val keyword: String)
 
 /**
+ * AI 推荐视频的进程级结果缓存（2026-11-04 修复状态消失）：key = 搜索词。
+ * 旧版结果存在 composable 的 remember 里 —— 列表项滑出屏幕（LazyColumn 销毁重组）或
+ * 切走页面再回来，状态就丢：卡片重新显示「正在找视频…」，且 onLoaded 再次触发强制滚到底。
+ * 现在已加载结果（含空列表=无结果）常驻这里，重建即复用、不再重复请求 / 不再误触发滚动。
+ */
+internal object BiliSuggestCache {
+    val results = androidx.compose.runtime.mutableStateMapOf<String, List<BilibiliVideoInfo>>()
+}
+
+/**
  * 应用内播放请求总线：视频卡在列表（LazyColumn）里，覆盖层必须渲染到页面根部才能全屏，
  * 各卡片只负责设置它，App 根部唯一的 [BilibiliPlayerHost] 消费（页面里不要再挂，否则同一视频会被建两个播放器）。
  */
@@ -219,11 +229,17 @@ internal fun BilibiliVideoSuggest(
     onLoaded: (() -> Unit)? = null,
 ) {
     val scope = rememberCoroutineScope()
-    // null=加载中 / 空列表或失败=空 / 非空=结果
-    var videos by remember(keyword) { mutableStateOf<List<BilibiliVideoInfo>?>(null) }
+    // null=加载中 / 空列表或失败=空 / 非空=结果。
+    // 2026-11-04：优先读进程级缓存（滑出屏幕 / 切页再回来不丢、不重新请求）；
+    // 缓存未命中才真正请求，且只有真正请求完成那一次才触发 onLoaded（避免回到列表被强行拽到底）。
+    var videos by remember(keyword) { mutableStateOf(BiliSuggestCache.results[keyword]) }
     LaunchedEffect(keyword) {
-        videos = KewuApi.getBilibiliVideos(keyword).orEmpty().take(maxCount)
-        onLoaded?.invoke()
+        if (videos == null) {
+            val loaded = KewuApi.getBilibiliVideos(keyword).orEmpty().take(maxCount)
+            BiliSuggestCache.results[keyword] = loaded
+            videos = loaded
+            onLoaded?.invoke()
+        }
     }
     val list = videos
     if (list == null) {

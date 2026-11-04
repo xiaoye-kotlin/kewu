@@ -156,14 +156,20 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
             val info = fetcher.viewInfo(bvid)
             val useCid = if (cid > 0) cid else info.cid
             val urls = fetcher.dashUrlsFor(bvid, useCid)
-            call.respond(ApiResponse(0, "ok", mapOf(
-                "bvid" to bvid,
-                "cid" to useCid,
-                "title" to info.title,
-                "cover" to info.cover,
-                "videoUrl" to urls.first,
-                "audioUrl" to urls.second,
-            )))
+            // 2026-11-04 修复：不能 respond(ApiResponse(0,"ok",mapOf(...))) —— map 里混 String/Long 会擦成
+            // Map<String,Any>，运行期找不到序列化器抛异常（线上表现为点击分集永远失败）。显式 buildJsonObject。
+            call.respondText(buildJsonObject {
+                put("code", 0)
+                put("message", "ok")
+                put("data", buildJsonObject {
+                    put("bvid", bvid)
+                    put("cid", useCid)
+                    put("title", info.title)
+                    put("cover", info.cover)
+                    put("videoUrl", urls.first)
+                    put("audioUrl", urls.second)
+                })
+            }.toString(), ContentType.Application.Json)
         } catch (e: Throwable) {
             log.warn("B站单集直链获取失败 bvid=$bvid cid=$cid：${e.message}")
             call.respond(ApiResponse<Unit>(1, "取播放直链失败：${e.message}"))
