@@ -133,7 +133,7 @@ private const val SENTENCE_END_CHARS = "。？！?!,.、；;～~"
 private fun vcEndsWithPunct(t: String): Boolean = t.lastOrNull()?.let { it in SENTENCE_END_CHARS } == true
 
 @Composable
-internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
+internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) {
     // ★ V10（2026-11-04 晚 2）：通话页只允许竖屏；挂断 / 返回 / 页面销毁时恢复系统默认方向
     DisposableEffect(Unit) {
         platformLockPortrait(true)
@@ -212,12 +212,22 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
             liveUser = text
             phase = VoiceCallPhase.THINKING
             aiReply = ""
+            // ★ C2（2026-11-05）：教师端通话复用本页——提示词/上下文/落盘 key 按角色切换（照搬学生端入口）
+            val ctxKey = if (teacher) ChatHistory.KEY_TEACHER else ChatHistory.KEY_STUDENT
             val system = buildString {
-                append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和学生进行语音通话。")
-                append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
-                append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
-                append("以下是该学生在课悟 App 里此刻能看到的全部信息，回答时以此为准：\n")
-                append(com.kewu.app.AiContext.student())
+                if (teacher) {
+                    append("你是「小悟」，课悟 App 里教师的 AI 教学助手，正在和老师进行语音通话。")
+                    append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
+                    append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
+                    append("以下是该教师在课悟 App 里此刻能看到的全部信息（课程/班级/学生名单/签到/作业/纪要），回答时以此为准：\n")
+                    append(com.kewu.app.AiContext.teacher())
+                } else {
+                    append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和学生进行语音通话。")
+                    append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
+                    append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
+                    append("以下是该学生在课悟 App 里此刻能看到的全部信息，回答时以此为准：\n")
+                    append(com.kewu.app.AiContext.student())
+                }
             }
             val history = turns.takeLast(6).flatMap {
                 listOf(AiClient.Msg("user", it.user), AiClient.Msg("assistant", it.ai))
@@ -243,8 +253,8 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
             aiReply = parsed
             turns = turns + VoiceTurn(text, parsed)
             // ★ W8：这一轮通话（用户说的话 + 小悟的回答）以普通气泡同步进聊天界面，
-            //   落盘 + 广播给前台 TaPage；挂断后回到聊天页就能看到。
-            AssistantHub.deliverVoiceTurn(ChatHistory.KEY_STUDENT, text, parsed)
+            //   落盘 + 广播给前台页面；挂断后回到聊天页就能看到。C2：教师端落 KEY_TEACHER。
+            AssistantHub.deliverVoiceTurn(ctxKey, text, parsed)
             TtsPlayer.speakIfAvailable(parsed) // TTS 未开通：空实现，纯文本展示
             phase = VoiceCallPhase.IDLE
         }

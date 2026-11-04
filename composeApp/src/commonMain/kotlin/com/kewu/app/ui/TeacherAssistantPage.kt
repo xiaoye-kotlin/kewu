@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import com.kewu.app.BackHandler
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Add
+import io.github.suqi8.coui.kmp.icon.extended.Edit
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -513,6 +514,10 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     val recorder = rememberChatVoiceRecorder()
     var finishingVoice by remember { mutableStateOf(false) }
     val mediaBusy = ChatHistory.KEY_TEACHER in ChatMediaHub.busy.collectAsState().value
+    // ★ C2（2026-11-05）：语音通话入口（+ 面板，照搬学生端 W10）——通话全屏层 + 通话期间收起底部导航
+    var showVoiceCall by remember { mutableStateOf(false) }
+    LaunchedEffect(showVoiceCall) { onNavHide(showVoiceCall) }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { onNavHide(false) } }
     val mediaPatches by ChatMediaHub.patches.collectAsState()
     LaunchedEffect(mediaPatches) {
         var changed = false
@@ -689,34 +694,30 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         )
         // 2026-10-26：输入法避让由主界面内容区统一 imePadding，这里不再重复加
         Column(Modifier.fillMaxSize()) {
-            // ── AI 人格区（与学生端小悟同款语言） ──
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(top = 16.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            // ── 顶部细横幅（★ C2，2026-11-05：照搬学生端助教页 X1/W2）──
+            // 用户「教师端要和学生端助教界面一模一样……顶部的也要改」。原人格区（52dp 绿圆「悟」+
+            // 「小悟 · 教学洞察」+ 状态行）整块换成 52dp 细横幅：居中只显示「小悟」，底部 1dp 分隔线。
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .background(cs.surface),
             ) {
+                Text(
+                    "小悟",
+                    color = cs.onSurface,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                // 底部 1dp 分隔线：让横幅与聊天列边界清晰（深色/浅色主题下都可见）
                 Box(
                     Modifier
-                        .size(52.dp)
-                        .background(KewuGreen.copy(alpha = 0.16f), CircleShape)
-                        .border(1.5.dp, KewuGreen, CircleShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("悟", color = KewuGreen, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                }
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("小悟 · 教学洞察", color = cs.onSurface, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(7.dp))
-                        Box(Modifier.size(7.dp).background(KewuGreen, CircleShape))
-                    }
-                    Spacer(Modifier.height(2.dp))
-                    // 2026-10-24：等待 AI 回复时顶部状态改为「小悟正在输入中…」
-                    Text(
-                        if (aiThinking) "小悟正在输入中…" else "学情分析",
-                        color = cs.onSurfaceSecondary, fontSize = 11.5.sp,
-                    )
-                }
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(cs.onSurface.copy(alpha = 0.12f)),
+                )
             }
 
             // ── 对话列（2026-10-24：顶部下拉加载更早对话；消息 animateItem 滑入） ──
@@ -787,13 +788,13 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                     }
                     Spacer(Modifier.height(10.dp))
                 }
-                // 流式回答草稿（思考中占位 → 逐段增长；结束后由正式消息替换）
+                // 流式回答草稿（★ B1：首字才出现；吐字后逐段增长，结束后由正式消息替换）
                 if (streamText != null) {
                     item(key = "ai-streaming") {
                         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                             TaBubble(
                                 pageBackdrop,
-                                TaMsg(false, streamText.ifEmpty { "小悟正在思考…" }.lines()
+                                TaMsg(false, streamText.lines()
                                     .filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }),
                                 // P8 weui 规则：上一条是用户消息 → 流式泡带头像
                                 showAvatar = snapshot.lastOrNull()?.isUser != false,
@@ -827,34 +828,35 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 onCancelQuote = { quotePreview = null },
                 stagedImage = stagedImage,
                 onRemoveImage = { stagedImage = null },
-                // U4 InputView：+ / 麦克风改微信小图标钮（去掉液态玻璃圆钮）
+                // U4 InputView：左侧 mic + 功能面板（★ C2，2026-11-05：照搬学生端布局——mic 在左、+ 在左，trailing 置空）
                 leading = {
-                    ChatWeuiIconBtn(
-                        icon = COUIIcons.Add,
-                        contentDescription = "功能面板",
-                        onClick = { panel = if (panel == TeacherPanel.ATTACH) TeacherPanel.NONE else TeacherPanel.ATTACH },
-                    )
-                },
-                trailing = {
-                    ChatWeuiIconBtn(
-                        icon = COUIIcons.Mic,
-                        contentDescription = "语音",
-                        onClick = {
-                            when {
-                                panel == TeacherPanel.VOICE -> finishVoice(send = false)
-                                aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
-                                else -> scope.launch {
-                                    com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
-                                    val err = recorder.start()
-                                    if (err != null) snackbar.toast(err) else {
-                                        haptic(HapticKind.Light)
-                                        panel = TeacherPanel.VOICE
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ChatWeuiIconBtn(
+                            icon = if (panel == TeacherPanel.VOICE) COUIIcons.Edit else COUIIcons.Mic,
+                            contentDescription = if (panel == TeacherPanel.VOICE) "切回文字" else "语音",
+                            onClick = {
+                                when {
+                                    panel == TeacherPanel.VOICE -> finishVoice(send = false)
+                                    aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
+                                    else -> scope.launch {
+                                        com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
+                                        val err = recorder.start()
+                                        if (err != null) snackbar.toast(err) else {
+                                            haptic(HapticKind.Light)
+                                            panel = TeacherPanel.VOICE
+                                        }
                                     }
                                 }
-                            }
-                        },
-                    )
+                            },
+                        )
+                        ChatWeuiIconBtn(
+                            icon = COUIIcons.Add,
+                            contentDescription = "功能面板",
+                            onClick = { panel = if (panel == TeacherPanel.ATTACH) TeacherPanel.NONE else TeacherPanel.ATTACH },
+                        )
+                    }
                 },
+                trailing = null,
                 // 教师端有自己的 ATTACH / VOICE 面板状态机：只换 InputView 视觉
                 useBuiltinPanels = false,
                 // ★ V3：+ / 录音面板渲染在输入框**下方**，滑入滑出动画保留
@@ -887,6 +889,11 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                         }
                                     }
                                 } else null,
+                                // ★ C2（2026-11-05）：语音通话入口（与学生端「+」面板一致）
+                                onVoiceCall = {
+                                    panel = TeacherPanel.NONE
+                                    showVoiceCall = true
+                                },
                             )
                             TeacherPanel.VOICE -> ChatVoicePanel(
                                 backdrop = pageBackdrop,
@@ -936,6 +943,11 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 ),
                 onDismiss = { menuMsg = null },
             )
+        }
+
+        // ── ★ C2（2026-11-05）：AI 语音通话全屏层（与学生端同款，教师上下文/落盘 key） ──
+        SlideOverlay(if (showVoiceCall) Unit else null) {
+            AiVoiceCallScreen(onDismiss = { showVoiceCall = false }, teacher = true)
         }
     }
 }
