@@ -524,7 +524,11 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     // 作业待交：与任务页共用 AssignmentRepo（旧版首页写死 "3"）；首页进来静默刷新一次（1 分钟内复用）
     val assignmentItems by AssignmentRepo.items.collectAsState()
     val pendingHomework = assignmentItems?.count { it.pending }
-    LaunchedEffect(Unit) { AssignmentRepo.refresh(maxAgeMs = 60_000) }
+    LaunchedEffect(Unit) {
+        AssignmentRepo.refresh(maxAgeMs = 60_000)
+        // ★ H2（2026-11-05）：回到首页立即扫一次「老师新发布的作业」，不等 60 秒轮询，铃铛马上能收到
+        NoticeCenter.checkNewAssignments()
+    }
     val today = realCourses
     val history = emptyList<Course>()
     val courses = if (showAll) today + history else today

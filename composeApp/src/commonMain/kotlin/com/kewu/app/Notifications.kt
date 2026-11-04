@@ -208,8 +208,7 @@ object Notifications {
     var readyNotes: List<Pair<String, ClassRecordingInfo>> = emptyList()
         private set
 
-    /** 作业批改（学生端）：老师批改 / 打回后一条（同一版本只提醒一次；重交再批会再提醒）。 */
-    internal suspend fun pollGrades(): List<Draft> {
+    /** 作业批改（学生端）：老师批改 / 打回后一条（同一版本只提醒一次；重交再批会再提醒）。 */    internal suspend fun pollGrades(): List<Draft> {
         val now = nowMs()
         val items = AssignmentRepo.refresh(maxAgeMs = 30_000) ?: return emptyList()
         return items.mapNotNull { it ->
@@ -227,6 +226,30 @@ object Notifications {
                 title = if (returned) "《${a.title}》被老师打回，请修改后重交"
                 else "《${a.title}》已批改" + (score?.let { s -> "：$s / ${a.totalScore.toInt()} 分" } ?: ""),
                 body = sub.comment?.takeIf { c -> c.isNotBlank() }?.let { c -> "老师评语：$c" } ?: "点开作业查看批改详情",
+                ts = ts,
+                silent = now - ts > 3 * 86_400_000L,
+            )
+        }
+    }
+
+    /**
+     * ★ H2（2026-11-05）：新作业（学生端）—— 老师发布作业后，作业列表里出现「我还没提交」的条目就发一条通知。
+     * 后端目前没有通知表 / 接口（需求文档《通知系统-后端对接需求.md》的 3 个接口均未实现），链路全在本地：
+     * 复用 [AssignmentRepo.refresh] 的同一份缓存（与 [pollGrades] 共用 30s 缓存，零新增网络请求），
+     * id 用作业 id 保证永久去重。[addAll] 的首次静默基线会把升级前已存在的作业记为已读，
+     * 不会一次性炸出历史通知；被打回的作业由 [pollGrades] 负责，这里只认 `mine == null`，不重复。
+     */
+    internal suspend fun pollNewAssignments(): List<Draft> {
+        val now = nowMs()
+        val items = AssignmentRepo.refresh(maxAgeMs = 30_000) ?: return emptyList()
+        return items.filter { it.mine == null }.map { item ->
+            val a = item.assignment
+            val ts = parseTs(a.createdAt) ?: now
+            Draft(
+                id = "assignment-${a.id}",
+                type = TYPE_NEW_ASSIGNMENT,
+                title = "《${a.title}》新作业待完成",
+                body = "截止 ${a.deadline.ifBlank { "未设置" }} · 可在任务页查看并提交",
                 ts = ts,
                 silent = now - ts > 3 * 86_400_000L,
             )
@@ -306,18 +329,22 @@ object NoticeCenter {
         scope.launch { pollOnce(teacher) }
     }
 
-    private suspend fun pollOnce(teacher: Boolean) {
-        if (KewuApi.token == null) return
-        val drafts = mutableListOf<Notifications.Draft>()
-        suspend fun collect(block: suspend () -> List<Notifications.Draft>) {
-            try { drafts += block() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+    /** ★ H2（2026-11-05）：进学生首页时立即扫一次「新作业」，不用等 60 秒轮询 —— 老师刚发布就能在铃铛看到。 */
+    fun checkNewAssignments() {
+        scope.launch {
+            val drafts = try {
+                Notifications.pollNewAssignments()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyList()
+            }
+            deliver(Notifications.addAll(drafts))
         }
-        collect { Notifications.pollClassNotes() }
-        if (!teacher) collect { Notifications.pollGrades() }
-        collect { BiliNoteWatcher.poll() }
-        // 学生：顺手把近几天纪要的「今日复习」提前生成好（后台进行，不阻塞通知）
-        if (!teacher) com.kewu.app.ui.DailyReview.prefetch(Notifications.readyNotes)
-        val fresh = Notifications.addAll(drafts)
+    }
+
+    /** 新通知分发：前台提示音 + 应用内 incoming，后台系统通知栏。 */
+    private suspend fun deliver(fresh: List<Notifications.Info>) {
         if (fresh.isEmpty()) return
         withContext(Dispatchers.Main) {
             if (SystemNotifier.foreground) {
@@ -327,6 +354,22 @@ object NoticeCenter {
                 fresh.take(5).forEach { SystemNotifier.post?.invoke(it.id, it.title, it.body) }
             }
         }
+    }
+
+    private suspend fun pollOnce(teacher: Boolean) {
+        if (KewuApi.token == null) return
+        val drafts = mutableListOf<Notifications.Draft>()
+        suspend fun collect(block: suspend () -> List<Notifications.Draft>) {
+            try { drafts += block() } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
+        collect { Notifications.pollClassNotes() }
+        if (!teacher) collect { Notifications.pollGrades() }
+        // ★ H2：老师发布作业 → 学生端首页铃铛（原来 TYPE_NEW_ASSIGNMENT 只定义、从未生成）
+        if (!teacher) collect { Notifications.pollNewAssignments() }
+        collect { BiliNoteWatcher.poll() }
+        // 学生：顺手把近几天纪要的「今日复习」提前生成好（后台进行，不阻塞通知）
+        if (!teacher) com.kewu.app.ui.DailyReview.prefetch(Notifications.readyNotes)
+        deliver(Notifications.addAll(drafts))
     }
 }
 

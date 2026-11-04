@@ -266,7 +266,9 @@ fun TeacherTaskPage(onNavHide: (Boolean) -> Unit = {}) {
                         drill = TaskDrill.NONE
                         reload()
                         // 提示放页面级 scope：发布页随即离开组合，它自己的 scope 会把 Snackbar 一并取消
-                        scope.launch { snackbar.toast("发布成功，已推送到学生任务页") }
+                        // ★ H2（2026-11-05）：此前写「已推送到学生任务页」但零推送（后端无通知表、客户端也无新作业扫描）；
+                        // 现在学生端首页铃铛会收到「新作业」通知，文案改成与实际链路一致。
+                        scope.launch { snackbar.toast("发布成功，学生端会收到新作业通知") }
                     },
                 )
             }

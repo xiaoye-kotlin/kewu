@@ -43,6 +43,7 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
+import com.kewu.app.AiNav
 import com.kewu.app.Notifications
 import com.kewu.app.haptic
 import io.github.suqi8.coui.kmp.basic.Card
@@ -186,9 +187,14 @@ private fun NotificationRow(
     }
     val open: (() -> Unit)? = noteTarget?.let { t -> { haptic(HapticKind.Tick); onOpenClassNote?.invoke(t) } }
         ?: biliVideo?.let { v -> { haptic(HapticKind.Tick); onDismiss(); VideoPlayerHub.current = v } }
+        // ★ H2：新作业通知点开直接切到「任务」tab（2）
+        ?: if (n.type == Notifications.TYPE_NEW_ASSIGNMENT) {
+            { haptic(HapticKind.Tick); onDismiss(); AiNav.goStudentTab(2) }
+        } else null
     val action = when {
         noteTarget != null -> "查看纪要"
         biliVideo != null -> "回到视频"
+        n.type == Notifications.TYPE_NEW_ASSIGNMENT -> "去任务页"
         else -> null
     }
     Card(
