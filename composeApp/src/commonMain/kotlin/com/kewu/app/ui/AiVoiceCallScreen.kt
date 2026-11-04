@@ -91,7 +91,8 @@ import kotlinx.coroutines.launch
  * - ★ 通话不落聊天记录：直接调 AiClient（不走 AssistantHub），挂断即散，不污染文字对话、
  *   也不点亮助教红点；通话内的多轮上下文只留在内存里。
  *
- * 交互：大圆钮点按切换（说/停），挂断或返回键退出；到 [CHAT_VOICE_MAX_SECS] 自动结束本轮。
+ * 交互（★ V11 起全程免手操作）：自动开录 → 识别到一句话说完自动交给 AI → 回答完自动继续听；
+ * 静音 / 挂断 / 返回键仍可随时操作；到 [CHAT_VOICE_MAX_SECS] 自动结束本轮作兜底。
  */
 
 /** TTS 预留钩子（P7）：后端 / 华为 TTS 开通后注册 `speak` 实现（接 `/api/ai/tts` 播放）。 */
@@ -112,6 +113,18 @@ private fun vcNowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds
 private fun vcTwo(n: Int) = if (n < 10) "0$n" else "$n"
 private fun vcFmtClock(totalSec: Int) = "${vcTwo(totalSec / 60)}:${vcTwo(totalSec % 60)}"
 
+// ── ★ V11 自动断句参数（2026-11-04 晚 2）──
+/** 实时转录文本连续稳定多久判定「一句话说完了」 */
+private const val AUTO_SILENCE_MS = 1200L
+/** 句末标点出现时可更快收尾（仍需稳定一小段，避免识别中间态误判） */
+private const val AUTO_PUNCT_SILENCE_MS = 600L
+/** 至少识别到几个字才允许自动提交 */
+private const val AUTO_MIN_CHARS = 2
+private const val SENTENCE_END_CHARS = "。？！?!,.、；;～~"
+
+/** 文本是否以句末标点收尾（中文口语里省略标点时靠 [AUTO_SILENCE_MS] 兜底）。 */
+private fun vcEndsWithPunct(t: String): Boolean = t.lastOrNull()?.let { it in SENTENCE_END_CHARS } == true
+
 @Composable
 internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
     // ★ V10（2026-11-04 晚 2）：通话页只允许竖屏；挂断 / 返回 / 页面销毁时恢复系统默认方向
@@ -125,6 +138,8 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
     val snackbar = LocalKewuSnackbar.current
 
     var phase by remember { mutableStateOf(VoiceCallPhase.IDLE) }
+    /** ★ V11/V12：静音开关。关麦时停掉本轮录音且不送 AI；取消静音自动重新进入聆听。 */
+    var muted by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf<String?>(null) }
     // 通话内多轮（仅内存）：上屏用「最近一轮大、更早轮小字回顾」
     var turns by remember { mutableStateOf(listOf<VoiceTurn>()) }
@@ -234,6 +249,55 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
         }
     }
 
+    // ★ V11 自动断句主循环（2026-11-04 晚 2，用户「不要每次等用户点击那个麦克风才能发送给」）：
+    //   ① 进入通话自动开录，不用点任何按钮；
+    //   ② 实时 ASR 文本连续稳定 AUTO_SILENCE_MS（或出现句末标点且稳定 600ms）→ 判定一句话说完，
+    //      自动 stopTalk() 把整句交给 AI，不再等用户点；
+    //   ③ AI 回答完 phase 回 IDLE → 本循环自动再次开录，形成连续免手操作的多轮通话。
+    //   说明：没有额外起一次 LLM 来判断「说完了没」（那会平白增加 1~2s 延迟），
+    //   用「实时转录稳定 + 句末标点」的 VAD 式语义断句，交互上等价。
+    LaunchedEffect(phase, muted) {
+        if (muted) return@LaunchedEffect
+        when (phase) {
+            VoiceCallPhase.IDLE -> {
+                // 给页面入场 / 上一轮回答留一点间隔，避免紧接着抢麦克风
+                delay(350)
+                startTalk()
+            }
+            VoiceCallPhase.LISTENING -> {
+                var last = recorder.liveText.trim()
+                var stableAt = vcNowMs()
+                while (recorder.recording && !muted) {
+                    val t = recorder.liveText.trim()
+                    if (t != last) {
+                        last = t
+                        stableAt = vcNowMs()
+                    } else {
+                        val stable = vcNowMs() - stableAt
+                        val ready = stable >= AUTO_SILENCE_MS ||
+                            (vcEndsWithPunct(t) && stable >= AUTO_PUNCT_SILENCE_MS)
+                        if (t.length >= AUTO_MIN_CHARS && ready) {
+                            haptic(HapticKind.Light)
+                            stopTalk()
+                            break
+                        }
+                    }
+                    delay(120)
+                }
+            }
+            VoiceCallPhase.THINKING -> Unit
+        }
+    }
+
+    /** ★ V11/V12：静音切换。静音时丢弃本轮录音且不送 AI；取消静音后自动回到聆听。 */
+    fun toggleMute() {
+        muted = !muted
+        if (muted && recorder.recording) {
+            scope.launch { recorder.cancel() }
+            phase = VoiceCallPhase.IDLE
+        }
+    }
+
     // 挂断：还在录就丢弃；退出全屏层
     fun hangUp() {
         scope.launch {
@@ -340,7 +404,11 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
                     when (phase) {
                         VoiceCallPhase.LISTENING -> "正在聆听…"
                         VoiceCallPhase.THINKING -> "小悟思考中…"
-                        VoiceCallPhase.IDLE -> if (turns.isEmpty()) "点击下方按钮，开始说话" else "继续提问，或挂断结束"
+                        VoiceCallPhase.IDLE -> when {
+                            muted -> "已静音 · 点左侧麦克风恢复"
+                            turns.isEmpty() -> "正在准备聆听…"
+                            else -> "小悟在听，继续说就行"
+                        }
                     },
                     color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp,
                 )
