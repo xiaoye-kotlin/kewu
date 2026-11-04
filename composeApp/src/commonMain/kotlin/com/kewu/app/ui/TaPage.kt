@@ -282,9 +282,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         }
     }
 
-    // 键盘弹起检测：人格区/上下文 chip 自动收起，把空间让给对话列（否则键盘占 830px 对话区被压没）
-    val density = LocalDensity.current
-    val imeVisible = WindowInsets.ime.getBottom(density) > 0
+    // ★ W1：人格区/chip 已删，键盘弹起检测（density / imeVisible）不再需要；
+    //   输入法避让由主界面内容区统一 imePadding + ChatAutoScroll 负责。
 
     // 新消息平滑滑到底；键盘弹起 / 收起、人格区展开等视口变化时保持贴底（不再跳到上面的对话）。
     // 2026-10-26 改用 ChatAutoScroll（原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳）
@@ -306,15 +305,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         if (panel != AssistantPanel.VOICE && recorder.recording && !finishingVoice) recorder.cancel()
     }
 
-    // ── 入场动画（错峰触发） ──
-    var enterPersona by remember { mutableStateOf(false) }
-    var enterChips by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        delay(60)
-        enterPersona = true
-        delay(150)
-        enterChips = true
-    }
+    // ★ W1（2026-11-04 晚 3）：人格区与上下文 chip 整块删除，原「错峰入场动画」状态一并移除。
 
     // 发送：用户消息立即上屏并落盘；2026-10-24 起走真实大模型（AiClient），
     // 回答里可能带 KEWU_ACTION 指令 —— 由 AiAgent 真执行导航/代办；失败回退占位文案
@@ -519,23 +510,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     }
     BackHandler(textSelect.active) { textSelect.exit() }
 
-    // 凝结出场动画值（弹簧过冲 = "加速冲上来后晃一下"）
-    val personaAlpha by animateFloatAsState(if (enterPersona) 1f else 0f, tween(280), label = "personaA")
-    val personaScale by animateFloatAsState(
-        if (enterPersona) 1f else 0.6f,
-        spring(dampingRatio = 0.55f, stiffness = 260f, visibilityThreshold = 0.0005f),
-        label = "personaS",
-    )
-    val personaY by animateDpAsState(
-        if (enterPersona) 0.dp else 26.dp,
-        spring(dampingRatio = 0.55f, stiffness = 260f),
-        label = "personaY",
-    )
-    val chipsY by animateDpAsState(
-        if (enterChips) 0.dp else 18.dp,
-        spring(dampingRatio = 0.55f, stiffness = 320f),
-        label = "chipsY",
-    )
+    // ★ W1：人格区/chip 删除后，personaAlpha / personaScale / personaY / chipsY 一并移除。
 
     // 根盒原点：供长按菜单把「气泡窗口坐标」换算成「相对本页坐标」（贴气泡定位用）
     Box(
@@ -555,87 +530,20 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 ),
         )
         Column(Modifier.fillMaxSize()) {
-            // ── AI 人格区 + 上下文 chip：键盘弹出时自动收起，把空间让给对话列 ──
-            // ★ 2026-10-26 修「点输入框弹键盘即闪退」：上一版把这里的 fade 换成 shrinkVertically，
-            //   玻璃 chip 跟着被裁剪/压到 0 高度 → 采样层尺寸为 0，RenderThread 直接崩。
-            //   现在只让**非玻璃**的人格区做收起动画；玻璃 chip 在键盘弹起时直接移除、收起后直接出现，绝不参与尺寸动画。
-            AnimatedVisibility(
-                visible = !imeVisible,
-                enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 420f)) + fadeIn(tween(200)),
-                exit = shrinkVertically(tween(150)) + fadeOut(tween(120)),
+            // ── 顶部细横幅（★ W1 + W2，2026-11-04 晚 3）──
+            // 用户「把占一定高度的头像+名字+本学期九门课程+待交作业这个卡片直接去掉，整个界面都拿来聊天」、
+            // 「顶部给我做一个横幅然后显示名字就可以了，不用显示头像在顶部」。
+            // 原人格区（76dp 圆头像 / 小悟 / 电话钮 / KEWU AI）与两颗上下文 chip 整块删除，
+            // LazyColumn 直接占满剩余空间；这里只留一条 36dp 细横幅显示名字，不显示头像。
+            // ★ 语音通话入口原在人格区电话钮，按 W10 迁到「+」面板。
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .background(cs.surface),
+                contentAlignment = Alignment.Center,
             ) {
-                Column(Modifier.fillMaxWidth()) {
-                    Spacer(Modifier.height(14.dp))
-                    // ── AI 人格区（非采样者，可放心 alpha/scale） ──
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .offset(y = personaY)
-                            .alpha(personaAlpha)
-                            .scale(personaScale),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Box(
-                            Modifier
-                                .size(76.dp)
-                                .clip(CircleShape)
-                                .background(cs.primary),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            // 品牌绿光环（draw 参数级发光，不套 graphicsLayer）
-                            Canvas(Modifier.fillMaxSize()) {
-                                drawCircle(
-                                    brush = Brush.radialGradient(
-                                        0.62f to Color.Transparent,
-                                        1.0f to KewuGreen.copy(alpha = 0.55f),
-                                        center = center,
-                                        radius = size.minDimension / 2f,
-                                    ),
-                                    radius = size.minDimension / 2f,
-                                )
-                            }
-                            PersonGlyph(Modifier.size(34.dp), Color.White)
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("小悟", color = cs.onSurface, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                            Spacer(Modifier.width(7.dp))
-                            Canvas(Modifier.size(7.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
-                            // P7 语音通话入口：名旁小电话钮 → 全屏通话层（AiVoiceCallScreen）
-                            Spacer(Modifier.width(7.dp))
-                            ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
-                                haptic(HapticKind.Tick)
-                                showVoiceCall = true
-                            }) { ChatGlyphIcon(COUIIcons.Phone) }
-                        }
-                        Spacer(Modifier.height(3.dp))
-                        // 2026-10-24：等待 AI 回复时顶部状态改为「小悟正在输入中…」
-                        Text(
-                            if (aiThinking) "小悟正在输入中…" else "KEWU AI",
-                            color = cs.onSurfaceSecondary, fontSize = 12.sp,
-                        )
-                    }
-                    Spacer(Modifier.height(12.dp))
-                }
-            }
-            if (!imeVisible) {
-                Column(Modifier.fillMaxWidth()) {
-                    // ── 上下文 chip（玻璃采样者：不放进任何 alpha / 尺寸动画容器） ──
-                    Row(
-                        Modifier.fillMaxWidth().offset(y = chipsY),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        ContextChip(backdrop = pageBackdrop, dot = cs.primary) {
-                            Text("本学期 · $courseCount 门课程", color = cs.onSurface, fontSize = 12.sp)
-                        }
-                        Spacer(Modifier.width(8.dp))
-                        ContextChip(backdrop = pageBackdrop, dot = KewuGreen) {
-                            Text("待交作业 $pendingCount 项", color = cs.onSurface, fontSize = 12.sp)
-                        }
-                    }
-                    Spacer(Modifier.height(10.dp))
-                }
+                Text("小悟", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             }
 
             // ── 对话列 ──
