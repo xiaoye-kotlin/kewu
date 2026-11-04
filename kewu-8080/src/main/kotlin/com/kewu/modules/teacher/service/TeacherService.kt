@@ -225,27 +225,8 @@ class TeacherService(
         return Result.success(state)
     }
 
-    /** 下课回调（手动下课 / 自动下课都会触发）：由路由层挂上「择优录音」。 */
+    /** 下课回调（手动下课触发）：由路由层挂上「择优录音」。 */
     var onClassEnded: ((ClassState, String) -> Unit)? = null
-
-    /**
-     * 自动下课（2026-10-26）：开课超过 [maxMinutes] 分钟老师还没点下课的，后端替他下课并触发择优录音。
-     * 返回本次自动下课的课程数。由 Application 里的定时任务每分钟调用。
-     */
-    fun autoEndOverdue(maxMinutes: Long = 90): Int {
-        var n = 0
-        val nowT = LocalDateTime.now()
-        repository.listOnStates().forEach { st ->
-            val started = st.startedAt?.let { runCatching { LocalDateTime.parse(it, fmt) }.getOrNull() } ?: return@forEach
-            if (java.time.Duration.between(started, nowT).toMinutes() >= maxMinutes) {
-                val ended = st.copy(state = ClassStateValue.OFF, endedAt = now(), updatedAt = now())
-                repository.saveState(ended)
-                onClassEnded?.invoke(ended, "AUTO_90MIN")
-                n++
-            }
-        }
-        return n
-    }
 
     // 查某门课当前是上课中还是没开
     fun getClassState(courseId: String): Result<ClassState> {
