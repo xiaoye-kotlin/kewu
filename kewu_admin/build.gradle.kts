@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.kewu"
-version = "1.0.9"
+version = "1.0.10"
 
 repositories {
     mavenCentral()
@@ -51,15 +51,16 @@ kotlin {
 compose.desktop {
     application {
         mainClass = "com.kewu.admin.MainKt"
-        // 正式打包（packageReleaseXxx）会跑 ProGuard。okhttp3/ktor 的可选 TLS 适配器与
-        // slf4j 绑定在桌面端用不到，但 ProGuard 默认把它们当错误，需接入自定义 -dontwarn 规则。
+        // 正式打包**禁用 ProGuard**：ProGuard 优化会改坏 okio 的合成方法签名
+        // （运行时 VerifyError: Bad return type in okio/Okio.source），导致 OkHttp 一建连就崩、
+        // 所有网络请求失败。依赖原样打包即可，proguard-rules.pro 保留仅作历史说明。
         buildTypes.release.proguard {
-            configurationFiles.from(files("proguard-rules.pro"))
+            isEnabled.set(false)
         }
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
-            packageVersion = "1.0.9"
+            packageVersion = "1.0.10"
             description = "课悟平台总控端"
             vendor = "Kewu"
         }
