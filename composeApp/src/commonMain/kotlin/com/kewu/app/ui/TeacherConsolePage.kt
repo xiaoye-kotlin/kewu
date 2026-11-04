@@ -820,6 +820,10 @@ private fun LiveSessionCard(
     var syncedCount by remember { mutableStateOf<Int?>(null) }
     var closing by remember { mutableStateOf(false) }
     var confirmClose by remember { mutableStateOf(false) }
+    // 2026-11-04（任务 #16）：融合录音——教师决定何时把现有录音交给 AI 助教
+    var confirmFuse by remember { mutableStateOf(false) }
+    var fuseCount by remember { mutableStateOf(0) }
+    var fusing by remember { mutableStateOf(false) }
 
     // 动态码：进场拉一次 + 倒计时归零自动刷新
     LaunchedEffect(session.id) {
@@ -924,6 +928,34 @@ private fun LiveSessionCard(
             TeacherRecordingPanel(courseId = session.courseId)
             Spacer(Modifier.height(16.dp))
 
+            // 融合录音（2026-11-04，任务 #16）：点击 → 查已上传份数 →
+            // 0 份提示不让融合；≥1 份弹 coui 确认框显示份数 + 是否建议现在融合。
+            KewuPrimaryButton(
+                text = if (fusing) "正在融合…" else "融合录音",
+                onClick = {
+                    if (fusing || closing) return@KewuPrimaryButton
+                    haptic(HapticKind.Medium)
+                    scope.launch {
+                        val sid = KewuApi.classSessionId(session.courseId, todayCn())
+                        val n = KewuApi.getSessionRecordings(sid).getOrNull()?.size ?: -1
+                        if (n < 0) {
+                            snackbar.toast("查询录音份数失败，请检查网络后重试")
+                            return@launch
+                        }
+                        if (n == 0) {
+                            // 用户口径：一条录音都没上传成功就不让融合
+                            snackbar.toast("还没有录音上传成功，暂不能融合")
+                            return@launch
+                        }
+                        fuseCount = n
+                        confirmFuse = true
+                    }
+                },
+                enabled = !fusing && !closing,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(10.dp))
+
             // 结束课程（coui 确认弹窗二次确认防误触）
             KewuPrimaryButton(
                 text = if (closing) "正在结束…" else "结束课程",
@@ -975,6 +1007,51 @@ private fun LiveSessionCard(
             }
         },
         onDismiss = { confirmClose = false },
+    )
+
+    // 融合录音确认框（2026-11-04，任务 #16）：份数 + 建议文案；确认后封口拼接 → 择优 → 转写
+    KewuConfirmDialog(
+        show = confirmFuse,
+        title = "融合录音交给 AI？",
+        summary = buildString {
+            append("目前已收到 $fuseCount 份录音。")
+            append(
+                if (fuseCount < 3) "录音份数较少，AI 课堂纪要可能不完整，建议稍等更多录音上传后再融合。"
+                else "份数已较充足，建议现在融合。"
+            )
+            append("融合后本节课立即结束：未上传完成的录音不再接收，课堂纪要生成后会推送给全班（含未签到的同学）。")
+        },
+        confirmText = "确认融合",
+        cancelText = "再等等",
+        onConfirm = {
+            if (fusing) return@KewuConfirmDialog
+            fusing = true
+            // 先关弹窗播退场动画，网络请求放 onDismissFinished（与结束课程弹窗同一套防闪退姿势）
+            confirmFuse = false
+        },
+        onDismissFinished = {
+            if (!fusing) return@KewuConfirmDialog
+            scope.launch {
+                // 教师端录音还开着 → 先停并上传；等尾段队列传完再封口，否则 finalize 会把尾段拒掉
+                if (RecordingManager.isRecording) RecordingManager.stopAndUpload()
+                kotlinx.coroutines.withTimeoutOrNull(90_000L) {
+                    while (RecordingManager.pendingUploads.value.isNotEmpty()) kotlinx.coroutines.delay(1_000)
+                }
+                val sid = KewuApi.classSessionId(session.courseId, todayCn())
+                val err = KewuApi.finalizeClassSession(sid)
+                if (err != null) {
+                    fusing = false
+                    snackbar.toast("融合失败：$err")
+                    return@launch
+                }
+                // 融合 = 本节课结束：关闭签到、收起上课面板（下课状态由 finalize 端点置）
+                runCatching { KewuApi.closeAttendance(session.id) }
+                snackbar.toast("已开始融合，课堂纪要生成后会推送给全班")
+                fusing = false
+                onClosed()
+            }
+        },
+        onDismiss = { confirmFuse = false },
     )
 }
 
