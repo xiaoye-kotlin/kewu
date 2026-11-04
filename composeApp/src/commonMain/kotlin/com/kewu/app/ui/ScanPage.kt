@@ -270,24 +270,13 @@ fun ScanPage(
                 )
                 val codeSid = fallbackSessionId
                 if (codeSid != null) {
-                    Spacer(Modifier.height(14.dp))
-                    KewuGlassCard(
-                        backdrop = pageBackdrop,
-                        shape = RoundedCornerShape(22.dp),
-                        blurRadius = 18.dp,
-                        tintAlpha = 0.24f,
-                        onClick = { haptic(HapticKind.Tick); onOpenCodeCheckIn(codeSid, "") },
-                    ) {
-                        Text(
-                            "输入暗号签到",
-                            color = Color.White,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier
-                                .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
-                                .padding(horizontal = 22.dp, vertical = 10.dp),
-                        )
-                    }
+                    Spacer(Modifier.height(16.dp))
+                    // ★ X11（2026-11-05）：改用 COUi 满宽主按钮，更统一干净
+                    KewuPrimaryButton(
+                        "输入暗号签到",
+                        onClick = { onOpenCodeCheckIn(codeSid, "") },
+                        modifier = Modifier.fillMaxWidth(0.7f),
+                    )
                 }
             }
         }
@@ -422,30 +411,33 @@ private fun SuccessCheck() {
  * 乳白，把取景框挡死。所以玻璃只做边框那一圈，中心必须透出相机。
  */
 @Composable
+/**
+ * ★ X11（2026-11-05）：用 COUi 风格重做扫码取景框——
+ * 圆角玻璃底（极淡）+ 品牌绿描边 + 加粗圆头四角括号（带内缩）+ 柔光扫描线，整体更干净。
+ */
 private fun ScanFrame(backdrop: LayerBackdrop, modifier: Modifier = Modifier) {
     val transition = rememberInfiniteTransition(label = "scan")
     val lineY by transition.animateFloat(
-        initialValue = 0.08f,
-        targetValue = 0.92f,
-        animationSpec = infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Reverse),
+        initialValue = 0.1f,
+        targetValue = 0.9f,
+        animationSpec = infiniteRepeatable(tween(1600, easing = LinearEasing), RepeatMode.Reverse),
         label = "line",
     )
-    val shape = RoundedCornerShape(20.dp)
-    // 外层：淡白描边定形（玻璃不做重描边，保持"取景框"的轻量感）
-    Box(modifier.border(1.dp, Color.White.copy(alpha = 0.35f), shape)) {
+    val shape = RoundedCornerShape(24.dp)
+    // 外层：品牌绿细描边定形
+    Box(modifier.border(1.5.dp, KewuGreen.copy(alpha = 0.55f), shape)) {
         KewuGlassCard(
             backdrop = backdrop,
             shape = shape,
             blurRadius = 18.dp,
-            tintAlpha = 0.14f, // 压得很淡：扫码要能看清框内画面，只提供"玻璃感"边界
+            tintAlpha = 0.12f, // 压得很淡：扫码要能看清框内画面，只提供"玻璃感"边界
             magnify = 1f, // 取景器不做透镜放大，否则框内二维码被拉畸变不利于识别
             modifier = Modifier.fillMaxSize(),
         ) {
             Canvas(Modifier.fillMaxSize()) {
                 val w = size.width
                 val h = size.height
-                // ① 中心掏空（玻璃环宽 8dp）： BlendMode.Clear 把玻璃卡中部擦透明，
-                //   露出身后的相机预览（采样器本身未被 alpha/graphicsLayer 包裹，安全）。
+                // ① 中心掏空（玻璃环宽 8dp）： BlendMode.Clear 把玻璃卡中部擦透明，露出身后的相机预览
                 val ring = 8.dp.toPx()
                 drawRect(
                     color = Color.Transparent,
@@ -453,21 +445,26 @@ private fun ScanFrame(backdrop: LayerBackdrop, modifier: Modifier = Modifier) {
                     size = Size(w - ring * 2f, h - ring * 2f),
                     blendMode = BlendMode.Clear,
                 )
-                // ② 白色细角括号（微信式：细长、圆头、不过界）—— 从框角长出
-                val cl = 36.dp.toPx()
-                val t = 4.dp.toPx()
-                val white = Color.White.copy(alpha = 0.92f)
-                fun line(a: Offset, b: Offset) = drawLine(white, a, b, strokeWidth = t, cap = StrokeCap.Round)
-                line(Offset(cl, 0f), Offset(0f, 0f)); line(Offset(0f, 0f), Offset(0f, cl))
-                line(Offset(w - cl, 0f), Offset(w, 0f)); line(Offset(w, 0f), Offset(w, cl))
-                line(Offset(0f, h - cl), Offset(0f, h)); line(Offset(0f, h), Offset(cl, h))
-                line(Offset(w - cl, h), Offset(w, h)); line(Offset(w, h), Offset(w, h - cl))
-                // ③ 扫描线（主线 + 柔光渐变带），往返巡航
+                // ② 品牌绿四角括号：加粗、圆头、带内缩，更干净现代
+                val inset = 10.dp.toPx()
+                val cl = 46.dp.toPx()
+                val t = 5.dp.toPx()
+                val green = KewuGreen.copy(alpha = 0.95f)
+                fun line(a: Offset, b: Offset) = drawLine(green, a, b, strokeWidth = t, cap = StrokeCap.Round)
+                // 左上
+                line(Offset(inset, inset + cl), Offset(inset, inset)); line(Offset(inset, inset), Offset(inset + cl, inset))
+                // 右上
+                line(Offset(w - inset - cl, inset), Offset(w - inset, inset)); line(Offset(w - inset, inset), Offset(w - inset, inset + cl))
+                // 左下
+                line(Offset(inset, h - inset - cl), Offset(inset, h - inset)); line(Offset(inset, h - inset), Offset(inset + cl, h - inset))
+                // 右下
+                line(Offset(w - inset - cl, h - inset), Offset(w - inset, h - inset)); line(Offset(w - inset, h - inset), Offset(w - inset, h - inset - cl))
+                // ③ 扫描线：柔光带 + 主线，往返巡航
                 val y = h * lineY
-                val x1 = 18.dp.toPx()
-                val x2 = w - 18.dp.toPx()
-                drawLine(KewuGreen.copy(alpha = 0.18f), Offset(x1, y), Offset(x2, y), strokeWidth = 12.dp.toPx(), cap = StrokeCap.Round)
-                drawLine(KewuGreen.copy(alpha = 0.9f), Offset(x1, y), Offset(x2, y), strokeWidth = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                val x1 = 22.dp.toPx()
+                val x2 = w - 22.dp.toPx()
+                drawLine(KewuGreen.copy(alpha = 0.16f), Offset(x1, y), Offset(x2, y), strokeWidth = 14.dp.toPx(), cap = StrokeCap.Round)
+                drawLine(KewuGreen.copy(alpha = 0.95f), Offset(x1, y), Offset(x2, y), strokeWidth = 2.5.dp.toPx(), cap = StrokeCap.Round)
             }
         }
     }
