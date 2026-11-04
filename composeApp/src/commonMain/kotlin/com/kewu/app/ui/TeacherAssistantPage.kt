@@ -84,13 +84,14 @@ import com.kewu.app.AttendanceStats
 import com.kewu.app.CourseInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
-import com.kewu.app.KewuBlue
+import com.kewu.app.ui.liquidglass.KewuGlassCard
+import com.kewu.app.ui.liquidglass.isLight
+import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
 import com.kewu.app.kvGet
 import com.kewu.app.kvSet
 import com.kewu.app.ui.liquidglass.KewuGlassCard
-import com.kewu.app.ui.liquidglass.defaultKewuHighlight
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import io.github.suqi8.coui.kmp.basic.Surface
 import io.github.suqi8.coui.kmp.basic.Text
@@ -671,18 +672,20 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     // P4：文字选择模式下返回键先退出选择（后组合者优先）
     BackHandler(textSelect.active) { textSelect.exit() }
 
+    // P8 微信风格浅灰底（仅浅色主题；深色保持 coui surface）
+    val taBg = if (cs.surface.isLight()) Color(0xFFEDEDED) else cs.surface
     Box(
         Modifier
             .fillMaxSize()
-            .background(cs.surface)
+            .background(taBg)
             .onGloballyPositioned { rootOrigin = it.positionInWindow() },
     ) {
-        // 背景采样层（玻璃气泡的采样源，与气泡平级；底色 = coui 页面灰底 surface）
+        // 背景采样层（玻璃气泡的采样源，与气泡平级；底色 = 页面灰底）
         Box(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.surface),
+                .background(taBg),
         )
         // 2026-10-26：输入法避让由主界面内容区统一 imePadding，这里不再重复加
         Column(Modifier.fillMaxSize()) {
@@ -751,18 +754,19 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
             ) {
                 item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
-                // 2026-11-04：与学生端对话页对齐 —— 顶部日期分隔标签显示可见窗口最早一天的实际日期
-                // （下拉加载更早对话后跟着变：今天/昨天/M月d日/yyyy年M月d日）
-                item(key = "date-divider") {
-                    Text(
-                        chatDayLabel(visibleCutoff),
-                        color = COUITheme.colorScheme.onSurfaceSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                    )
-                }
-                itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
+                // P8：日期/时间由每条消息上方的 chatTimeLabel 承担（5 分钟规则），不再单独插日期行
+                // P8 微信时间条：与上一条间隔 >5 分钟或跨天时，本条上方插一条居中灰字时间
+                itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { idx, msg ->
+                    val prevMsg = snapshot.getOrNull(idx - 1)
+                    if (chatNeedTimeLabel(prevMsg?.ts ?: 0L, msg.ts)) {
+                        Text(
+                            chatTimeLabel(msg.ts),
+                            color = COUITheme.colorScheme.onSurfaceSecondary,
+                            fontSize = 11.sp,
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                         androidx.compose.runtime.CompositionLocalProvider(LocalChatMediaRetry provides retryMedia) {
                             TaBubble(
@@ -771,6 +775,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 reportBounds = msg == menuMsg,
                                 onBounds = { menuAnchor = it },
                                 selectFor = textSelect,
+                                // P8 weui 规则：连续 AI 消息只第一条带头像
+                                showAvatar = prevMsg?.isUser != false,
                                 onLongPress = {
                                     // 2026-11-04（P4）：文字消息长按进文字选择（SelectTextHelper 风格）；
                                     // 图片 / 语音消息长按仍弹原菜单
@@ -804,6 +810,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 pageBackdrop,
                                 TaMsg(false, streamText.ifEmpty { "小悟正在思考…" }.lines()
                                     .filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }),
+                                // P8 weui 规则：上一条是用户消息 → 流式泡带头像
+                                showAvatar = snapshot.lastOrNull()?.isUser != false,
                             )
                         }
                         Spacer(Modifier.height(10.dp))
@@ -951,6 +959,8 @@ private fun TaBubble(
     onLongPress: (() -> Unit)? = null,
     /** 文字选择模式（P4）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
     selectFor: ChatTextSelectState? = null,
+    /** P8 weui 规则：上一条也是 AI 消息时省略本条头像（false = 省略）。 */
+    showAvatar: Boolean = true,
 ) {
     val cs = COUITheme.colorScheme
     val press = if (onLongPress != null) Modifier.bubblePress(onLongPress) else Modifier
@@ -985,10 +995,16 @@ private fun TaBubble(
             }
         }
     } else if (msg.isUser) {
-        // 用户：coui Surface 品牌蓝气泡（右对齐，与学生端同款）
+        // P8 微信风格：用户泡 = #95EC69→品牌绿渐变（与学生端同款），白字保留
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(modifier = bounds.widthIn(max = 300.dp), shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
-                Column(press.padding(horizontal = 14.dp, vertical = 10.dp)) {
+            Box(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .then(bounds)
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(ChatUserGreenBrush),
+            ) {
+            Column(press.padding(horizontal = 14.dp, vertical = 10.dp)) {
                     if (selecting && selectFor != null) {
                         SelectableChatText(plainText, selectFor, color = Color.White, selectedBg = Color.White.copy(alpha = 0.28f))
                     } else {
@@ -1024,8 +1040,14 @@ private fun TaBubble(
             }
         }
     } else {
-        // AI：coui 毛玻璃气泡（左对齐，浅色底描边，标签行 + 内容块）
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
+        // AI：奶白毛玻璃气泡（左对齐）+ P8 微信头像（由调用方按 weui 连续规则传 showAvatar）
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.Top) {
+            if (showAvatar) {
+                ChatAiAvatar()
+                Spacer(Modifier.width(8.dp))
+            } else {
+                Spacer(Modifier.width(40.dp))
+            }
             KewuGlassCard(
                 backdrop = backdrop,
                 shape = RoundedCornerShape(20.dp),

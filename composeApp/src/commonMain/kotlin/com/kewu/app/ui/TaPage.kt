@@ -104,6 +104,7 @@ import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
 import com.kewu.app.shareText
 import com.kewu.app.ui.liquidglass.KewuGlassCard
+import com.kewu.app.ui.liquidglass.isLight
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
 import androidx.compose.ui.graphics.vector.ImageVector
 import io.github.suqi8.coui.kmp.basic.Chip
@@ -531,13 +532,15 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             // 2026-10-26：输入法避让改由主界面内容区统一 imePadding（这里再加会与之叠加）
             .onGloballyPositioned { rootOrigin = it.positionInWindow() },
     ) {
-        // 背景采样层：coui 页面底色（surface 灰底），与玻璃内容平级 ✓
+        // 背景采样层：P8 微信风格浅灰底（#EDEDED，仅浅色主题；深色保持 coui surface）
         // 主界面内容区 imePadding 让整页（含采样层）随键盘变小，weight 对话区自动让位。
         Box(
             Modifier
                 .matchParentSize()
                 .layerBackdrop(pageBackdrop)
-                .background(cs.surface),
+                .background(
+                    if (cs.surface.isLight()) Color(0xFFEDEDED) else cs.surface
+                ),
         )
         Column(Modifier.fillMaxSize()) {
             // ── AI 人格区 + 上下文 chip：键盘弹出时自动收起，把空间让给对话列 ──
@@ -658,19 +661,23 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
-                item(key = "date-divider") {
-                    // 2026-11-04 修复：旧版写死「今天」，下拉加载更早对话后标签不跟着变；
-                    // 现在显示可见窗口最早一天的实际日期（今天/昨天/M月d日/yyyy年M月d日）
-                    Text(
-                        chatDayLabel(visibleCutoff),
-                        color = cs.onSurfaceSecondary,
-                        fontSize = 11.sp,
-                        modifier = Modifier.fillMaxWidth(),
-                        textAlign = TextAlign.Center,
-                    )
-                }
+                // P8：日期/时间由每条消息上方的 chatTimeLabel 承担（5 分钟规则），不再单独插日期行
                 // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃，历史合并 / 回补时可能出现重复）
-                messages.distinctBy { it.id }.forEach { msg ->
+                val visibleMsgs = messages.distinctBy { it.id }
+                visibleMsgs.forEachIndexed { idx, msg ->
+                    // P8 微信时间条：与上一条间隔 >5 分钟或跨天时，本条上方插一条居中灰字时间
+                    val prevMsg = visibleMsgs.getOrNull(idx - 1)
+                    if (chatNeedTimeLabel(prevMsg?.ts ?: 0L, msg.ts)) {
+                        item(key = "time-${msg.id}") {
+                            Text(
+                                chatTimeLabel(msg.ts),
+                                color = cs.onSurfaceSecondary,
+                                fontSize = 11.sp,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                                textAlign = TextAlign.Center,
+                            )
+                        }
+                    }
                     // 2026-10-24：稳定 key + animateItem —— 新消息滑入，聊天更丝滑
                     item(key = msg.id, contentType = msg.isUser) {
                         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
@@ -679,7 +686,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                 // 避免滚动浏览历史时旧卡片的重新加载把视图拽下去）
                                 ChatMessageItem(msg, pageBackdrop, menu, onBiliLoaded = {
                                     if (messages.lastOrNull()?.id == msg.id) biliLoadedTick++
-                                }, selectFor = textSelect)
+                                }, selectFor = textSelect,
+                                    // P8 weui 规则：连续 AI 消息只第一条带头像
+                                    showAvatar = prevMsg?.isUser != false)
                             }
                         }
                     }
@@ -688,7 +697,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 if (streamText != null) {
                     item(key = "ai-streaming") {
                         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
-                            ChatStreamingBubble(streamText, pageBackdrop)
+                            ChatStreamingBubble(streamText, pageBackdrop, showAvatar = visibleMsgs.lastOrNull()?.isUser != false)
                         }
                     }
                 }

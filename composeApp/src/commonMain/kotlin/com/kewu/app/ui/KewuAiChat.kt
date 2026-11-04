@@ -207,6 +207,25 @@ internal fun chatDayLabel(dayStartMs: Long): String {
     }
 }
 
+// ── P8 微信风格时间条 ──
+
+/** 两条消息之间是否需要时间条（P8，weui 规则）：间隔超过 5 分钟或跨天。ts<=0（无时间戳的旧消息）不显示。 */
+internal fun chatNeedTimeLabel(prevTs: Long, ts: Long): Boolean {
+    if (ts <= 0L) return false
+    if (prevTs <= 0L) return true
+    if (com.kewu.app.ChatHistory.dayStart(prevTs) != com.kewu.app.ChatHistory.dayStart(ts)) return true
+    return ts - prevTs >= 5 * 60_000L
+}
+
+/** 时间条文案：当天「HH:mm」；跨天「昨天 HH:mm / M月d日 HH:mm」（东八区，commonMain 手算）。 */
+internal fun chatTimeLabel(ts: Long): String {
+    val datePart = chatDayLabel(com.kewu.app.ChatHistory.dayStart(ts))
+    val mins = ((ts + 8 * 3_600_000L) / 60_000L) % (24 * 60)
+    fun two(v: Long) = if (v < 10) "0$v" else "$v"
+    val clock = "${two(mins / 60)}:${two(mins % 60)}"
+    return if (datePart == "今天") clock else "$datePart $clock"
+}
+
 internal data class AiChatMsg(
     val text: String,
     val isUser: Boolean,
@@ -243,6 +262,34 @@ internal data class AiChatMsg(
 }
 
 // ───────────────────────── 通用按压 Q 弹 ─────────────────────────
+
+/** P8 微信风格用户气泡绿：#95EC69 向品牌绿微调的双截渐变（白字可读，weui 用户泡语言）。 */
+internal val ChatUserGreenBrush: Brush
+    @Composable get() = Brush.horizontalGradient(
+        listOf(Color(0xFF8ADF6E), Color(0xFF4ECD6A), KewuGreen.copy(alpha = 0.92f)),
+    )
+
+/** P8 微信风格 AI 头像：32dp 品牌绿圆 + 白色人物 glyph（连续 AI 消息省略，由 ChatMessageItem 控制）。 */
+@Composable
+internal fun ChatAiAvatar(modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(32.dp).clip(CircleShape).background(KewuGreen),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize()) {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    0.6f to Color.Transparent,
+                    1f to Color.White.copy(alpha = 0.25f),
+                    center = center,
+                    radius = size.minDimension / 2f,
+                ),
+                radius = size.minDimension / 2f,
+            )
+        }
+        PersonGlyph(Modifier.size(15.dp), Color.White)
+    }
+}
 
 /**
  * 按压回弹：按下 1→0.88，低阻尼弹簧带回冲 —— 全组件统一的「液态玻璃 Q 弹」。
@@ -450,15 +497,14 @@ internal fun ChatUserBubble(
     val shape = RoundedCornerShape(topStart = 22.dp, topEnd = 8.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        // Surface 承担 clip + 品牌色底；按压缩放仍只作用于内部内容（与改造前一致）
-        Surface(
-            modifier = Modifier
+        // P8 微信风格：用户泡 = #95EC69→品牌绿渐变（代替原纯色 cs.primary），白字保留
+        Box(
+            Modifier
                 .widthIn(max = 280.dp)
                 .riseEnter(p, 26f)
+                .clip(shape)
+                .background(ChatUserGreenBrush)
                 .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
-            shape = shape,
-            color = cs.primary,
-            contentColor = cs.onPrimary,
         ) {
         Column(
             Modifier
@@ -753,6 +799,8 @@ internal fun ChatMessageItem(
     menu: ChatMenuState,
     onBiliLoaded: (() -> Unit)? = null,
     selectFor: ChatTextSelectState? = null,
+    /** P8 weui 规则：上一条也是 AI 消息时省略本条头像（false = 省略）。 */
+    showAvatar: Boolean = true,
 ) {
     // P4：文字消息长按 → 进入文字选择（默认全选）；语音/图片或页面未装选择状态时走原长按菜单
     val isPlainText = !msg.isVoice && msg.image == null && msg.text.isNotBlank()
@@ -771,24 +819,41 @@ internal fun ChatMessageItem(
     if (msg.isUser) {
         ChatUserBubble(msg, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }, onLongPress = onLongPress, selectFor = selectFor)
     } else {
-        Column {
-            ChatAiBubble(msg, backdrop, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }, onLongPress = onLongPress, selectFor = selectFor)
-            // B 站相关视频：只在模型判断「学生在问不懂的知识点」时出现；点卡片在 App 内直接播放
-            msg.biliKeyword?.let { kw ->
-                Spacer(Modifier.height(6.dp))
-                BilibiliVideoSuggest(kw, modifier = Modifier.padding(end = 48.dp), onLoaded = onBiliLoaded)
+        // P8 微信风格：AI 泡左侧小悟头像（连续 AI 消息省略），头像与气泡顶对齐
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            if (showAvatar) {
+                ChatAiAvatar()
+                Spacer(Modifier.width(8.dp))
+            } else {
+                Spacer(Modifier.width(40.dp)) // 头像占位，气泡缩进保持对齐
+            }
+            Column(Modifier.weight(1f)) {
+                ChatAiBubble(msg, backdrop, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }, onLongPress = onLongPress, selectFor = selectFor)
+                // B 站相关视频：只在模型判断「学生在问不懂的知识点」时出现；点卡片在 App 内直接播放
+                msg.biliKeyword?.let { kw ->
+                    Spacer(Modifier.height(6.dp))
+                    BilibiliVideoSuggest(kw, modifier = Modifier.padding(end = 8.dp), onLoaded = onBiliLoaded)
+                }
             }
         }
     }
 }
 
-/** 流式回答草稿气泡（思考中显示占位，吐字后逐段增长）。 */
+/** 流式回答草稿气泡（思考中显示占位，吐字后逐段增长）。[showAvatar] 同 ChatMessageItem 的 weui 省略规则。 */
 @Composable
-internal fun ChatStreamingBubble(text: String, backdrop: LayerBackdrop, thinkingText: String = "小悟正在思考…") {
-    ChatAiBubble(
-        AiChatMsg(text.ifEmpty { thinkingText }, isUser = false, id = -1L, ts = nowMs()),
-        backdrop, reportBounds = false, onBounds = {}, onLongPress = {},
-    )
+internal fun ChatStreamingBubble(text: String, backdrop: LayerBackdrop, thinkingText: String = "小悟正在思考…", showAvatar: Boolean = true) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        if (showAvatar) {
+            ChatAiAvatar()
+            Spacer(Modifier.width(8.dp))
+        } else {
+            Spacer(Modifier.width(40.dp))
+        }
+        ChatAiBubble(
+            AiChatMsg(text.ifEmpty { thinkingText }, isUser = false, id = -1L, ts = nowMs()),
+            backdrop, reportBounds = false, onBounds = {}, onLongPress = {},
+        )
+    }
 }
 
 /** 长按菜单（复制 / 引用 / 分享）。放在页面根 Box 的最后，[rootOrigin] 是该根 Box 的窗口原点。 */
