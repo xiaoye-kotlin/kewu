@@ -1721,11 +1721,15 @@ object KewuApi {
      * 后端仅教师 JWT 可调。成功返回 null，失败返回可展示文案。
      */
     suspend fun finalizeClassSession(sessionId: String): String? = try {
-        val resp = client.post("$OBS_URL/api/class-recordings/${pathSegment(sessionId)}/finalize")
-        val o = json.parseToJsonElement(resp.bodyAsText()) as? JsonObject
+        val resp = client.post("$OBS_URL/api/class-recordings/${pathSegment(sessionId)}/finalize") {
+            // ★ 后端 finalize 在 authenticate(JwtConfig.NAME) 内，必须带教师 token（裸 post 会 401）
+            authHeaders().forEach { (k, v) -> header(k, v) }
+        }
+        val o = parseBody(resp) as? JsonObject
         if (o != null && (o["code"]?.int() ?: 0) == 0) null
         else o?.get("message")?.jsonPrimitive?.content ?: "融合失败，请稍后重试"
     } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { e.message ?: "融合失败，请稍后重试" }
     catch (_: Exception) { "融合失败，请检查网络后重试" }
 
     /**
