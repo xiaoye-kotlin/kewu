@@ -151,7 +151,16 @@ internal fun MistakeBookScreen(onBack: () -> Unit) {
             Spacer(Modifier.height(12.dp))
             when {
                 list == null -> KewuLoading(text = "正在汇总你的错题…")
-                list.isEmpty() -> KewuEmpty(if (total == 0) "还没有错题：作业里判错的题会自动收进这里" else "错题已全部攻克，太棒了！")
+                list.isEmpty() -> if (total == 0) {
+                    KewuEmpty("还没有错题：作业里判错的题会自动收进这里")
+                } else {
+                    // ★ A3（2026-11-05）：全部攻克 → 画勾动画 + 一行字（与费曼「全部掌握」同款语言；去 emoji、去「太棒了」AI 味）
+                    Column(Modifier.fillMaxWidth().padding(vertical = 44.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        ThreeQuarterCheck(size = 88.dp, color = KewuGreen)
+                        Spacer(Modifier.height(16.dp))
+                        Text("错题已全部攻克！", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
                 else -> list.forEach { m -> MistakeCard(m) { saveMastered(loadMastered() + m.key); version++ } }
             }
         }

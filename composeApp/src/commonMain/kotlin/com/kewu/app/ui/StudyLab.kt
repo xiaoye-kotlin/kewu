@@ -287,6 +287,51 @@ internal fun StudyLabPage(
     }
 }
 
+/**
+ * ★ A3（2026-11-05）：「全部掌握」极简完成页 —— 全 app 统一的成就空态页。
+ * 顶部返回 + 标题，其余全部留白；中央超大 [ThreeQuarterCheck]「画勾」动画（主页同款标志性动效，
+ * 先扫大半圆再一笔写出勾），正下方只放一行字。
+ * 不用 emoji、不用祝贺长句（用户明确：前面加 emoji +「你已掌握所有知识点」这种 AI 味太浓，全 app 类似处统一本页）。
+ */
+@Composable
+internal fun AllMasteredPage(
+    title: String,
+    onBack: () -> Unit,
+    line: String = "你已全部掌握！",
+    subtitle: String = "",
+) {
+    val cs = COUITheme.colorScheme
+    val backdrop = rememberGlassBackdrop()
+    BackHandler { onBack() }
+    Box(Modifier.fillMaxSize()) {
+        // 采样层：与学习 lab 页同款灰底 + 柔光晕，保持全 app 质感一致（玻璃折射可见）
+        Box(Modifier.matchParentSize().layerBackdrop(backdrop).background(cs.surface)) {
+            Canvas(Modifier.fillMaxSize()) {
+                fun glow(c: Color, x: Float, y: Float, r: Float) {
+                    val center = Offset(size.width * x, size.height * y)
+                    drawCircle(Brush.radialGradient(listOf(c, Color.Transparent), center, size.width * r), size.width * r, center)
+                }
+                glow(KewuGreen.copy(alpha = 0.16f), 0.50f, 0.40f, 0.62f)
+                glow(KewuBlue.copy(alpha = 0.12f), 0.10f, 0.14f, 0.72f)
+                glow(KewuGreen.copy(alpha = 0.10f), 0.94f, 0.86f, 0.6f)
+            }
+        }
+        Column(Modifier.fillMaxSize()) {
+            KewuTopBar(title, onBack = onBack, subtitle = subtitle)
+            // 其余留白，只在正中央放画勾动画 + 一行字（简约风，用户 A3 要求）
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    ThreeQuarterCheck(size = 148.dp, color = KewuGreen)
+                    Spacer(Modifier.height(24.dp))
+                    Text(
+                        line, color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** 白卡（coui Card）。 */
 @Composable
 internal fun LabCard(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null, content: @Composable ColumnScope.() -> Unit) {
@@ -1055,6 +1100,13 @@ internal fun FeynmanScreen(
     val candidates = points.distinct()
     var point by remember { mutableStateOf<String?>(null) }
 
+    // ★ A3（2026-11-05）：候选为空 = 学习规划里所有知识点都 100% 掌握 → 极简完成页
+    // （主页同款画勾动画 + 一行「你已全部掌握！」，不再用 🎉 emoji + 长句）。
+    if (candidates.isEmpty()) {
+        AllMasteredPage("讲给小悟听", onBack = onBack, subtitle = subtitle.ifBlank { "费曼学习法" })
+        return
+    }
+
     StudyLabPage("讲给小悟听", onBack, subtitle = subtitle.ifBlank { "费曼学习法" }) { backdrop ->
         val p = point
         if (p == null) {
@@ -1067,18 +1119,9 @@ internal fun FeynmanScreen(
             LabCard {
                 LabTitle("选一个知识点")
                 Spacer(Modifier.height(10.dp))
-                if (candidates.isEmpty()) {
-                    // 2026-11-04（P3）：学习规划里所有知识点都 100% 掌握 → 不用讲了
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("🎉", fontSize = 20.sp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("你已掌握所有知识点，小悟没有要考你的了", color = KewuGreen, fontSize = 13.sp)
-                    }
-                } else {
-                    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        candidates.forEach { c ->
-                            Chip(selected = false, onClick = { haptic(HapticKind.Tick); point = c }, label = c)
-                        }
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    candidates.forEach { c ->
+                        Chip(selected = false, onClick = { haptic(HapticKind.Tick); point = c }, label = c)
                     }
                 }
             }
