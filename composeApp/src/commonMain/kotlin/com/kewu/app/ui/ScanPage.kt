@@ -212,8 +212,7 @@ fun ScanPage(
             ScanFrame(pageBackdrop, Modifier.size(FrameSize))
         }
 
-        // 顶栏：返回 + 标题（玻璃胶囊保留——叠在相机画面上，coui SmallTopAppBar 的透明底会看不清；
-        //   胶囊里的返回符号换 coui Back 图标）
+        // 顶栏：微信式 —— 暗遮罩上直接白字标题，左侧玻璃圆钮返回（不再用标题胶囊）
         Row(
             Modifier
                 .fillMaxWidth()
@@ -230,58 +229,61 @@ fun ScanPage(
                 onClick = onBack,
             ) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Icon(COUIIcons.Back, contentDescription = "返回", tint = cs.onSurface, modifier = Modifier.size(22.dp))
+                    Icon(COUIIcons.Back, contentDescription = "返回", tint = Color.White, modifier = Modifier.size(22.dp))
                 }
             }
-            Spacer(Modifier.width(12.dp))
-            KewuGlassCard(
-                backdrop = pageBackdrop,
-                blurRadius = 18.dp,
-                tintAlpha = 0.32f,
-            ) {
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text("扫码签到", color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    "扫码签到",
-                    color = cs.onSurface,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp),
+                    when (state) {
+                        is ScanState.Submitting -> "正在签到…"
+                        is ScanState.Success -> "签到成功"
+                        else -> "将二维码放入框内，即可自动扫描"
+                    },
+                    color = Color.White.copy(alpha = 0.72f),
+                    fontSize = 12.sp,
                 )
             }
         }
 
-        // 底部提示卡 + 暗号签到兜底入口
+        // 底部提示 + 暗号签到兜底入口：微信式 —— 遮罩上直接白字小提示，暗号钮为白描边玻璃胶囊
         Column(
             Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                // 底部导航栏（托盘+标签行）约 116dp，抬高提示卡避免被压住
+                // 底部导航栏（托盘+标签行）约 116dp，抬高提示避免被压住
                 .padding(horizontal = 24.dp)
-                .padding(bottom = 128.dp),
+                .padding(bottom = 132.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            KewuGlassCard(backdrop = pageBackdrop, modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(18.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text(
-                        when (state) {
-                            is ScanState.Submitting -> "正在签到…"
-                            is ScanState.Success -> "签到成功"
-                            else -> "对准教师端展示的签到二维码"
-                        },
-                        color = cs.onSurface,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Medium,
-                        textAlign = TextAlign.Center,
-                    )
-                    if (state is ScanState.Scanning && fallbackSessionId != null) {
-                        Spacer(Modifier.height(10.dp))
-                        ScanTextAction("相机不可用？输入暗号签到", primary = false) {
-                            onOpenCodeCheckIn(fallbackSessionId, "")
-                        }
+            if (state is ScanState.Scanning) {
+                Text(
+                    "对准教师端展示的课悟签到码",
+                    color = Color.White.copy(alpha = 0.82f),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                )
+                val codeSid = fallbackSessionId
+                if (codeSid != null) {
+                    Spacer(Modifier.height(14.dp))
+                    KewuGlassCard(
+                        backdrop = pageBackdrop,
+                        shape = RoundedCornerShape(22.dp),
+                        blurRadius = 18.dp,
+                        tintAlpha = 0.24f,
+                        onClick = { haptic(HapticKind.Tick); onOpenCodeCheckIn(codeSid, "") },
+                    ) {
+                        Text(
+                            "输入暗号签到",
+                            color = Color.White,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier
+                                .border(1.dp, Color.White.copy(alpha = 0.55f), RoundedCornerShape(22.dp))
+                                .padding(horizontal = 22.dp, vertical = 10.dp),
+                        )
                     }
                 }
             }
@@ -408,12 +410,12 @@ private fun SuccessCheck() {
 }
 
 /**
- * 取景框（2026-10-19 改为**液态玻璃组件**）：coui `KewuGlassCard` 做一圈玻璃环
+ * 取景框（2026-11-04 P5 微信式重构，参考 Zhaoss/WeiXinRecordedDemo）：coui `KewuGlassCard` 做一圈玻璃环
  * （透过页面背景层、带折射与高光），**中心用 BlendMode.Clear 掏空**，让身后的相机
- * 预览透出来；玻璃之上再画绿色四角括号 + 上下往返的扫描线。
+ * 预览透出来；玻璃之上画**白色细角括号**（微信扫码语言，克制不抢戏）+ 品牌绿扫描线。
  *
  * ★ 为什么是「掏空」而不是让玻璃直接显示相机：coui 的 backdrop 只能采样 Compose
- * 图层，相机是 SurfaceView（在视图层级里是镂空的），采不进来；满铺玻璃会得到一片
+ * 图层，相机是 SurfaceView/TextureView（在视图层级里是镂空的），采不进来；满铺玻璃会得到一片
  * 乳白，把取景框挡死。所以玻璃只做边框那一圈，中心必须透出相机。
  */
 @Composable
@@ -425,9 +427,9 @@ private fun ScanFrame(backdrop: LayerBackdrop, modifier: Modifier = Modifier) {
         animationSpec = infiniteRepeatable(tween(1500, easing = LinearEasing), RepeatMode.Reverse),
         label = "line",
     )
-    val shape = RoundedCornerShape(26.dp)
+    val shape = RoundedCornerShape(20.dp)
     // 外层：淡白描边定形（玻璃不做重描边，保持"取景框"的轻量感）
-    Box(modifier.border(1.5.dp, Color.White.copy(alpha = 0.42f), shape)) {
+    Box(modifier.border(1.dp, Color.White.copy(alpha = 0.35f), shape)) {
         KewuGlassCard(
             backdrop = backdrop,
             shape = shape,
@@ -448,26 +450,27 @@ private fun ScanFrame(backdrop: LayerBackdrop, modifier: Modifier = Modifier) {
                     size = Size(w - ring * 2f, h - ring * 2f),
                     blendMode = BlendMode.Clear,
                 )
-                // ② 四角括号（绿色，8 段）—— 从框角长出、跨过玻璃环伸进取景区内
-                val cl = 30.dp.toPx()
-                val t = 5.dp.toPx()
-                fun line(a: Offset, b: Offset) = drawLine(KewuGreen, a, b, strokeWidth = t, cap = StrokeCap.Round)
+                // ② 白色细角括号（微信式：细长、圆头、不过界）—— 从框角长出
+                val cl = 36.dp.toPx()
+                val t = 4.dp.toPx()
+                val white = Color.White.copy(alpha = 0.92f)
+                fun line(a: Offset, b: Offset) = drawLine(white, a, b, strokeWidth = t, cap = StrokeCap.Round)
                 line(Offset(cl, 0f), Offset(0f, 0f)); line(Offset(0f, 0f), Offset(0f, cl))
                 line(Offset(w - cl, 0f), Offset(w, 0f)); line(Offset(w, 0f), Offset(w, cl))
                 line(Offset(0f, h - cl), Offset(0f, h)); line(Offset(0f, h), Offset(cl, h))
                 line(Offset(w - cl, h), Offset(w, h)); line(Offset(w, h), Offset(w, h - cl))
-                // ③ 扫描线（主线 + 柔光），往返巡航
+                // ③ 扫描线（主线 + 柔光渐变带），往返巡航
                 val y = h * lineY
-                val x1 = 16.dp.toPx()
-                val x2 = w - 16.dp.toPx()
-                drawLine(KewuGreen.copy(alpha = 0.22f), Offset(x1, y), Offset(x2, y), strokeWidth = 10.dp.toPx(), cap = StrokeCap.Round)
-                drawLine(KewuGreen.copy(alpha = 0.9f), Offset(x1, y), Offset(x2, y), strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+                val x1 = 18.dp.toPx()
+                val x2 = w - 18.dp.toPx()
+                drawLine(KewuGreen.copy(alpha = 0.18f), Offset(x1, y), Offset(x2, y), strokeWidth = 12.dp.toPx(), cap = StrokeCap.Round)
+                drawLine(KewuGreen.copy(alpha = 0.9f), Offset(x1, y), Offset(x2, y), strokeWidth = 2.5.dp.toPx(), cap = StrokeCap.Round)
             }
         }
     }
 }
 
-/** 取景框四周的压暗层（上与下整块，左右两条，围出中间亮区）。 */
+/** 取景框四周的压暗层（上与下整块，左右两条，围出中间亮区；微信式略深，视觉聚焦框内）。 */
 @Composable
 private fun ScanScrim(modifier: Modifier = Modifier) {
     Canvas(modifier) {
@@ -476,7 +479,7 @@ private fun ScanScrim(modifier: Modifier = Modifier) {
         val f = FrameSize.toPx()
         val l = (w - f) / 2
         val tp = (h - f) / 2
-        val dim = Color.Black.copy(alpha = 0.5f)
+        val dim = Color.Black.copy(alpha = 0.56f)
         drawRect(dim, Offset(0f, 0f), Size(w, tp))
         drawRect(dim, Offset(0f, tp + f), Size(w, h - tp - f))
         drawRect(dim, Offset(0f, tp), Size(l, f))

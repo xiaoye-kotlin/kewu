@@ -52,7 +52,15 @@ actual fun QrScannerView(onScanned: (String) -> Unit, modifier: Modifier, enable
 
     AndroidView(
         modifier = modifier,
-        factory = { PreviewView(it).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } },
+        factory = { ctx ->
+            PreviewView(ctx).apply {
+                scaleType = PreviewView.ScaleType.FILL_CENTER
+                // 2026-11-04（P5）：半屏预览根因修复 —— 默认 PERFORMANCE 模式用 SurfaceView，
+                // 在 Compose 视图树里层级同步有已知缺陷（首帧/尺寸变化时画面只占半屏）；
+                // COMPATIBLE（TextureView）嵌入 Compose 稳定，扫码场景帧率开销可忽略。
+                implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+            }
+        },
         update = { previewView ->
             if (provider != null) return@AndroidView
             val future = ProcessCameraProvider.getInstance(context)
