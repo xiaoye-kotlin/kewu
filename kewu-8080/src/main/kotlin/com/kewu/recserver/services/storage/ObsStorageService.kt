@@ -31,7 +31,13 @@ class ObsStorageService(private val cfg: ObsConfig) : AudioStorage {
     }
 
     override suspend fun get(url: String): ByteArray? {
-        val key = url.removePrefix("obs://")
+        // 2026-11-04：兼容三种形态——obs://key、https://bucket.endpoint/key（save 返回的）、裸 key
+        val key = when {
+            url.startsWith("obs://") -> url.removePrefix("obs://")
+            url.startsWith("http://") || url.startsWith("https://") ->
+                runCatching { java.net.URI(url).path }.getOrNull()?.removePrefix("/") ?: return null
+            else -> url
+        }
         return withContext(Dispatchers.IO) {
             runCatching { client.getObject(cfg.bucket, key).objectContent.readBytes() }.getOrNull()
         }

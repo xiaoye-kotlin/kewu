@@ -5,6 +5,7 @@ import com.kewu.db.Classes
 import com.kewu.db.Courses
 import com.kewu.db.RecordingTranscripts
 import com.kewu.db.Recordings
+import com.kewu.db.Users
 import com.kewu.recserver.model.RecordingMeta
 import com.kewu.recserver.services.SisTranscriptionService
 import kotlinx.coroutines.async
@@ -55,6 +56,13 @@ class ClassEndService(private val services: RecServices) {
 
         /** 单节课最多转写几份录音（SIS 按时长计费）。环境变量 KEWU_ASR_MAX 可调。 */
         val asrMax: Int = com.kewu.infra.SecretStore.get("KEWU_ASR_MAX")?.toIntOrNull()?.coerceIn(1, 60) ?: 12
+
+        /** finalize 等教师专属端点的角色检查（2026-11-04）：返回用户角色，查不到返回 null。 */
+        fun roleOf(userId: String?): String? = userId?.let { id ->
+            runCatching {
+                transaction { Users.selectAll().where { Users.id eq id }.firstOrNull()?.get(Users.role) }
+            }.getOrNull()
+        }
 
         fun sessionRecordings(sessionId: String): List<SessionRecordingView> = transaction {
             // 转写表读失败（老库缺表 / 列）不拖垮整页：录音照常列出，只是没有转写与专注结论

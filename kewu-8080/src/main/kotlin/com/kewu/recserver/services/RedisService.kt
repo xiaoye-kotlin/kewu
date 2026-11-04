@@ -138,5 +138,27 @@ class RedisService(private val cfg: RedisConfig) {
     suspend fun getFusionStatus(taskId: String): String? =
         withRedis(null) { it.get("kewu:audio:fusion:$taskId") }
 
+    // ---- 2026-11-04 分段上传（文档六十六节） ----
+    // 段登记：每上传一段 rpush 到 kewu:segments:{sessionId}:{segGroup}，并把 segGroup 记进会话集合（finalize 时按组拼接）。
+    // 随课堂数据 24h 过期。返回 true=真写入，false=Redis 降级（降级时段直接丢弃，不进拼接）
+    suspend fun addSegment(sessionId: String, segGroup: String, segJson: String): Boolean =
+        withRedis(false) { c ->
+            c.rpush("kewu:segments:$sessionId:$segGroup", segJson)
+            c.sadd("kewu:seggroups:$sessionId", segGroup)
+            c.expire("kewu:segments:$sessionId:$segGroup", TTL_CLASS_DATA_SECONDS)
+            c.expire("kewu:seggroups:$sessionId", TTL_CLASS_DATA_SECONDS)
+            true
+        }
+    suspend fun getSegmentGroups(sessionId: String): Set<String> =
+        withRedis(emptySet()) { it.smembers("kewu:seggroups:$sessionId") }
+    suspend fun getSegments(sessionId: String, segGroup: String): List<String> =
+        withRedis(emptyList()) { it.lrange("kewu:segments:$sessionId:$segGroup", 0L, -1L) }
+
+    // 会话封口：教师 finalize 后设置，后续段上传 / 整轨上传一律 409 SESSION_SEALED 拒绝（这节课算结束，没传完的不再传）
+    suspend fun markSessionSealed(sessionId: String): Boolean =
+        withRedis(false) { it.setex("kewu:sealed:$sessionId", TTL_CLASS_DATA_SECONDS, "1"); true }
+    suspend fun isSessionSealed(sessionId: String): Boolean =
+        withRedis(false) { it.exists("kewu:sealed:$sessionId") == 1L }
+
     fun close() = runCatching { connection?.close() }
 }

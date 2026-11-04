@@ -44,6 +44,8 @@ fun Route.recordingRoutes() {
             var format: String? = null; var sampleRate: Int? = null; var durationSec: Double? = null
             var avgLevelDb: Double? = null
             var username = ""; var endedAtMs: Long? = null
+            // 2026-11-04 分段上传：segGroup 非空 = 段模式（先记账，教师 finalize 时再拼接成整轨）
+            var segGroup = ""; var segIndex: Int? = null
             var bytes: ByteArray? = null; var ext = "bin"
             var readError: String? = null
 
@@ -60,6 +62,8 @@ fun Route.recordingRoutes() {
                         "format" -> if (format == null) format = part.value
                         "username" -> username = part.value.trim().take(64)
                         "endedAt" -> part.value.toLongOrNull()?.let { endedAtMs = it }
+                        "segGroup" -> segGroup = part.value.trim().take(128)
+                        "segIndex" -> part.value.toIntOrNull()?.let { segIndex = it }
                     }
                     is PartData.FileItem -> if (part.name == "audio") {
                         try {
@@ -83,6 +87,41 @@ fun Route.recordingRoutes() {
 
             if (bytes == null || classId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "缺少 audio 文件或 classId"))
+                return@post
+            }
+
+            // 2026-11-04：教师已融合（finalize）封口的会话，晚到的上传一律拒绝——客户端收到后丢弃本地剩余段
+            if (sessionId.isNotBlank() && services.redis.isSessionSealed(sessionId)) {
+                call.respond(HttpStatusCode.Conflict, mapOf("error" to "SESSION_SEALED 本节课已由老师结束，录音不再接收"))
+                return@post
+            }
+
+            // ---- 段模式：存段 + Redis 记账即返回；不逐段 analyze / 落 recordings 表 / 触发融合（拼接在 finalize 时做） ----
+            if (segGroup.isNotBlank() && sessionId.isNotBlank()) {
+                val segId = UUID.randomUUID().toString()
+                val url = services.storage.save(
+                    segId, bytes!!, ext,
+                    mapOf(
+                        "sessionId" to sessionId, "segGroup" to segGroup,
+                        "segIndex" to (segIndex?.toString() ?: ""), "role" to role,
+                        "sampleRate" to (sampleRate?.toString() ?: ""),
+                        "durationSec" to (durationSec?.toString() ?: ""),
+                        "sizeBytes" to bytes!!.size.toString(),
+                    )
+                )
+                val segMeta = com.kewu.recserver.SegmentService.SegmentMeta(
+                    segIndex = segIndex ?: 0, url = url,
+                    sampleRate = sampleRate ?: 16000, durationSec = durationSec ?: 0.0,
+                    role = role, at = endedAtMs ?: System.currentTimeMillis(),
+                )
+                val recorded = services.redis.addSegment(
+                    sessionId, segGroup, Json.encodeToString(com.kewu.recserver.SegmentService.SegmentMeta.serializer(), segMeta)
+                )
+                if (!recorded) println("SEGMENT-WARN: Redis 降级，段 $segId 已存存储但未记账（finalize 时拼不上，学生端会按失败重试）")
+                call.respond(
+                    HttpStatusCode.Created,
+                    RecordingUploadResult(segId, url, 0.0, Instant.now().toString(), role, null, null)
+                )
                 return@post
             }
 

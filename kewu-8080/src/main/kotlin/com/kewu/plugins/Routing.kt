@@ -38,6 +38,9 @@ import com.kewu.modules.bilibili.bilibiliRoutes
 import com.kewu.modules.audio.TranscribeFusionService
 import com.kewu.modules.audio.audioFusionRoutes
 import com.kewu.recserver.services.ai.MaasAiService
+import io.ktor.server.auth.authenticate
+import io.ktor.server.auth.jwt.JWTPrincipal
+import io.ktor.server.auth.principal
 import io.ktor.server.application.*
 import io.ktor.server.response.respond
 import kotlinx.coroutines.launch
@@ -83,8 +86,11 @@ fun Application.configureRouting() {
     // AI 纪要生成状态轮询：独立 Redis 客户端（要区分“没 key”和“Redis 挂了”两种降级）
     val aiStatusRedis = AiStatusRedis()
     val aiStatusService = AiStatusService(aiStatusRedis)
-    // 下课收尾（2026-10-26）：手动下课 / 开课满 90 分钟自动下课 → 择优选出本节最佳录音，等待语音转文字
+    // 下课收尾（2026-10-26）：手动下课 → 择优选出本节最佳录音，等待语音转文字
+    // 2026-11-04（任务 #14）：删掉「开课满 90 分钟自动下课」循环——用户要求「只要教师端不点击结束课程就一直开启录音」
     val classEnd = com.kewu.recserver.ClassEndService(attributes[com.kewu.recserver.RecServicesKey])
+    // 2026-11-04 分段上传拼接服务（教师 finalize 时把段拼回整轨）
+    val segmentService = com.kewu.recserver.SegmentService(attributes[com.kewu.recserver.RecServicesKey])
     val bg = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     teacherService.onClassEnded = { st, reason ->
         bg.launch {
@@ -99,14 +105,6 @@ fun Application.configureRouting() {
     }
     com.kewu.recserver.ClassEndService.onUpload = { sid ->
         bg.launch { runCatching { classEnd.refreshIfDecided(sid) } }
-    }
-    bg.launch {
-        while (true) {
-            kotlinx.coroutines.delay(60_000)
-            runCatching { teacherService.autoEndOverdue(90) }
-                .onSuccess { if (it > 0) println("AUTO-END: $it class(es) ended after 90 min") }
-                .onFailure { println("AUTO-END-ERROR: $it") }
-        }
     }
     // 转写卡住自救（2026-11-02 夜）：启动 2 分钟后每 10 分钟扫一次，把卡在 PENDING_ASR /
     // TRANSCRIBING 超 5 分钟的节次重新转写（一次网络抖动不再让整节课永远 10%）
@@ -163,6 +161,50 @@ fun Application.configureRouting() {
             val sid = call.parameters["sessionId"]!!
             bg.launch { runCatching { classEnd.transcribe(sid, force = true) } }
             call.respond(com.kewu.models.ApiResponse(0, "已开始转写，约几分钟后完成", true))
+        }
+        // 教师融合录音（2026-11-04，任务 #16，文档六十六节）：
+        // 封口会话（晚到的段上传 409 SESSION_SEALED，客户端丢弃本地剩余段）→ 段拼回整轨 → 下课 → 择优 + 立即转写。
+        // 用户口径：「点击融合录音按钮就将目前已有的所有录音转文本然后融合交给 AI 助教；没传完的不用再传，这节课算结束」。
+        authenticate(com.kewu.security.JwtConfig.NAME) {
+            post("/api/class-recordings/{sessionId}/finalize") {
+                val uid = call.principal<JWTPrincipal>()?.payload
+                    ?.getClaim(com.kewu.security.JwtConfig.CLAIM_USER_ID)?.asString()
+                val role = com.kewu.recserver.ClassEndService.roleOf(uid)
+                if (role == null || role.equals("student", ignoreCase = true)) {
+                    call.respond(com.kewu.models.ApiResponse<String>(1, "仅教师可融合录音"))
+                    return@post
+                }
+                val sid = call.parameters["sessionId"]!!
+                val courseId = sid.substringBeforeLast('-')
+                val dateStr = sid.substringAfterLast('-').let {
+                    if (it.length == 8) "${it.take(4)}-${it.substring(4, 6)}-${it.takeLast(2)}" else null
+                }
+                // 1. 先封口：晚到的段上传立刻被拒，学生端收到 SESSION_SEALED 后丢弃本地剩余段
+                recServices.redis.markSessionSealed(sid)
+                // 2. 段拼回整轨并登记（合并失败不阻断：已有整轨录音仍可融合转写）
+                val merged = runCatching { segmentService.mergeSession(sid) }
+                    .onFailure { println("FINALIZE-MERGE-ERROR $sid: " + it.stackTraceToString()) }
+                    .getOrNull()
+                // 3. 下课（还没下的话；已下课会返回失败，忽略）——各端 checkClassEnded 自动停录
+                runCatching {
+                    teacherService.setClassState(
+                        com.kewu.modules.teacher.models.ClassStateRequest(courseId = courseId, action = "END", teacherId = uid.orEmpty())
+                    )
+                }.onFailure { println("FINALIZE-END-WARN $sid: ${it.message}") }
+                // 4. 择优 + 立即转写（END 回调 2 分钟后还会再择优一次，兜住这期间晚到的整轨上传）
+                bg.launch {
+                    runCatching { classEnd.onClassEnded(courseId, dateStr, "TEACHER_FINALIZE") }
+                        .onFailure { println("FINALIZE-CLASS-END-ERROR $sid: $it") }
+                    runCatching { classEnd.transcribe(sid) }.onFailure { println("FINALIZE-ASR-ERROR $sid: $it") }
+                }
+                call.respond(
+                    com.kewu.models.ApiResponse(
+                        0,
+                        "已融合：拼回 ${merged?.merged ?: 0} 份录音（${merged?.segments ?: 0} 段），正在转写生成课堂纪要",
+                        merged?.merged ?: 0
+                    )
+                )
+            }
         }
         get("/api/courses/{courseId}/class-recordings") {
             call.respond(com.kewu.models.ApiResponse(0, "ok", classEnd.list(call.parameters["courseId"]!!)))
