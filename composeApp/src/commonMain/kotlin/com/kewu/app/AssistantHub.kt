@@ -156,6 +156,24 @@ object AssistantHub {
     }
 
     /**
+     * ★ W8（2026-11-04 晚 3）：AI 语音通话的一轮对话同步到普通聊天记录。
+     * 用户「我虽然是用语音说的话，但最后还是要以气泡的方式呈现在聊天界面」——
+     * 落盘 user + assistant 两条，并通过 [incoming] 广播让前台页面立即上屏成气泡；
+     * 页面不在前台时下次进入 `ChatHistory.loadAll` 也会带上。
+     * 通话由用户主动发起，顺手推已读游标，避免挂断后助教 tab 冒出未读红点。
+     */
+    fun deliverVoiceTurn(key: String, userText: String, aiText: String) {
+        val t = Clock.System.now().toEpochMilliseconds()
+        val u = ChatHistory.Entry(id = ChatHistory.nextId(), role = "user", text = userText, ts = t)
+        val a = ChatHistory.Entry(id = ChatHistory.nextId(), role = "assistant", text = aiText, ts = t + 1)
+        ChatHistory.upsert(key, listOf(u, a))
+        if (isVisible(key)) ChatHistory.markAllAssistantRead(key)
+        _incoming.tryEmit(Incoming(key, u))
+        _incoming.tryEmit(Incoming(key, a))
+        refreshUnread(key)
+    }
+
+    /**
      * 发起一次 AI 回复（进程级协程，切走页面也会继续）。[block] 返回要投递的回复；
      * 抛异常时投递一条「暂时连不上」的说明，保证不会无声无息。
      */

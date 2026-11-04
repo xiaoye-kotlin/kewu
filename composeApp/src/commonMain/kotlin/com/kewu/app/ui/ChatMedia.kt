@@ -88,6 +88,7 @@ import io.github.suqi8.coui.kmp.icon.extended.Close
 import io.github.suqi8.coui.kmp.icon.extended.Image as ImageIcon
 import io.github.suqi8.coui.kmp.icon.extended.Ok
 import io.github.suqi8.coui.kmp.icon.extended.Pause
+import io.github.suqi8.coui.kmp.icon.extended.Phone
 import io.github.suqi8.coui.kmp.icon.extended.Photos
 import io.github.suqi8.coui.kmp.icon.extended.Play
 import io.github.suqi8.coui.kmp.icon.extended.Refresh
@@ -320,9 +321,10 @@ internal fun ChatAttachPanel(
     onAlbum: () -> Unit,
     onCamera: (() -> Unit)?,
     config: InputViewConfig = InputViewConfig(),
+    /** ★ W10：语音通话入口（W1 删掉人格区电话钮后补回「+」面板；不传 = 不显示该项） */
+    onVoiceCall: (() -> Unit)? = null,
 ) {
-    // ★ V4（2026-11-04 晚 2）：用户「+ 里面的录音功能删掉那个麦克风已经在外面了」「文件功能也去掉」
-    //   —— 只保留 拍照 / 相册 两项。
+    // ★ V4：只保留 拍照 / 相册；★ W10 追加「语音通话」。
     val items = mutableListOf<InputViewFunctionItem>()
     val actions = mutableListOf<() -> Unit>()
     if (onCamera != null) {
@@ -331,6 +333,10 @@ internal fun ChatAttachPanel(
     }
     items += InputViewFunctionItem(COUIIcons.Photos, "相册")
     actions += onAlbum
+    if (onVoiceCall != null) {
+        items += InputViewFunctionItem(COUIIcons.Phone, "语音通话")
+        actions += onVoiceCall
+    }
     ChatFunctionPanel(
         config = config,
         items = items,

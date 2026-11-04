@@ -2,6 +2,8 @@ package com.kewu.app.ui
 
 import com.kewu.app.AiAgent
 import com.kewu.app.AiClient
+import com.kewu.app.AssistantHub
+import com.kewu.app.ChatHistory
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
@@ -90,8 +92,9 @@ import kotlinx.coroutines.launch
  *   `AiClient.chatStream` 流式回答（通话口吻 system prompt，短句口语化）→ 回复大字居中显示；
  * - ★ TTS 未开通：AI 回复纯文本展示。预留 [TtsPlayer] 钩子，后端 `/api/ai/tts` 接通后
  *   注册实现即可语音播报；
- * - ★ 通话不落聊天记录：直接调 AiClient（不走 AssistantHub），挂断即散，不污染文字对话、
- *   也不点亮助教红点；通话内的多轮上下文只留在内存里。
+ * - ★ W8 起通话记录同步落盘：每轮（用户语音识别文本 + 小悟回答）经 [AssistantHub.deliverVoiceTurn]
+ *   写进 `ChatHistory.KEY_STUDENT` 并广播给前台页面，挂断回聊天页即以 weui 气泡呈现；
+ *   通话本身仍直接调 AiClient（不走 AssistantHub 的流式请求），并主动推已读游标避免冒红点。
  *
  * 交互（★ V11 起全程免手操作）：自动开录 → 识别到一句话说完自动交给 AI → 回答完自动继续听；
  * 静音 / 挂断 / 返回键仍可随时操作；到 [CHAT_VOICE_MAX_SECS] 自动结束本轮作兜底。
@@ -235,6 +238,9 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
             val parsed = AiAgent.parse(reply).text.trim()
             aiReply = parsed
             turns = turns + VoiceTurn(text, parsed)
+            // ★ W8：这一轮通话（用户说的话 + 小悟的回答）以普通气泡同步进聊天界面，
+            //   落盘 + 广播给前台 TaPage；挂断后回到聊天页就能看到。
+            AssistantHub.deliverVoiceTurn(ChatHistory.KEY_STUDENT, text, parsed)
             TtsPlayer.speakIfAvailable(parsed) // TTS 未开通：空实现，纯文本展示
             phase = VoiceCallPhase.IDLE
         }
@@ -346,12 +352,12 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
         }
 
         Column(Modifier.fillMaxSize()) {
-            // ── 顶部：微信式小分条（★ V12）──
-            // 用户「把呼叫界面顶部的那个头像那一大块儿给我去掉，顶部像微信那样做一个小分条，
-            // 显示小悟」—— 原来中部那颗 120dp 圆头像 + 脉冲光环 + 22sp 昵称整块删除（见下），
-            // 这里只留一条细分条：收起钮 + 「小悟」+ 状态/计时。
-            // 另用户提过「头像是正方形的」，折中保留一枚 28dp 正方形「悟」字牌（非照片头像、
-            // 非一大块）；若严格不要任何头像，删掉这个 Box 即可。
+            // ── 顶部：微信通话极简细条（★ W3）──
+            // 依据 69.3 的 GitHub 调研（Umesh-Patidar/ComposeCall、腾讯 TUICallKit、
+            // zuiwuyuan/FastBlur_VoiceChat）：微信语音通话顶部只有「收起 + 状态/计时」，
+            // 头像**不属于顶栏**。用户本轮明确「头像居中、靠上一点、正方形带圆角、头像最大，
+            // 名字在头像正下方且小一点」→ 头像与名字全部移到中部（见下），
+            // V12 那枚 28dp 小方牌与顶部「小悟」文字一并删除。
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -367,36 +373,45 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
                     Icon(COUIIcons.Close, contentDescription = "收起", tint = Color.White, modifier = Modifier.size(17.dp))
                 }
                 Spacer(Modifier.weight(1f))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(28.dp).clip(RoundedCornerShape(4.dp)).background(KewuGreen),
-                        contentAlignment = Alignment.Center,
-                    ) { Text("悟", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
-                    Spacer(Modifier.width(9.dp))
-                    Column {
-                        Text("小悟", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
-                        Text(
-                            when (phase) {
-                                VoiceCallPhase.LISTENING -> "正在聆听 · ${vcFmtClock(elapsedSec)}"
-                                VoiceCallPhase.THINKING -> "小悟思考中 · ${vcFmtClock(elapsedSec)}"
-                                VoiceCallPhase.IDLE -> if (muted) "已静音 · ${vcFmtClock(elapsedSec)}"
-                                else "语音通话 · ${vcFmtClock(elapsedSec)}"
-                            },
-                            color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp,
-                        )
-                    }
-                }
+                Text(
+                    "语音通话 · ${vcFmtClock(elapsedSec)}",
+                    color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp,
+                )
                 Spacer(Modifier.weight(1f))
                 Spacer(Modifier.size(38.dp)) // 与左侧按钮对称占位
             }
 
-            // ── 中部：状态 + 声纹/转录/回答（V12 起不再有头像区） ──
+            // ── 中部：居中靠上的大方形头像 + 正下方姓名（★ W3 / 微信通话骨架） ──
             Column(
                 Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Spacer(Modifier.height(18.dp))
-                // ★ V12：120dp 圆头像 + 脉冲光环 + 22sp 昵称整块删除；「小悟」已在顶部小分条
+                Spacer(Modifier.height(38.dp)) // 居中但朝上靠一点（微信通话头像约在上方 1/3）
+                // ★ W3：**正方形带一点圆角**、页面里最大的视觉元素（120dp），不是圆头像
+                Box(
+                    Modifier
+                        .size(120.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(KewuGreen),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                0.6f to Color.Transparent,
+                                1f to Color.White.copy(alpha = 0.22f),
+                                center = center,
+                                radius = size.minDimension / 2f,
+                            ),
+                            radius = size.minDimension / 2f,
+                        )
+                    }
+                    PersonGlyph(Modifier.size(52.dp), Color.White)
+                }
+                Spacer(Modifier.height(14.dp))
+                // 名字在头像**正下方**，字号小一点（用户「名字要可以小一点」）
+                Text("小悟", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Spacer(Modifier.height(5.dp))
                 Text(
                     when (phase) {
                         VoiceCallPhase.LISTENING -> "正在聆听…"
@@ -407,9 +422,9 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
                             else -> "小悟在听，继续说就行"
                         }
                     },
-                    color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp,
+                    color = Color.White.copy(alpha = 0.6f), fontSize = 12.sp,
                 )
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(16.dp))
 
                 // 聆听中：实时声纹 + 实时转录文字
                 if (phase == VoiceCallPhase.LISTENING) {

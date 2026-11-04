@@ -751,6 +751,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                         }
                                     }
                                 } else null,
+                                // ★ W10：语音通话入口补回「+」面板（原人格区电话钮已在 W1 删除）
+                                onVoiceCall = {
+                                    panel = AssistantPanel.NONE
+                                    showVoiceCall = true
+                                },
                             )
                             AssistantPanel.VOICE -> ChatVoicePanel(
                                 backdrop = pageBackdrop,
