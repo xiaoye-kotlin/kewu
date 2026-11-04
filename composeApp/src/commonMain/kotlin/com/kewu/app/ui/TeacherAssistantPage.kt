@@ -963,17 +963,23 @@ private fun TaBubble(
     showAvatar: Boolean = true,
 ) {
     val cs = COUITheme.colorScheme
-    val press = if (onLongPress != null) Modifier.bubblePress(onLongPress) else Modifier
     val bounds = Modifier.onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
     // P4 选择模式：整条消息的纯文本（blocks → 纯文本），选区按字符稳定映射
+    // U2：不再只在选择态计算，双击查看（SelectTextDialog）也复用同一份全文。
     val selecting = selectFor?.msgKey == msg.id
-    val plainText = if (selecting) msg.blocks.joinToString("\n") { b ->
+    val plainText = msg.blocks.joinToString("\n") { b ->
         when (b) {
             is TaBlock.Text -> stripMarkdown(b.s)
             is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
             is TaBlock.Chips -> b.list.joinToString("、")
         }
-    } else ""
+    }
+    val press = if (onLongPress != null) {
+        Modifier.bubblePress(
+            onLongPress,
+            onDoubleTap = { if (plainText.isNotBlank()) ChatTextSelectEventBus.openViewer(plainText) },
+        )
+    } else Modifier
     val media = msg.media
     if (msg.isUser && media != null) {
         // 图片 / 语音：与学生端同一套气泡（上传 / 识别状态、失败点按重试）

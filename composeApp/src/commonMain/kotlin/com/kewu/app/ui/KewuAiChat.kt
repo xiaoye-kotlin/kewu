@@ -353,11 +353,13 @@ internal fun Modifier.pressBounce(onClick: () -> Unit): Modifier {
  * 单一 detectTapGestures 同时承载 onTap/onLongPress，避免 pressBounce 与 combinedClickable 抢手势。
  */
 @Composable
-internal fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
+internal fun Modifier.bubblePress(onLongPress: () -> Unit, onDoubleTap: (() -> Unit)? = null): Modifier {
     val pressed = remember { mutableStateOf(false) }
     // ★ 稳定手势：onLongPress 内联 lambda 每次重组身份都变，用 pointerInput(Unit) + rememberUpdatedState
     //   避免快速交互时手势监听被反复重建（第三轮 12.5 修复①）。
+    // ★ 2026-11-04 U2：双击 = SelectTextHelper demo 的 SelectTextDialog 全屏查看。
     val onLongPressState = rememberUpdatedState(onLongPress)
+    val onDoubleTapState = rememberUpdatedState(onDoubleTap)
     val scaleV by animateFloatAsState(
         targetValue = if (pressed.value) 0.90f else 1f,
         animationSpec = spring(dampingRatio = 0.32f, stiffness = 480f, visibilityThreshold = 0.0005f),
@@ -374,6 +376,7 @@ internal fun Modifier.bubblePress(onLongPress: () -> Unit): Modifier {
                     pressed.value = false
                 },
                 onLongPress = { onLongPressState.value() },
+                onDoubleTap = { onDoubleTapState.value?.invoke() },
             )
         }
 }
@@ -443,7 +446,10 @@ internal fun ChatAiBubble(
         ) {
             Column(
                 Modifier
-                    .bubblePress(onLongPress)
+                    .bubblePress(
+                        onLongPress,
+                        onDoubleTap = { ChatTextSelectEventBus.openViewer(stripMarkdown(aiVisibleText(msg.text))) },
+                    )
                     .padding(horizontal = 12.dp, vertical = 9.dp),
             ) {
                 if (selecting && selectFor != null) {
@@ -544,7 +550,10 @@ internal fun ChatUserBubble(
         ) {
             Column(
                 Modifier
-                    .bubblePress(onLongPress)
+                    .bubblePress(
+                        onLongPress,
+                        onDoubleTap = { if (msg.text.isNotBlank()) ChatTextSelectEventBus.openViewer(msg.text) },
+                    )
                     .padding(horizontal = 12.dp, vertical = 9.dp),
             ) {
                 // 微信引用条：灰底 + 左侧竖条 + 小字（不再用白字半透明）
@@ -1053,6 +1062,8 @@ internal fun KewuAiChatScreen(
     val backdrop = rememberGlassBackdrop()
     val listState = rememberLazyListState()
     val menu = rememberChatMenuState()
+    // U2：统一对话页也装 SelectTextHelper 复刻的文字选择（长按自由选 / 双击全屏查看）
+    val textSelect = remember { ChatTextSelectState() }
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }
     var input by remember { mutableStateOf("") }
     var quote by remember { mutableStateOf<String?>(null) }
@@ -1085,7 +1096,9 @@ internal fun KewuAiChatScreen(
                 messages.distinctBy { it.id }.forEach { m ->
                     item(key = m.id, contentType = m.isUser) {
                         // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
-                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { ChatMessageItem(m, backdrop, menu) }
+                        Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) {
+                            ChatMessageItem(m, backdrop, menu, selectFor = textSelect)
+                        }
                     }
                 }
                 if (streamText != null) {
@@ -1118,6 +1131,15 @@ internal fun KewuAiChatScreen(
             Spacer(Modifier.height(6.dp))
         }
         ChatBubbleMenu(menu, rootOrigin) { quote = it }
+        // U2：深色网格选择弹窗 + 双击全屏查看层，挂根盒最后一层
+        val clipboardSel = LocalClipboardManager.current
+        ChatSelectToolbar(
+            state = textSelect,
+            rootOrigin = rootOrigin,
+            onCopy = { t -> clipboardSel.setText(AnnotatedString(t)) },
+            onShare = { t -> shareText(t) },
+            onQuote = { t -> quote = t },
+        )
     }
 }
 
