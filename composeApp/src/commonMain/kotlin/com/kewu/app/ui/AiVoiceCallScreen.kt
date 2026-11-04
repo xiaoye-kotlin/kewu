@@ -6,6 +6,7 @@ import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
 import com.kewu.app.platformLockPortrait
+import com.kewu.app.platformSetSpeakerphone
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -57,6 +58,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
@@ -140,6 +142,8 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
     var phase by remember { mutableStateOf(VoiceCallPhase.IDLE) }
     /** ★ V11/V12：静音开关。关麦时停掉本轮录音且不送 AI；取消静音自动重新进入聆听。 */
     var muted by remember { mutableStateOf(false) }
+    /** ★ V12：免提 / 听筒状态（右侧扬声器按钮，Android 真切换音频路由）。 */
+    var speakerOn by remember { mutableStateOf(false) }
     var hint by remember { mutableStateOf<String?>(null) }
     // 通话内多轮（仅内存）：上屏用「最近一轮大、更早轮小字回顾」
     var turns by remember { mutableStateOf(listOf<VoiceTurn>()) }
@@ -342,64 +346,57 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
         }
 
         Column(Modifier.fillMaxSize()) {
-            // ── 顶栏：收起 + 通话计时 ──
+            // ── 顶部：微信式小分条（★ V12）──
+            // 用户「把呼叫界面顶部的那个头像那一大块儿给我去掉，顶部像微信那样做一个小分条，
+            // 显示小悟」—— 原来中部那颗 120dp 圆头像 + 脉冲光环 + 22sp 昵称整块删除（见下），
+            // 这里只留一条细分条：收起钮 + 「小悟」+ 状态/计时。
+            // 另用户提过「头像是正方形的」，折中保留一枚 28dp 正方形「悟」字牌（非照片头像、
+            // 非一大块）；若严格不要任何头像，删掉这个 Box 即可。
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                VoiceCallIconBtn(backdrop = backdrop, icon = COUIIcons.Close, desc = "收起", onClick = { hangUp() })
+                Box(
+                    Modifier
+                        .size(38.dp)
+                        .clip(CircleShape)
+                        .background(Color.White.copy(alpha = 0.10f))
+                        .clickable { haptic(HapticKind.Tick); hangUp() },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(COUIIcons.Close, contentDescription = "收起", tint = Color.White, modifier = Modifier.size(17.dp))
+                }
                 Spacer(Modifier.weight(1f))
-                Text(
-                    "语音通话 · ${vcFmtClock(elapsedSec)}",
-                    color = Color.White.copy(alpha = 0.72f), fontSize = 13.sp,
-                )
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(28.dp).clip(RoundedCornerShape(4.dp)).background(KewuGreen),
+                        contentAlignment = Alignment.Center,
+                    ) { Text("悟", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold) }
+                    Spacer(Modifier.width(9.dp))
+                    Column {
+                        Text("小悟", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            when (phase) {
+                                VoiceCallPhase.LISTENING -> "正在聆听 · ${vcFmtClock(elapsedSec)}"
+                                VoiceCallPhase.THINKING -> "小悟思考中 · ${vcFmtClock(elapsedSec)}"
+                                VoiceCallPhase.IDLE -> if (muted) "已静音 · ${vcFmtClock(elapsedSec)}"
+                                else "语音通话 · ${vcFmtClock(elapsedSec)}"
+                            },
+                            color = Color.White.copy(alpha = 0.6f), fontSize = 11.sp,
+                        )
+                    }
+                }
                 Spacer(Modifier.weight(1f))
-                Spacer(Modifier.size(42.dp)) // 与左侧按钮对称占位
+                Spacer(Modifier.size(38.dp)) // 与左侧按钮对称占位
             }
 
-            // ── 中部：头像 + 状态 + 声纹/转录/回答 ──
+            // ── 中部：状态 + 声纹/转录/回答（V12 起不再有头像区） ──
             Column(
                 Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Spacer(Modifier.height(8.dp))
-                // 头像 + 聆听脉冲环（非玻璃件，draw 参数级动画随意用）
-                Box(Modifier.size(120.dp), contentAlignment = Alignment.Center) {
-                    if (phase == VoiceCallPhase.LISTENING) {
-                        val t = rememberInfiniteTransition(label = "vcPulse")
-                        val p by t.animateFloat(
-                            0f, 1f, infiniteRepeatable(tween(1400, easing = LinearEasing), RepeatMode.Restart),
-                            label = "vcPulseP",
-                        )
-                        Canvas(Modifier.fillMaxSize()) {
-                            val r = size.minDimension / 2f
-                            drawCircle(KewuGreen.copy(alpha = (1f - p) * 0.4f), radius = r * (0.72f + 0.28f * p))
-                        }
-                    }
-                    Box(
-                        Modifier
-                            .size(92.dp)
-                            .clip(CircleShape)
-                            .background(KewuGreen),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Canvas(Modifier.fillMaxSize()) {
-                            drawCircle(
-                                brush = Brush.radialGradient(
-                                    0.6f to Color.Transparent,
-                                    1f to Color.White.copy(alpha = 0.28f),
-                                    center = center,
-                                    radius = size.minDimension / 2f,
-                                ),
-                                radius = size.minDimension / 2f,
-                            )
-                        }
-                        PersonGlyph(Modifier.size(40.dp), Color.White)
-                    }
-                }
-                Spacer(Modifier.height(14.dp))
-                Text("小悟", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(18.dp))
+                // ★ V12：120dp 圆头像 + 脉冲光环 + 22sp 昵称整块删除；「小悟」已在顶部小分条
                 Text(
                     when (phase) {
                         VoiceCallPhase.LISTENING -> "正在聆听…"
@@ -504,92 +501,94 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
                 }
             }
 
-            // ── 底部：说话大圆钮 + 挂断 ──
+            // ── 底部：微信电话三钮（★ V12）──
+            // 用户「底部居中的是挂断按钮，左侧是麦克风，右侧是一个音响扬声器的 icon」、
+            // 「右边调整免提或耳机，左侧静音/麦克风，中间红色挂断」。
+            // V11 起全程自动断句，原来的「说/停」大绿钮不再需要，换成微信这一排。
             Row(
-                Modifier.fillMaxWidth().padding(bottom = 34.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
+                Modifier.fillMaxWidth().padding(horizontal = 28.dp, vertical = 26.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.Top,
             ) {
-                // 挂断（红色玻璃圆钮）
-                VoiceCallIconBtn(backdrop = backdrop, icon = COUIIcons.Phone, desc = "挂断", tint = Color(0xFFFF6B5E), onClick = { hangUp() })
-                Spacer(Modifier.width(34.dp))
-                // 说/停大圆钮：绿芯 + 白色描边（非玻璃件，按压 Q 弹可整体缩放）
-                val pressed = remember { mutableStateOf(false) }
-                val s by animateFloatAsState(
-                    if (pressed.value) 0.9f else 1f,
-                    spring(dampingRatio = 0.35f, stiffness = 460f, visibilityThreshold = 0.0005f),
-                    label = "vcTalkScale",
-                )
-                Box(
-                    Modifier
-                        .size(84.dp)
-                        .scale(s)
-                        .border(1.5.dp, Color.White.copy(alpha = 0.30f), CircleShape)
-                        .clip(CircleShape)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(KewuGreen, KewuGreen.copy(alpha = 0.82f)),
-                                radius = 200f,
-                            ),
-                        )
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onPress = {
-                                    pressed.value = true
-                                    tryAwaitRelease()
-                                    pressed.value = false
-                                },
-                            )
-                        }
-                        .clickable {
-                            haptic(HapticKind.Light)
-                            when (phase) {
-                                VoiceCallPhase.IDLE -> startTalk()
-                                else -> stopTalk()
-                            }
-                        },
-                    contentAlignment = Alignment.Center,
+                VoiceCallAction(
+                    label = if (muted) "取消静音" else "静音",
+                    active = muted,
+                    onClick = { toggleMute() },
                 ) {
                     Icon(
                         COUIIcons.Mic,
-                        contentDescription = if (phase == VoiceCallPhase.LISTENING) "结束说话" else "开始说话",
-                        tint = Color.White, modifier = Modifier.size(34.dp),
+                        contentDescription = if (muted) "取消静音" else "静音",
+                        tint = if (muted) Color(0xFF181818) else Color.White,
+                        modifier = Modifier.size(26.dp),
                     )
-                    if (phase == VoiceCallPhase.LISTENING) {
-                        val t = rememberInfiniteTransition(label = "vcRec")
-                        val a by t.animateFloat(
-                            0.3f, 1f, infiniteRepeatable(tween(650, easing = FastOutSlowInEasing), RepeatMode.Reverse),
-                            label = "vcRecA",
-                        )
-                        Canvas(Modifier.align(Alignment.TopEnd).padding(6.dp).size(12.dp)) {
-                            drawCircle(Color(0xFFFF5A4E).copy(alpha = a), radius = size.minDimension / 2f)
-                        }
-                    }
                 }
-                Spacer(Modifier.width(34.dp))
-                Spacer(Modifier.size(42.dp)) // 与挂断对称占位
+                VoiceCallAction(
+                    label = "挂断",
+                    background = Color(0xFFE5484D),
+                    onClick = { hangUp() },
+                ) {
+                    Icon(COUIIcons.Phone, contentDescription = "挂断", tint = Color.White, modifier = Modifier.size(27.dp))
+                }
+                VoiceCallAction(
+                    label = if (speakerOn) "免提" else "听筒",
+                    active = speakerOn,
+                    onClick = {
+                        speakerOn = !speakerOn
+                        platformSetSpeakerphone(speakerOn)
+                    },
+                ) {
+                    SpeakerGlyph(
+                        color = if (speakerOn) Color(0xFF181818) else Color.White,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
             }
         }
     }
 }
 
-/** 通话页圆形玻璃图标钮（挂断/收起共用）。 */
+/** ★ V12：微信电话底部圆形操作钮 + 下方文字标签（静音 / 挂断 / 免提）。 */
 @Composable
-private fun VoiceCallIconBtn(backdrop: LayerBackdrop, icon: ImageVector, desc: String, tint: Color = Color.White, onClick: () -> Unit) {
-    Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
-        Box(Modifier.fillMaxSize().border(1.dp, Color.White.copy(alpha = 0.16f), CircleShape)) {
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = CircleShape,
-                blurRadius = 14.dp,
-                tintAlpha = 0.26f,
-            ) {}
-        }
-        Icon(
-            icon, contentDescription = desc, tint = tint,
-            modifier = Modifier
-                .size(20.dp)
+private fun VoiceCallAction(
+    label: String,
+    onClick: () -> Unit,
+    active: Boolean = false,
+    background: Color = Color.White.copy(alpha = 0.14f),
+    icon: @Composable () -> Unit,
+) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(60.dp)
+                .clip(CircleShape)
+                .background(if (active) Color.White else background)
                 .clickable { haptic(HapticKind.Tick); onClick() },
-        )
+            contentAlignment = Alignment.Center,
+        ) { icon() }
+        Spacer(Modifier.height(9.dp))
+        Text(label, color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp)
+    }
+}
+
+/** ★ V12：自绘扬声器（喇叭 + 声波），coui 图标集里没有 Volume / Speaker 图标。 */
+@Composable
+private fun SpeakerGlyph(color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val w = size.width
+        val h = size.height
+        val p = Path().apply {
+            moveTo(w * 0.10f, h * 0.40f)
+            lineTo(w * 0.30f, h * 0.40f)
+            lineTo(w * 0.52f, h * 0.22f)
+            lineTo(w * 0.52f, h * 0.78f)
+            lineTo(w * 0.30f, h * 0.60f)
+            lineTo(w * 0.10f, h * 0.60f)
+            close()
+        }
+        drawPath(p, color)
+        val sw = 2.dp.toPx()
+        drawLine(color, Offset(w * 0.64f, h * 0.36f), Offset(w * 0.78f, h * 0.22f), strokeWidth = sw)
+        drawLine(color, Offset(w * 0.64f, h * 0.64f), Offset(w * 0.78f, h * 0.78f), strokeWidth = sw)
+        drawLine(color, Offset(w * 0.84f, h * 0.30f), Offset(w * 0.92f, h * 0.22f), strokeWidth = sw)
     }
 }

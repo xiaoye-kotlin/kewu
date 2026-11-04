@@ -27,6 +27,9 @@ actual fun platformHttpClient(): HttpClient = HttpClient(Darwin)
  */
 actual fun platformLockPortrait(on: Boolean) = Unit
 
+/** ★ V12：iOS 音频路由（AVAudioSession）待 iOS target 联调时补，当前仅 UI 状态切换。 */
+actual fun platformSetSpeakerphone(on: Boolean) = Unit
+
 // 稳定设备标识：identifierForVendor（同一开发者的 App 共用，卸载全部后才会变），录音雷达 / 多端择优用
 actual fun platformDeviceId(): String =
     "ios-" + (UIDevice.currentDevice.identifierForVendor?.UUIDString ?: "unknown")

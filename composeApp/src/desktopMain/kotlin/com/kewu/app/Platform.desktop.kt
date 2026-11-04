@@ -16,6 +16,9 @@ actual fun platformDeviceId(): String = "desktop-${System.getProperty("user.name
 /** ★ V10：桌面窗口方向由用户控制，无系统级方向锁；通话页布局本身按竖屏比例设计。 */
 actual fun platformLockPortrait(on: Boolean) = Unit
 
+/** ★ V12：桌面无通话音频路由概念，仅 UI 状态切换。 */
+actual fun platformSetSpeakerphone(on: Boolean) = Unit
+
 private val preferences: Preferences
     get() = Preferences.userRoot().node("com.kewu.app")
 

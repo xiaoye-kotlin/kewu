@@ -20,6 +20,17 @@ internal var appActivity: MainActivity? = null
 actual fun platformAppContext(): Any = appContext
 actual fun platformActivity(): Any? = appActivity
 
+/** ★ V12：微信电话「免提 / 听筒」切换（MODE_IN_COMMUNICATION 下切扬声器）。 */
+actual fun platformSetSpeakerphone(on: Boolean) {
+    runCatching {
+        val am = appContext.getSystemService(android.content.Context.AUDIO_SERVICE) as? android.media.AudioManager
+        am?.let {
+            it.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+            it.isSpeakerphoneOn = on
+        }
+    }
+}
+
 /** ★ V10：通话页锁竖屏；退出恢复 UNSPECIFIED（视频播放器仍可临时切横屏）。 */
 actual fun platformLockPortrait(on: Boolean) {
     appActivity?.requestedOrientation = if (on) {

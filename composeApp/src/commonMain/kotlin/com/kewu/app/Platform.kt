@@ -81,3 +81,9 @@ expect fun platformExitApp()
  * Desktop 窗口由用户自由调整、iOS 需 Info.plist + UIViewController 配合，暂为 no-op（文档 68 节注明）。
  */
 expect fun platformLockPortrait(on: Boolean)
+
+/**
+ * ★ V12（2026-11-04 晚 2）：微信电话底部「免提 / 听筒」切换。
+ * Android 走 `AudioManager.setSpeakerphoneOn`；Desktop / iOS 暂为 no-op（仅 UI 状态切换）。
+ */
+expect fun platformSetSpeakerphone(on: Boolean)
