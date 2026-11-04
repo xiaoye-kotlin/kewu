@@ -85,8 +85,6 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Close
-import io.github.suqi8.coui.kmp.icon.extended.File
-import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.icon.extended.Image as ImageIcon
 import io.github.suqi8.coui.kmp.icon.extended.Ok
 import io.github.suqi8.coui.kmp.icon.extended.Pause
@@ -322,9 +320,9 @@ internal fun ChatAttachPanel(
     onAlbum: () -> Unit,
     onCamera: (() -> Unit)?,
     config: InputViewConfig = InputViewConfig(),
-    onFile: (() -> Unit)? = null,
-    onRecord: (() -> Unit)? = null,
 ) {
+    // ★ V4（2026-11-04 晚 2）：用户「+ 里面的录音功能删掉那个麦克风已经在外面了」「文件功能也去掉」
+    //   —— 只保留 拍照 / 相册 两项。
     val items = mutableListOf<InputViewFunctionItem>()
     val actions = mutableListOf<() -> Unit>()
     if (onCamera != null) {
@@ -333,14 +331,6 @@ internal fun ChatAttachPanel(
     }
     items += InputViewFunctionItem(COUIIcons.Photos, "相册")
     actions += onAlbum
-    if (onFile != null) {
-        items += InputViewFunctionItem(COUIIcons.File, "文件")
-        actions += onFile
-    }
-    if (onRecord != null) {
-        items += InputViewFunctionItem(COUIIcons.Mic, "录音")
-        actions += onRecord
-    }
     ChatFunctionPanel(
         config = config,
         items = items,

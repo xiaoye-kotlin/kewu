@@ -55,7 +55,6 @@ import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Add
 import io.github.suqi8.coui.kmp.icon.extended.Close
 import io.github.suqi8.coui.kmp.icon.extended.Edit
-import io.github.suqi8.coui.kmp.icon.extended.File
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.icon.extended.Ok
 import io.github.suqi8.coui.kmp.icon.extended.Photos
@@ -125,12 +124,10 @@ internal data class InputViewConfig(
 /** 对应 `FunctionEntity(iconResId, name)`（setFuncationData）。 */
 internal data class InputViewFunctionItem(val icon: ImageVector, val label: String)
 
-/** demo 里的三项 + 录音，按 funCationColumnNumber=4 排成一行。 */
+/** ★ V4：+ 面板只留 拍照 / 相册（录音的麦克风已在输入框外，文件功能按用户要求移除）。 */
 internal fun defaultInputViewFunctions(): List<InputViewFunctionItem> = listOf(
     InputViewFunctionItem(COUIIcons.Scan, "拍照"),
     InputViewFunctionItem(COUIIcons.Photos, "相册"),
-    InputViewFunctionItem(COUIIcons.File, "文件"),
-    InputViewFunctionItem(COUIIcons.Mic, "录音"),
 )
 
 /** 微信风格的小图标钮（替换旧版液态玻璃圆钮；不裹玻璃采样者，可直接按压）。 */
@@ -177,14 +174,14 @@ internal fun ChatInputView(
     onVoiceStart: () -> Unit = {},
     onVoiceStop: (cancelled: Boolean) -> Unit = {},
     onVoiceNoPermission: (String) -> Unit = {},
-    onEmojiDelete: () -> Unit = {},
     useBuiltinPanels: Boolean = true,
     leading: (@Composable () -> Unit)? = null,
     trailing: (@Composable () -> Unit)? = null,
     above: (@Composable () -> Unit)? = null,
+    /** V3：输入框**下方**的面板槽位（+ / 录音面板）；放在 Row 之后、底部导航留白之前 */
+    below: (@Composable () -> Unit)? = null,
     bottomPad: Dp = 0.dp,
 ) {
-    var emojiOpen by remember { mutableStateOf(false) }
     var functionOpen by remember { mutableStateOf(false) }
     var voiceRecording by remember { mutableStateOf(false) }
     var voiceElapsed by remember { mutableLongStateOf(0L) }
@@ -232,7 +229,7 @@ internal fun ChatInputView(
                 ChatWeuiIconBtn(
                     icon = if (voiceMode) config.keyboardIcon else config.audioIcon,
                     onClick = {
-                        emojiOpen = false; functionOpen = false
+                        functionOpen = false
                         onVoiceModeChange(!voiceMode)
                     },
                     contentDescription = if (voiceMode) "切回键盘" else "切到语音",
@@ -282,52 +279,27 @@ internal fun ChatInputView(
                 }
             }
             Spacer(Modifier.width(4.dp))
-            // 右 1：emojiIconResId
-            ChatWeuiIconBtn(
-                icon = config.emojiIcon,
-                onClick = { functionOpen = false; emojiOpen = !emojiOpen },
-                contentDescription = "表情",
-                tint = config.iconTint,
-            )
-            Spacer(Modifier.width(2.dp))
             trailing?.invoke()
-            // 右 2：有内容变发送钮（sendBtnBackgroundResId），否则是 + 功能钮
-            if (sendEnabled && hasContent) {
-                Box(
-                    Modifier
-                        .height(34.dp)
-                        .width(56.dp)
-                        .clip(RoundedCornerShape(5.dp))
-                        .background(config.sendBtnBackgroundColor)
-                        .clickable { haptic(HapticKind.Light); onSend() },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text("发送", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
-                }
-            } else if (useBuiltinPanels) {
-                ChatWeuiIconBtn(
-                    icon = config.funCationIcon,
-                    onClick = { emojiOpen = false; functionOpen = !functionOpen },
-                    contentDescription = "更多功能",
-                    tint = config.iconTint,
-                )
+            // ★ V1 + V2（2026-11-04 晚 2）：右侧那个「勾勾」（原 emojiIcon=Ok 表情钮）删掉，
+            //   表情面板整体移除；这里改成「发送」按钮并**常驻显示**（不再依赖 hasContent）。
+            //   有内容 = 微信绿，无内容 = 半透明绿，仍可点（各页面 send() 自己挡空输入）。
+            Box(
+                Modifier
+                    .height(34.dp)
+                    .width(56.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(
+                        if (hasContent) config.sendBtnBackgroundColor
+                        else config.sendBtnBackgroundColor.copy(alpha = 0.45f),
+                    )
+                    .clickable(enabled = sendEnabled) { haptic(HapticKind.Light); onSend() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("发送", color = Color.White, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
             }
-            // useBuiltinPanels=false：页面自带「+」槽位（助教页 / 教师端），或统一对话页不需要功能面板，
-            // 这里不再渲染第二个 + / 占位，避免出现点了没反应的按钮。
         }
-        // 表情面板：三端通用（emojiColumnNumber），不依赖外部功能面板开关
-        AnimatedVisibility(
-            visible = emojiOpen,
-            enter = expandVertically(),
-            exit = shrinkVertically(),
-        ) {
-            ChatEmojiPanel(
-                config = config,
-                onPick = { e -> onInput(input + e) },
-                onDelete = onEmojiDelete,
-                onBack = { emojiOpen = false },
-            )
-        }
+        // ★ V3：+ / 录音面板渲染在输入框**下方**（微信就是键盘位），bottomPad 在其下统一给导航让位
+        below?.invoke()
         // 功能面板：setFuncationData / funCationColumnNumber
         if (useBuiltinPanels) {
             AnimatedVisibility(
@@ -422,64 +394,9 @@ private fun PressToTalkButton(
     }
 }
 
-/** 8 列表情面板 + 类型列表 + 返回/删除（emojiColumnNumber / emojiDeleteIconResId）。 */
-@Composable
-private fun ChatEmojiPanel(
-    config: InputViewConfig,
-    onPick: (String) -> Unit,
-    onDelete: () -> Unit,
-    onBack: () -> Unit,
-) {
-    val cols = config.emojiColumnNumber.coerceAtLeast(1)
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .height(236.dp)
-            .background(config.panelBackgroundColor)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-    ) {
-        // emojiTypeListBgColor / emojiTypeSelectBgColor
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(30.dp)
-                .clip(RoundedCornerShape(6.dp))
-                .background(config.emojiTypeListBgColor),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                Modifier
-                    .size(width = 42.dp, height = 24.dp)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(config.emojiTypeSelectBgColor.copy(alpha = 0.22f)),
-                contentAlignment = Alignment.Center,
-            ) { Text("😀", fontSize = 14.sp) }
-            Spacer(Modifier.width(8.dp))
-            Text("默认表情", color = config.inputTextColor, fontSize = 11.5.sp)
-        }
-        Spacer(Modifier.height(8.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.SpaceEvenly) {
-            WechatEmojis.chunked(cols).forEach { row ->
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    row.forEach { e ->
-                        Text(
-                            e, fontSize = 21.sp, textAlign = TextAlign.Center,
-                            modifier = Modifier
-                                .width(36.dp)
-                                .clip(RoundedCornerShape(6.dp))
-                                .clickable { haptic(HapticKind.Tick); onPick(e) },
-                        )
-                    }
-                }
-            }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            ChatWeuiIconBtn(config.emojiBackIcon, onBack, "收起表情", size = 32.dp, tint = config.iconTint)
-            Spacer(Modifier.width(8.dp))
-            ChatWeuiIconBtn(config.emojiDeleteIcon, onDelete, "删除", size = 32.dp, tint = config.iconTint)
-        }
-    }
-}
+// ★ V1（2026-11-04 晚 2）：用户明确「表情面板去掉这里不需要发送表情」——8 列表情面板
+//   与右侧 emoji 钮（原来的「勾勾」）一并移除。InputViewConfig 里的 emoji 相关 attrs 仍保留，
+//   只是不再挂载任何 UI，避免破坏了配置对照表；后续要恢复只需重新挂回 ChatEmojiPanel。
 
 /** 4 列功能面板（funCationColumnNumber / setFuncationData / onItemClick）。 */
 @Composable
@@ -493,7 +410,7 @@ internal fun ChatFunctionPanel(
     Column(
         modifier
             .fillMaxWidth()
-            .height(206.dp)
+            // V4 只剩两项，高度随内容自适应，避免一整块空白
             .background(config.panelBackgroundColor)
             .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -527,15 +444,5 @@ internal fun ChatFunctionPanel(
         }
     }
 }
-
-/** 微信常用表情（避免引入额外 icon 资源，直接用 Unicode）。 */
-private val WechatEmojis = listOf(
-    "😀", "😃", "😄", "😁", "😆", "😅", "🤣", "😂",
-    "🙂", "🙃", "😉", "😊", "😇", "🥰", "😍", "🤩",
-    "😘", "😗", "😚", "😙", "😋", "😛", "😜", "🤪",
-    "🤨", "🧐", "🤓", "😎", "🥳", "😏", "😒", "😞",
-    "😔", "😟", "😕", "🙁", "😣", "😖", "😫", "😩",
-    "👍", "👎", "👏", "🙌", "🤝", "💪", "🙏", "❤️",
-)
 
 private fun nowInputMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()

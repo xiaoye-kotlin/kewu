@@ -959,8 +959,10 @@ internal fun ChatInputDock(
     onVoiceStart: () -> Unit = {},
     onVoiceStop: (cancelled: Boolean) -> Unit = {},
     onVoiceNoPermission: (String) -> Unit = {},
-    /** 内置表情 / 功能 / 按住说话面板；false = 只换微信视觉，面板仍由页面自己管 */
+    /** 内置 / 按住说话面板开关；false = 只换微信视觉，面板仍由页面自己管 */
     useBuiltinPanels: Boolean = true,
+    /** V3：+ / 录音面板（含进退场动画）渲染在输入框下方 */
+    panelBelow: (@Composable () -> Unit)? = null,
 ) {
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
@@ -979,7 +981,8 @@ internal fun ChatInputDock(
     ChatInputView(
         input = input,
         onInput = onInput,
-        onSend = { if (canSend) onSend() },
+        // V2：发送钮常驻，空输入也让各页面 send() 自己判断（不再由这里挡住导致「点了没反应」）
+        onSend = { if (sendEnabled) onSend() },
         config = config,
         modifier = modifier.offset(y = dockY), // placement 位移（采样者安全）
         placeholder = placeholder,
@@ -992,7 +995,6 @@ internal fun ChatInputDock(
         onVoiceStart = onVoiceStart,
         onVoiceStop = onVoiceStop,
         onVoiceNoPermission = onVoiceNoPermission,
-        onEmojiDelete = { if (input.isNotEmpty()) onInput(input.dropLast(1)) },
         useBuiltinPanels = useBuiltinPanels,
         leading = leading,
         trailing = trailing,
@@ -1018,6 +1020,7 @@ internal fun ChatInputDock(
                 Box(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 6.dp)) { ChatStagedImageBar(last, onRemoveImage) }
             }
         },
+        below = panelBelow,
         bottomPad = bottomPad.coerceAtLeast(0.dp),
     )
 }

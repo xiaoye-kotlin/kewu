@@ -717,53 +717,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             LaunchedEffect(panel) {
                 if (panel != AssistantPanel.NONE) shownPanel = panel
             }
-            AnimatedVisibility(
-                visible = panel != AssistantPanel.NONE,
-                enter = slideInVertically(
-                    animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
-                    initialOffsetY = { it }, // 从自身高度下方升上来（不再从半高起跳）
-                ), // 2026-10-26：去掉 fade（面板是玻璃采样者，祖先禁 alpha），纯滑入滑出
-                exit = slideOutVertically(
-                    animationSpec = tween(150),
-                    targetOffsetY = { it },
-                ),
-            ) {
-                when (shownPanel) {
-                    // 2026-11-03：相册 / 拍照选好的图片放到输入栏上方，可配文字一起发
-                    AssistantPanel.ATTACH -> ChatAttachPanel(
-                        backdrop = pageBackdrop,
-                        onAlbum = {
-                            panel = AssistantPanel.NONE
-                            com.kewu.app.pickFiles(images = true) { files ->
-                                val f = files.firstOrNull() ?: return@pickFiles
-                                if (f.size > 15L * 1024 * 1024) {
-                                    scope.launch { snackbar.toast("图片超过 15MB，换一张吧") }
-                                } else {
-                                    stagedImage = f.path
-                                    if (files.size > 1) scope.launch { snackbar.toast("一次发一张，已选第一张") }
-                                }
-                            }
-                        },
-                        onCamera = if (com.kewu.app.CameraCapture.available) {
-                            {
-                                panel = AssistantPanel.NONE
-                                com.kewu.app.CameraCapture.launcher?.invoke { path ->
-                                    if (path != null) stagedImage = path
-                                }
-                            }
-                        } else null,
-                        onFile = { scope.launch { snackbar.toast("文件功能开发中") } },
-                        onRecord = { scope.launch { snackbar.toast("点左下角麦克风开始录音") } },
-                    )
-                    AssistantPanel.VOICE -> ChatVoicePanel(
-                        backdrop = pageBackdrop,
-                        recorder = recorder,
-                        onCancel = { finishVoice(send = false) },
-                        onSend = { finishVoice(send = true) },
-                    )
-                    AssistantPanel.NONE -> Unit
-                }
-            }
+            // ★ V3（2026-11-04 晚 2）：+ / 录音面板已改挂在 [ChatInputDock] 的 `panelBelow` 槽位，
+            //   渲染在输入框**下方**（微信键盘位），进退场动画一并带过去，见下方调用。
 
             // ── 建议提问（原课程/作业列表的新呈现；面板打开时让位） ──
             AnimatedVisibility(
@@ -844,8 +799,55 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     }
                 },
                 trailing = null,
-                // 助教页有自己的 ATTACH / VOICE 面板状态机：只换 InputView 视觉与 8 列表情面板
+                // 助教页有自己的 ATTACH / VOICE 面板状态机：只换 InputView 视觉
                 useBuiltinPanels = false,
+                // ★ V3：+ / 录音面板渲染在输入框**下方**，滑入滑出动画保留（微信键盘位）
+                panelBelow = {
+                    AnimatedVisibility(
+                        visible = panel != AssistantPanel.NONE,
+                        enter = slideInVertically(
+                            animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                            initialOffsetY = { it },
+                        ),
+                        exit = slideOutVertically(
+                            animationSpec = tween(150),
+                            targetOffsetY = { it },
+                        ),
+                    ) {
+                        when (shownPanel) {
+                            AssistantPanel.ATTACH -> ChatAttachPanel(
+                                backdrop = pageBackdrop,
+                                onAlbum = {
+                                    panel = AssistantPanel.NONE
+                                    com.kewu.app.pickFiles(images = true) { files ->
+                                        val f = files.firstOrNull() ?: return@pickFiles
+                                        if (f.size > 15L * 1024 * 1024) {
+                                            scope.launch { snackbar.toast("图片超过 15MB，换一张吧") }
+                                        } else {
+                                            stagedImage = f.path
+                                            if (files.size > 1) scope.launch { snackbar.toast("一次发一张，已选第一张") }
+                                        }
+                                    }
+                                },
+                                onCamera = if (com.kewu.app.CameraCapture.available) {
+                                    {
+                                        panel = AssistantPanel.NONE
+                                        com.kewu.app.CameraCapture.launcher?.invoke { path ->
+                                            if (path != null) stagedImage = path
+                                        }
+                                    }
+                                } else null,
+                            )
+                            AssistantPanel.VOICE -> ChatVoicePanel(
+                                backdrop = pageBackdrop,
+                                recorder = recorder,
+                                onCancel = { finishVoice(send = false) },
+                                onSend = { finishVoice(send = true) },
+                            )
+                            AssistantPanel.NONE -> Unit
+                        }
+                    }
+                },
             )
             Spacer(Modifier.height(6.dp))
         }

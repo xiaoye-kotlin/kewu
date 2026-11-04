@@ -827,48 +827,10 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             // ── 附件 / 录音面板：单一互斥容器，纯滑入滑出（面板是玻璃采样者，祖先禁 alpha） ──
             var shownPanel by remember { mutableStateOf(TeacherPanel.ATTACH) }
             LaunchedEffect(panel) { if (panel != TeacherPanel.NONE) shownPanel = panel }
-            AnimatedVisibility(
-                visible = panel != TeacherPanel.NONE,
-                enter = slideInVertically(spring(dampingRatio = 0.82f, stiffness = 420f)) { it },
-                exit = slideOutVertically(tween(150)) { it },
-            ) {
-                when (shownPanel) {
-                    TeacherPanel.ATTACH -> ChatAttachPanel(
-                        backdrop = pageBackdrop,
-                        onAlbum = {
-                            panel = TeacherPanel.NONE
-                            com.kewu.app.pickFiles(images = true) { files ->
-                                val f = files.firstOrNull() ?: return@pickFiles
-                                if (f.size > 15L * 1024 * 1024) {
-                                    scope.launch { snackbar.toast("图片超过 15MB，换一张吧") }
-                                } else {
-                                    stagedImage = f.path
-                                    if (files.size > 1) scope.launch { snackbar.toast("一次发一张，已选第一张") }
-                                }
-                            }
-                        },
-                        onCamera = if (com.kewu.app.CameraCapture.available) {
-                            {
-                                panel = TeacherPanel.NONE
-                                com.kewu.app.CameraCapture.launcher?.invoke { path ->
-                                    if (path != null) stagedImage = path
-                                }
-                            }
-                        } else null,
-                        onFile = { scope.launch { snackbar.toast("文件功能开发中") } },
-                        onRecord = { scope.launch { snackbar.toast("点右侧麦克风开始录音") } },
-                    )
-                    TeacherPanel.VOICE -> ChatVoicePanel(
-                        backdrop = pageBackdrop,
-                        recorder = recorder,
-                        onCancel = { finishVoice(send = false) },
-                        onSend = { finishVoice(send = true) },
-                    )
-                    TeacherPanel.NONE -> Unit
-                }
-            }
+            // ★ V3（2026-11-04 晚 2）：+ / 录音面板改挂 [ChatInputDock] 的 `panelBelow`，
+            //   渲染在输入框下方，滑入滑出动画保留。
 
-            // ── 液态玻璃输入框（常驻导航栏上方，与学生端同款位置约束） ──
+            // ── 输入框（常驻导航栏上方，与学生端同款位置约束） ──
             ChatInputDock(
                 backdrop = pageBackdrop,
                 input = input,
@@ -908,8 +870,49 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                         },
                     )
                 },
-                // 教师端有自己的 ATTACH / VOICE 面板状态机：只换 InputView 视觉与 8 列表情面板
+                // 教师端有自己的 ATTACH / VOICE 面板状态机：只换 InputView 视觉
                 useBuiltinPanels = false,
+                // ★ V3：+ / 录音面板渲染在输入框**下方**，滑入滑出动画保留
+                panelBelow = {
+                    AnimatedVisibility(
+                        visible = panel != TeacherPanel.NONE,
+                        enter = slideInVertically(spring(dampingRatio = 0.82f, stiffness = 420f)) { it },
+                        exit = slideOutVertically(tween(150)) { it },
+                    ) {
+                        when (shownPanel) {
+                            TeacherPanel.ATTACH -> ChatAttachPanel(
+                                backdrop = pageBackdrop,
+                                onAlbum = {
+                                    panel = TeacherPanel.NONE
+                                    com.kewu.app.pickFiles(images = true) { files ->
+                                        val f = files.firstOrNull() ?: return@pickFiles
+                                        if (f.size > 15L * 1024 * 1024) {
+                                            scope.launch { snackbar.toast("图片超过 15MB，换一张吧") }
+                                        } else {
+                                            stagedImage = f.path
+                                            if (files.size > 1) scope.launch { snackbar.toast("一次发一张，已选第一张") }
+                                        }
+                                    }
+                                },
+                                onCamera = if (com.kewu.app.CameraCapture.available) {
+                                    {
+                                        panel = TeacherPanel.NONE
+                                        com.kewu.app.CameraCapture.launcher?.invoke { path ->
+                                            if (path != null) stagedImage = path
+                                        }
+                                    }
+                                } else null,
+                            )
+                            TeacherPanel.VOICE -> ChatVoicePanel(
+                                backdrop = pageBackdrop,
+                                recorder = recorder,
+                                onCancel = { finishVoice(send = false) },
+                                onSend = { finishVoice(send = true) },
+                            )
+                            TeacherPanel.NONE -> Unit
+                        }
+                    }
+                },
             )
         }
 
