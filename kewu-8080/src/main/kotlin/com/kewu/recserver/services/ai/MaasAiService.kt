@@ -250,6 +250,31 @@ class MaasAiService : AiService {
         }
     }
 
+    /**
+     * 语音对话用（2026-11-04）：直接传完整的 messages（role/content 对，含多轮历史 + system），
+     * 非流式拿一次回复。复用 postChat 的重试与兜底；任何失败返回 null 交给上层降级，绝不抛异常。
+     */
+    suspend fun chatMessages(messages: List<Pair<String, String>>, maxTokens: Int = 512): String? {
+        if (messages.isEmpty() || missingConfig() != null) return null
+        val body = buildJsonObject {
+            put("model", modelName)
+            put("max_tokens", maxTokens)
+            put("messages", buildJsonArray {
+                messages.forEach { (role, content) ->
+                    add(buildJsonObject {
+                        put("role", role)
+                        put("content", content)
+                    })
+                }
+            })
+        }.toString()
+        val r = postChat(body, timeoutSeconds = 45)
+        // postChat 出错时返回的是「（...）」形式的中文哨兵，这里统一转成 null
+        return if (r.startsWith("（") &&
+            (r.contains("失败") || r.contains("异常") || r.contains("为空") || r.contains("未配置"))
+        ) null else r
+    }
+
     private suspend fun chat(system: String, user: String, maxTokens: Int): String {
         missingConfig()?.let { return it }
         val body = buildJsonObject {

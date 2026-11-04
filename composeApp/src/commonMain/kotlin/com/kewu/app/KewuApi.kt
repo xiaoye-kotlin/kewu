@@ -9,6 +9,7 @@ import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.readBytes
 import io.ktor.http.ContentType
 import kotlinx.coroutines.CancellationException
 import io.ktor.client.request.forms.ChannelProvider
@@ -1083,6 +1084,88 @@ object KewuApi {
         }
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { ChatVoiceResult(null, "", "网络异常，语音没发出去") }
+
+    // ───────── AI 语音对话（2026-11-04 晚）：接服务器 /api/ai/voice-chat ─────────
+
+    /**
+     * 一整轮语音通话的结果。[audio] 是小悟说出来的 mp3（TTS 降级时为空），
+     * [aiText] / [userText] 是服务端放在响应头里的字幕，中文为 URL-safe Base64，这里已解好。
+     */
+    data class VoiceChatResult(
+        val audio: ByteArray?,
+        val aiText: String,
+        val userText: String,
+        val stage: String,
+        val fallback: Boolean,
+        val error: String?,
+    )
+
+    /**
+     * 发一段录音给服务器：SIS 识别 → DeepSeek 回答 → SIS 语音合成 → 回一段 AI 语音。
+     * [sessionId] 用同一通电话里的固定值，服务端 Redis 靠它记 1 小时上下文，多轮才能接得上话。
+     */
+    suspend fun voiceChat(path: String, sessionId: String): VoiceChatResult = try {
+        val bytes = platformReadFile(path)
+        when {
+            bytes == null || bytes.size < 512 ->
+                VoiceChatResult(null, "", "", "", false, "录音太短或读取失败")
+            bytes.size > 1_900_000 ->
+                VoiceChatResult(null, "", "", "", false, "这一句太长了，请说短一点")
+            else -> {
+                val resp = client.post("$BASE_URL/api/ai/voice-chat") {
+                    timeout { requestTimeoutMillis = 60_000; socketTimeoutMillis = 55_000 }
+                    setBody(MultiPartFormDataContent(formData {
+                        append("audio", bytes, Headers.build {
+                            append(HttpHeaders.ContentType, "audio/wav")
+                            append(HttpHeaders.ContentDisposition, "filename=\"voice.wav\"")
+                        })
+                        append("sessionId", sessionId)
+                    }))
+                }
+                val ai = decodeVoiceHeader(resp.headers["X-AI-Text"], resp.headers["X-AI-Text-Encoding"])
+                val user = decodeVoiceHeader(resp.headers["X-AI-User-Text"], resp.headers["X-AI-User-Text-Encoding"])
+                val stage = resp.headers["X-AI-Stage"].orEmpty()
+                val fallback = resp.headers["X-AI-Fallback"] == "1"
+                when {
+                    resp.status.value !in 200..299 ->
+                        VoiceChatResult(null, ai, user, stage, fallback, "语音通话失败（HTTP ${resp.status.value}）")
+                    // 降级时是 text/plain 字幕正文，不能按字节吞掉；有音频时按字节读。
+                    // 服务器 SIS_TTS_AUDIO_FORMAT 可能是 mp3 或 wav（无损、更清晰），
+                    // 后端响应头固定写 audio/mpeg，所以这里不按 Content-Type 区分格式，
+                    // 交给播放侧看文件头（RIFF）判断，两种格式都能播。
+                    fallback || resp.headers[HttpHeaders.ContentType]?.contains("text/plain", ignoreCase = true) == true ->
+                        VoiceChatResult(null, ai, user, stage, true, null)
+                    else -> {
+                        val audio = runCatching { resp.readBytes() }.getOrNull()
+                        VoiceChatResult(audio, ai, user, stage, false, null)
+                    }
+                }
+            }
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { VoiceChatResult(null, "", "", "", false, "网络异常，小悟没听清") }
+
+    /** 服务端中文响应头是 URL-safe Base64（无 padding）；自己解，不引实验性 API。 */
+    private fun decodeVoiceHeader(value: String?, encoding: String?): String {
+        if (value.isNullOrEmpty()) return ""
+        if (encoding != "base64") return value
+        val table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        val out = ArrayList<Byte>()
+        var acc = 0
+        var bits = 0
+        for (c in value) {
+            if (c == '=') break
+            val v = table.indexOf(c)
+            if (v < 0) continue
+            acc = (acc shl 6) or v
+            bits += 6
+            if (bits >= 8) {
+                bits -= 8
+                out.add(((acc shr bits) and 0xFF).toByte())
+            }
+        }
+        return runCatching { out.toByteArray().decodeToString() }.getOrDefault("")
+    }
 
     /**
      * 课前资料（2026-10-26 后端 `POST /api/courses/{id}/materials`）：老师开课前上传本节 PPT / 讲义，

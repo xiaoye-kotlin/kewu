@@ -38,6 +38,9 @@ import com.kewu.modules.bilibili.bilibiliRoutes
 import com.kewu.modules.audio.TranscribeFusionService
 import com.kewu.modules.audio.audioFusionRoutes
 import com.kewu.recserver.services.ai.MaasAiService
+import com.kewu.modules.voicechat.VoiceChatService
+import com.kewu.modules.voicechat.VoiceChatSisService
+import com.kewu.modules.voicechat.voiceChatRoutes
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
@@ -131,6 +134,12 @@ fun Application.configureRouting() {
         redis = recServices.redis,
         maas = recServices.ai as? MaasAiService ?: MaasAiService()
     )
+    // AI 语音对话（2026-11-04）：短音频 → SIS 一句话识别 → Redis 历史 → DeepSeek → SIS TTS → mp3
+    val voiceChatService = VoiceChatService(
+        sis = VoiceChatSisService(),
+        redis = recServices.redis,
+        maas = recServices.ai as? MaasAiService ?: MaasAiService()
+    )
     routing {
         get("/") {
             call.respondText("kewu backend is running")
@@ -215,5 +224,7 @@ fun Application.configureRouting() {
         bilibiliRoutes(bilibiliService, bilibiliFetcher, bg)
         // 多路录音并发转写 + 文本大融合 → DeepSeek 终极笔记（2026-11-03）
         audioFusionRoutes(audioFusionService, bg)
+        // AI 语音对话：POST /api/ai/voice-chat（发一段语音，回一段 AI 语音）
+        voiceChatRoutes(voiceChatService)
     }
 }
