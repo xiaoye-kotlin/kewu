@@ -125,7 +125,7 @@ ADMIN_ACCOUNT=admin
 ADMIN_PASSWORD=$adminPass
 KEWU_REDIS_HOST=127.0.0.1
 KEWU_REDIS_PORT=6379
-"@ | Set-Content -Path (Join-Path $root 'kewu.env') -Encoding UTF8
+"@ | Set-Content -Path (Join-Path $root 'kewu.env') -Encoding ASCII
         Log "  generated kewu.env with random JWT_SECRET / admin password"
         Log "  >>> initial admin login: admin / $adminPass  (keep it safe, also in kewu.env)"
         Log "  >>> remember to set KEWU_DB_PASSWORD to a real MySQL credential"
@@ -166,6 +166,8 @@ Start-Sleep -Seconds 1
     }
 
     # 国内服务器直连 Maven Central / Gradle Plugin Portal 极慢，注入阿里云镜像 init 脚本。
+    # 必须 ASCII 写出：PS5.1 的 -Encoding UTF8 会带 BOM，而 Gradle 的 init 脚本读取器不剥 BOM，
+    # 会报 "Unexpected character: '' @ line 1, column 1"。内容为纯 ASCII，无 BOM 即可。
     $initScript = Join-Path $work 'aliyun-mirror.init.gradle'
     @'
 allprojects {
@@ -191,7 +193,7 @@ settingsEvaluated { settings ->
         }
     }
 }
-'@ | Set-Content -Path $initScript -Encoding UTF8
+'@ | Set-Content -Path $initScript -Encoding ASCII
 
     # ------------------------------------------------ 4. build
     $gradlew = Join-Path $sourceDir 'gradlew.bat'
