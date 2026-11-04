@@ -23,7 +23,8 @@ import kotlinx.coroutines.yield
  * 新逻辑：
  *   - [stick]：用户是否「停在底部」。只在**用户手指拖动结束**时更新（程序滚动 / 视口变化不改它）；
  *   - 视口高度每变一次（键盘弹起 / 收起、人格区展开、输入框位移的每一帧），若 stick 就立刻把最后一条底边对齐视口底；
- *   - 有新消息时（[messageKey] 变化）平滑滚到最底，并重新贴底。
+ *   - 有新消息时（[messageKey] 变化）平滑滚到最底，并重新贴底；
+ *   - 最后一条 item 内容「长高」时（B 站视频卡异步加载完成、图片出图等）也自动贴底，不用用户手动拉到最底。
  */
 @Composable
 fun ChatAutoScroll(listState: LazyListState, messageKey: Any) {
@@ -42,6 +43,20 @@ fun ChatAutoScroll(listState: LazyListState, messageKey: Any) {
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.viewportSize.height }.collect {
             if (stick) listState.scrollToBottom(animated = false)
+        }
+    }
+    // 2026-11-04：内容「长高」也要贴底 —— AI 回答下方的 B 站视频卡是异步加载的（搜索完才插入卡片），
+    // 卡片到达时最后一条 item 高度变化，但 messageKey 与视口高度都没变，旧版不滚动，用户只能手动拉到底。
+    // 同理覆盖图片加载完成、视频封面出图等「消息内容后长个」的场景。用户上翻阅读（stick=false）时不打扰。
+    LaunchedEffect(listState) {
+        var lastSize = -1
+        snapshotFlow {
+            val info = listState.layoutInfo
+            val last = info.totalItemsCount - 1
+            if (last < 0) 0 else (info.visibleItemsInfo.lastOrNull { it.index == last }?.size ?: 0)
+        }.collect { size ->
+            if (stick && lastSize >= 0 && size != lastSize) listState.scrollToBottom(animated = true)
+            lastSize = size
         }
     }
     // 新消息 → 先让一帧给气泡完成布局，再平滑滚到底（不是瞬间跳）

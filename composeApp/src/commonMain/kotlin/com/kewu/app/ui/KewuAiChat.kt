@@ -187,6 +187,26 @@ internal fun aiVisibleText(text: String): String {
     return t.trimEnd()
 }
 
+/**
+ * 聊天列表顶部日期分隔标签（2026-11-04 修复）：旧版写死「今天」，下拉加载了前几天的对话后标签仍是「今天」。
+ * 传入可见窗口最早一天的 00:00（visibleCutoff，dayStart 值）：今天→「今天」，昨天→「昨天」，
+ * 同年→「M月d日」，跨年→「yyyy年M月d日」。学生端 / 教师端对话页共用。
+ */
+internal fun chatDayLabel(dayStartMs: Long): String {
+    val todayStart = com.kewu.app.ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds())
+    return when (dayStartMs) {
+        todayStart -> "今天"
+        todayStart - 86_400_000L -> "昨天"
+        else -> {
+            val d = com.kewu.app.todayCn(dayStartMs) // yyyy-MM-dd
+            val (y, m, dd) = d.split("-")
+            val thisYear = com.kewu.app.todayCn().substring(0, 4)
+            val md = "${m.toInt()}月${dd.toInt()}日"
+            if (y == thisYear) md else "${y}年$md"
+        }
+    }
+}
+
 internal data class AiChatMsg(
     val text: String,
     val isUser: Boolean,

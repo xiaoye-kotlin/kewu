@@ -643,8 +643,10 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             ) {
                 item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
                 item(key = "date-divider") {
+                    // 2026-11-04 修复：旧版写死「今天」，下拉加载更早对话后标签不跟着变；
+                    // 现在显示可见窗口最早一天的实际日期（今天/昨天/M月d日/yyyy年M月d日）
                     Text(
-                        "今天",
+                        chatDayLabel(visibleCutoff),
                         color = cs.onSurfaceSecondary,
                         fontSize = 11.sp,
                         modifier = Modifier.fillMaxWidth(),

@@ -747,6 +747,17 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
             ) {
                 item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
+                // 2026-11-04：与学生端对话页对齐 —— 顶部日期分隔标签显示可见窗口最早一天的实际日期
+                // （下拉加载更早对话后跟着变：今天/昨天/M月d日/yyyy年M月d日）
+                item(key = "date-divider") {
+                    Text(
+                        chatDayLabel(visibleCutoff),
+                        color = COUITheme.colorScheme.onSurfaceSecondary,
+                        fontSize = 11.sp,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center,
+                    )
+                }
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { _, msg ->
                     Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                         androidx.compose.runtime.CompositionLocalProvider(LocalChatMediaRetry provides retryMedia) {
