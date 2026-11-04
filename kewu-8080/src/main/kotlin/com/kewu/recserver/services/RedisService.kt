@@ -22,6 +22,8 @@ class RedisService(private val cfg: RedisConfig) {
         // 协同会话虽然叫"会话"，但它是课堂录音协同会话、跟一节课同生命周期，不是登录态——登录 token 归 Java 8080 侧、2 小时，别混
         private const val TTL_CLASS_DATA_SECONDS = 24L * 60 * 60   // 课堂纪要 / 签到 / 录音元数据：24h
         private const val TTL_SESSION_SECONDS = 24L * 60 * 60      // 课堂协同会话：24h（跟一节课同生命周期，防连堂课上掉线）
+        // AI 语音对话历史：按需求 1 小时过期，跟课堂数据 24h 不是一回事
+        private const val TTL_VOICE_CHAT_SECONDS = 60L * 60
 
         // 连崩后隔这么久再给一次重连机会，Redis 恢复了服务能自己活过来，不用重启
         private const val RECONNECT_BACKOFF_MS = 30_000L
@@ -159,6 +161,14 @@ class RedisService(private val cfg: RedisConfig) {
         withRedis(false) { it.setex("kewu:sealed:$sessionId", TTL_CLASS_DATA_SECONDS, "1"); true }
     suspend fun isSessionSealed(sessionId: String): Boolean =
         withRedis(false) { it.exists("kewu:sealed:$sessionId") == 1L }
+
+    // AI 语音对话历史（2026-11-04）：kewu:ai:voice-chat:{sessionId} 存 JSON 数组的 messages，
+    // 1 小时过期。跟上面 24h 的课堂数据分开，聊完一小时自动清掉，不占 Redis 内存。
+    // 连不上 Redis 时读返回 null（当空历史）、写返回 false，语音对话照常能跑，只是不记上下文。
+    suspend fun getVoiceChatHistory(sessionId: String): String? =
+        withRedis(null) { it.get("kewu:ai:voice-chat:$sessionId") }
+    suspend fun saveVoiceChatHistory(sessionId: String, messagesJson: String): Boolean =
+        withRedis(false) { it.setex("kewu:ai:voice-chat:$sessionId", TTL_VOICE_CHAT_SECONDS, messagesJson); true }
 
     fun close() = runCatching { connection?.close() }
 }

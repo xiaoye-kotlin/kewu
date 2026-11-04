@@ -16,5 +16,8 @@ fun Application.configureCors() {
         allowMethod(HttpMethod.Delete)
         allowHeader(HttpHeaders.Authorization)
         allowHeader(HttpHeaders.ContentType)
+        // AI 语音对话把字幕放在响应头里，浏览器端要能读到（App 原生请求不受影响）
+        listOf("X-AI-Text", "X-AI-Text-Encoding", "X-AI-User-Text", "X-AI-User-Text-Encoding",
+            "X-AI-Stage", "X-AI-Fallback").forEach { exposeHeader(it) }
     }
 }

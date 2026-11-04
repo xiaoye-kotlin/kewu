@@ -91,8 +91,10 @@ import kotlinx.coroutines.launch
  * - 链路（复用既有件，零新后端）：点大圆钮开始说 → [ChatVoiceRecorder] 边录边送
  *   `LiveAudio` → SIS 实时转录（`recorder.liveText` 实时上屏）→ 再点结束 → 文本进
  *   `AiClient.chatStream` 流式回答（通话口吻 system prompt，短句口语化）→ 回复大字居中显示；
- * - ★ TTS 未开通：AI 回复纯文本展示。预留 [TtsPlayer] 钩子，后端 `/api/ai/tts` 接通后
- *   注册实现即可语音播报；
+ * - ★ 2026-11-04 晚：小悟开口说话。原来 [TtsPlayer] 只是个没人注册的空钩子，后端也没有
+ *   `/api/ai/tts`，所以 AI 只会「打字」不会「出声」。现在整轮改走服务器已上线的
+ *   `POST /api/ai/voice-chat`（SIS 识别 → DeepSeek → SIS 语音合成），拿到 mp3 播出来、字幕上屏；
+ *   语音接口万一不通，自动退回原来的 `AiClient.chatStream` 文字流式回答，通话不会哑掉；
  * - ★ W8 起通话记录同步落盘：每轮（用户语音识别文本 + 小悟回答）经 [AssistantHub.deliverVoiceTurn]
  *   写进 `ChatHistory.KEY_STUDENT` 并广播给前台页面，挂断回聊天页即以 weui 气泡呈现；
  *   通话本身仍直接调 AiClient（不走 AssistantHub 的流式请求），并主动推已读游标避免冒红点。
@@ -109,8 +111,8 @@ internal object TtsPlayer {
     }
 }
 
-/** 通话阶段：空闲 / 聆听中 / 小悟思考中。 */
-private enum class VoiceCallPhase { IDLE, LISTENING, THINKING }
+/** 通话阶段：空闲 / 聆听中 / 小悟思考中 / 小悟说话中（播完才回到自动聆听，别把自己掐断）。 */
+private enum class VoiceCallPhase { IDLE, LISTENING, THINKING, SPEAKING }
 
 /** 通话内一轮对话（不落盘）。 */
 private data class VoiceTurn(val user: String, val ai: String)
@@ -134,15 +136,25 @@ private fun vcEndsWithPunct(t: String): Boolean = t.lastOrNull()?.let { it in SE
 
 @Composable
 internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) {
-    // ★ V10（2026-11-04 晚 2）：通话页只允许竖屏；挂断 / 返回 / 页面销毁时恢复系统默认方向
-    DisposableEffect(Unit) {
-        platformLockPortrait(true)
-        onDispose { platformLockPortrait(false) }
-    }
     val backdrop = rememberGlassBackdrop()
     val scope = rememberCoroutineScope()
     val recorder = rememberChatVoiceRecorder()
     val snackbar = LocalKewuSnackbar.current
+
+    /** 小悟这一句话的播放器；播完 / 挂断 / 页面销毁都要释放，别占着音频焦点。 */
+    var aiPlayer by remember { mutableStateOf<com.kewu.app.PlatformAudioPlayer?>(null) }
+    /** 一通电话一个固定 sessionId：服务器 Redis 靠它记 1 小时上下文，多轮才接得上话。 */
+    val callSessionId = remember { "call-${vcNowMs()}" }
+
+    // ★ V10（2026-11-04 晚 2）：通话页只允许竖屏；挂断 / 返回 / 页面销毁时恢复系统默认方向
+    DisposableEffect(Unit) {
+        platformLockPortrait(true)
+        onDispose {
+            platformLockPortrait(false)
+            aiPlayer?.let { runCatching { it.release() } }
+            aiPlayer = null
+        }
+    }
 
     var phase by remember { mutableStateOf(VoiceCallPhase.IDLE) }
     /** ★ V11/V12：静音开关。关麦时停掉本轮录音且不送 AI；取消静音自动重新进入聆听。 */
@@ -175,11 +187,90 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
         }
     }
 
+    /** 停掉小悟正在说的这句话（用户开口 / 挂断 / 换下一句时）。 */
+    fun stopAiVoice() {
+        aiPlayer?.let { runCatching { it.release() } }
+        aiPlayer = null
+    }
+
+    /**
+     * 播服务器合成好的 mp3：写成本地文件交给平台播放器，播完 / 出错 / 15 秒兜底
+     * 都回调 [onDone]，让通话回到自动聆听。**必须等播完再回 IDLE**，否则自动开录时
+     * 那句 `AudioPlayback.stop()` 会把小悟刚开口的语音掐断。
+     */
+    fun playAiVoice(mp3: ByteArray, onDone: () -> Unit) {
+        stopAiVoice()
+        // 服务器可能返回 mp3 或 wav（无损、更清晰），但响应头固定写 audio/mpeg，
+        // 只能看文件头：RIFF = WAV。扩展名给对，ExoPlayer 才会选对解码器。
+        val isWav = mp3.size >= 12 && mp3[0] == 'R'.code.toByte() && mp3[1] == 'I'.code.toByte() &&
+            mp3[2] == 'F'.code.toByte() && mp3[3] == 'F'.code.toByte()
+        val file = "${com.kewu.app.platformCacheDir()}/ai_${vcNowMs()}.${if (isWav) "wav" else "mp3"}"
+        if (!com.kewu.app.platformWriteFile(file, mp3)) { onDone(); return }
+        val p = try { com.kewu.app.PlatformAudioPlayer() } catch (_: Throwable) {
+            runCatching { com.kewu.app.platformDeleteFile(file) }
+            onDone()
+            return
+        }
+        aiPlayer = p
+        var finished = false
+        val finish = {
+            if (!finished) {
+                finished = true
+                runCatching { p.release() }
+                aiPlayer = null
+                runCatching { com.kewu.app.platformDeleteFile(file) }
+                onDone()
+            }
+        }
+        try {
+            p.prepare(
+                source = file,
+                onReady = { runCatching { p.play() } },
+                onComplete = { finish() },
+                onError = { finish() },
+            )
+        } catch (_: Throwable) { finish(); return }
+        // 个别机型 prepare 后既不回调就绪也不回调完成，兜个底别把通话卡死
+        scope.launch { delay(15_000); finish() }
+    }
+
+    /** 服务器语音接口万一不通，退回原来的文字流式回答，通话不会哑掉。 */
+    suspend fun askTextOnly(userText: String, teacher: Boolean = false): String? {
+        val system = buildString {
+            if (teacher) {
+                append("你是「小悟」，课悟 App 里教师的 AI 教学助手，正在和老师进行语音通话。")
+                append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
+                append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
+                append("以下是该教师在课悟 App 里此刻能看到的全部信息（课程/班级/学生名单/签到/作业/纪要），回答时以此为准：\n")
+                append(com.kewu.app.AiContext.teacher())
+            } else {
+                append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和学生进行语音通话。")
+                append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
+                append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
+                append("以下是该学生在课悟 App 里此刻能看到的全部信息，回答时以此为准：\n")
+                append(com.kewu.app.AiContext.student())
+            }
+        }
+        val history = turns.takeLast(6).flatMap {
+            listOf(AiClient.Msg("user", it.user), AiClient.Msg("assistant", it.ai))
+        }
+        val reply = try {
+            AiClient.chatStream(
+                listOf(AiClient.Msg("system", system)) + history + AiClient.Msg("user", userText),
+                maxTokens = 2048,
+                onDelta = { aiReply += it },
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { null }
+        return reply?.let { AiAgent.parse(it).text.trim() }
+    }
+
     // ── 说 / 停 ──
     fun startTalk() {
         if (phase != VoiceCallPhase.IDLE) return
         scope.launch {
             com.kewu.app.AudioPlayback.stop() // 别把自己上一轮的回放录进去
+            stopAiVoice()                    // 也别让小悟上一句话继续念
             val err = recorder.start()
             if (err != null) {
                 hint = err
@@ -190,7 +281,7 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
         }
     }
 
-    /** 结束本轮：取实时转录（失败退回整段上传转写）→ 流式问 AI → 大字展示。 */
+    /** 结束本轮：整段录音交给服务器语音对话接口 → 播小悟的语音 + 上字幕。 */
     fun stopTalk() {
         aiJob = scope.launch {
             if (!recorder.recording) {
@@ -198,65 +289,55 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
                 return@launch
             }
             val r = recorder.stop()
-            // 实时识别没出字：退回既有 sendChatVoice 整段上传转写（同助教语音消息链路）
-            var text = recorder.lastText?.trim()
-            if (text.isNullOrEmpty() && r != null && r.second >= 1) {
-                text = runCatching { KewuApi.sendChatVoice(r.first).text.trim().takeIf { it.isNotEmpty() } }.getOrNull()
-            }
-            r?.let { runCatching { com.kewu.app.platformDeleteFile(it.first) } }
-            if (r == null || r.second < 1 || text.isNullOrEmpty()) {
-                if (text.isNullOrEmpty() && r != null && r.second >= 1) hint = "没听清，请再试一次"
+            val path = r?.first
+            val secs = r?.second ?: 0
+            if (path == null || secs < 1) {
                 phase = VoiceCallPhase.IDLE
                 return@launch
             }
-            liveUser = text
+            // 录音中实时 ASR 已出过字，先上屏；最终以服务端一句话识别的结果为准
+            val heard = recorder.lastText?.trim().orEmpty()
+            liveUser = heard
             phase = VoiceCallPhase.THINKING
             aiReply = ""
-            // ★ C2（2026-11-05）：教师端通话复用本页——提示词/上下文/落盘 key 按角色切换（照搬学生端入口）
+            // ★ C2（2026-11-05）：教师端通话复用本页——落盘 key 按角色切换
             val ctxKey = if (teacher) ChatHistory.KEY_TEACHER else ChatHistory.KEY_STUDENT
-            val system = buildString {
-                if (teacher) {
-                    append("你是「小悟」，课悟 App 里教师的 AI 教学助手，正在和老师进行语音通话。")
-                    append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
-                    append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
-                    append("以下是该教师在课悟 App 里此刻能看到的全部信息（课程/班级/学生名单/签到/作业/纪要），回答时以此为准：\n")
-                    append(com.kewu.app.AiContext.teacher())
-                } else {
-                    append("你是「小悟」，课悟 App 里学生的 AI 学习助手，正在和学生进行语音通话。")
-                    append("像在电话里聊天一样回答：口语化、直接给结论、一次只说一件事；")
-                    append("不要用 markdown 符号、不要列表、不要客套开场白；单次回答 120 字以内。\n")
-                    append("以下是该学生在课悟 App 里此刻能看到的全部信息，回答时以此为准：\n")
-                    append(com.kewu.app.AiContext.student())
+            val result = KewuApi.voiceChat(path, callSessionId)
+            runCatching { com.kewu.app.platformDeleteFile(path) }
+
+            val userText = result.userText.ifBlank { heard }.ifBlank { "（没听清）" }
+            val answer: String
+            if (result.error == null && result.aiText.isNotBlank()) {
+                // 服务端已经把 AI 回答合成成语音了，字幕直接用它的，别再问一次 AI 免得答案对不上
+                answer = runCatching { AiAgent.parse(result.aiText).text.trim() }
+                    .getOrDefault(result.aiText.trim())
+                    .ifBlank { result.aiText.trim() }
+            } else {
+                // 语音链路不通：退回原来的文字流式回答，至少还能打字，不会整个哑掉
+                val fallback = askTextOnly(userText, teacher)
+                if (fallback == null) {
+                    aiReply = ""
+                    hint = result.error ?: "小悟暂时连不上 AI 服务，请稍后再试～"
+                    phase = VoiceCallPhase.IDLE
+                    return@launch
                 }
+                answer = fallback
             }
-            val history = turns.takeLast(6).flatMap {
-                listOf(AiClient.Msg("user", it.user), AiClient.Msg("assistant", it.ai))
-            }
-            val reply = try {
-                AiClient.chatStream(
-                    listOf(AiClient.Msg("system", system)) + history + AiClient.Msg("user", text),
-                    maxTokens = 2048,
-                    onDelta = { aiReply += it },
-                )
-            } catch (e: kotlinx.coroutines.CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                null
-            }
-            if (reply == null) {
-                aiReply = ""
-                hint = "小悟暂时连不上 AI 服务，请稍后再试～"
-                phase = VoiceCallPhase.IDLE
-                return@launch
-            }
-            val parsed = AiAgent.parse(reply).text.trim()
-            aiReply = parsed
-            turns = turns + VoiceTurn(text, parsed)
+            liveUser = userText
+            aiReply = answer
+            turns = turns + VoiceTurn(userText, answer)
             // ★ W8：这一轮通话（用户说的话 + 小悟的回答）以普通气泡同步进聊天界面，
             //   落盘 + 广播给前台页面；挂断后回到聊天页就能看到。C2：教师端落 KEY_TEACHER。
-            AssistantHub.deliverVoiceTurn(ctxKey, text, parsed)
-            TtsPlayer.speakIfAvailable(parsed) // TTS 未开通：空实现，纯文本展示
-            phase = VoiceCallPhase.IDLE
+            AssistantHub.deliverVoiceTurn(ctxKey, userText, answer)
+            if (result.audio != null && result.audio.isNotEmpty()) {
+                phase = VoiceCallPhase.SPEAKING
+                playAiVoice(result.audio) { phase = VoiceCallPhase.IDLE }
+            } else {
+                // TTS 降级 / 纯文本：留一点时间看清字幕，再自动回到聆听
+                if (result.error != null) hint = result.error
+                delay(1500)
+                phase = VoiceCallPhase.IDLE
+            }
         }
     }
 
@@ -343,6 +424,9 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
                     }
                 }
             }
+            // 小悟说话时不再开一路监听麦：扬声器里的 AI 声音会被自己录回去，
+            // 误判成「用户要接话」把刚开口的这句打断。想打断可以点静音/挂断。
+            VoiceCallPhase.SPEAKING -> Unit
         }
     }
 
@@ -357,6 +441,7 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
 
     // 挂断：还在录就丢弃；退出全屏层
     fun hangUp() {
+        stopAiVoice()
         scope.launch {
             if (recorder.recording) recorder.cancel()
             onDismiss()
@@ -463,6 +548,7 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
                     when (phase) {
                         VoiceCallPhase.LISTENING -> "正在聆听…"
                         VoiceCallPhase.THINKING -> "小悟思考中…"
+                        VoiceCallPhase.SPEAKING -> "小悟在说话…"
                         VoiceCallPhase.IDLE -> when {
                             muted -> "已静音 · 点左侧麦克风恢复"
                             turns.isEmpty() -> "正在准备聆听…"
