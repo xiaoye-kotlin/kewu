@@ -85,6 +85,8 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Close
+import io.github.suqi8.coui.kmp.icon.extended.File
+import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.icon.extended.Image as ImageIcon
 import io.github.suqi8.coui.kmp.icon.extended.Ok
 import io.github.suqi8.coui.kmp.icon.extended.Pause
@@ -310,19 +312,40 @@ internal fun rememberChatVoiceRecorder(): ChatVoiceRecorder {
 
 // ───────────────────────── 面板（液态玻璃） ─────────────────────────
 
-/** 附件面板：相册 / 拍照（拍照仅 Android）。 */
+/**
+ * 附件面板（U4 按 InputView 的 `funCationColumnNumber(4)` + `setFuncationData` 重做）：
+ * 微信灰底 + 白色圆角方块 4 列网格，替代旧版的两颗液态玻璃圆钮。
+ */
 @Composable
-internal fun ChatAttachPanel(backdrop: LayerBackdrop, onAlbum: () -> Unit, onCamera: (() -> Unit)?) {
-    GlassPanel(backdrop) {
-        Row(
-            Modifier.fillMaxWidth().padding(vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            AttachEntry("相册", COUIIcons.Photos, 0, onAlbum)
-            if (onCamera != null) AttachEntry("拍照", COUIIcons.Scan, 1, onCamera)
-        }
+internal fun ChatAttachPanel(
+    backdrop: LayerBackdrop,
+    onAlbum: () -> Unit,
+    onCamera: (() -> Unit)?,
+    config: InputViewConfig = InputViewConfig(),
+    onFile: (() -> Unit)? = null,
+    onRecord: (() -> Unit)? = null,
+) {
+    val items = mutableListOf<InputViewFunctionItem>()
+    val actions = mutableListOf<() -> Unit>()
+    if (onCamera != null) {
+        items += InputViewFunctionItem(COUIIcons.Scan, "拍照")
+        actions += onCamera
     }
+    items += InputViewFunctionItem(COUIIcons.Photos, "相册")
+    actions += onAlbum
+    if (onFile != null) {
+        items += InputViewFunctionItem(COUIIcons.File, "文件")
+        actions += onFile
+    }
+    if (onRecord != null) {
+        items += InputViewFunctionItem(COUIIcons.Mic, "录音")
+        actions += onRecord
+    }
+    ChatFunctionPanel(
+        config = config,
+        items = items,
+        onClick = { i -> actions.getOrNull(i)?.invoke() },
+    )
 }
 
 @Composable
@@ -408,7 +431,8 @@ internal fun ChatVoicePanel(
     val secs = (elapsedMs / 1000).toInt()
     val left = CHAT_VOICE_MAX_SECS - secs
     val warn = left <= 10
-    GlassPanel(backdrop) {
+    // U4 InputView：面板改微信灰底（panelBackgroundColor），不再用液态玻璃采样者
+    Box(Modifier.fillMaxWidth().background(InputViewConfig().panelBackgroundColor)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(

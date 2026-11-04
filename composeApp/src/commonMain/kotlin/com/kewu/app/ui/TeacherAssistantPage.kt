@@ -855,6 +855,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 }
                             }
                         } else null,
+                        onFile = { scope.launch { snackbar.toast("文件功能开发中") } },
+                        onRecord = { scope.launch { snackbar.toast("点右侧麦克风开始录音") } },
                     )
                     TeacherPanel.VOICE -> ChatVoicePanel(
                         backdrop = pageBackdrop,
@@ -878,27 +880,36 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 onCancelQuote = { quotePreview = null },
                 stagedImage = stagedImage,
                 onRemoveImage = { stagedImage = null },
+                // U4 InputView：+ / 麦克风改微信小图标钮（去掉液态玻璃圆钮）
                 leading = {
-                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
-                        panel = if (panel == TeacherPanel.ATTACH) TeacherPanel.NONE else TeacherPanel.ATTACH
-                    }) { ChatGlyphIcon(COUIIcons.Add) }
+                    ChatWeuiIconBtn(
+                        icon = COUIIcons.Add,
+                        contentDescription = "功能面板",
+                        onClick = { panel = if (panel == TeacherPanel.ATTACH) TeacherPanel.NONE else TeacherPanel.ATTACH },
+                    )
                 },
                 trailing = {
-                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
-                        when {
-                            panel == TeacherPanel.VOICE -> finishVoice(send = false)
-                            aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
-                            else -> scope.launch {
-                                com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
-                                val err = recorder.start()
-                                if (err != null) snackbar.toast(err) else {
-                                    haptic(HapticKind.Light)
-                                    panel = TeacherPanel.VOICE
+                    ChatWeuiIconBtn(
+                        icon = COUIIcons.Mic,
+                        contentDescription = "语音",
+                        onClick = {
+                            when {
+                                panel == TeacherPanel.VOICE -> finishVoice(send = false)
+                                aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
+                                else -> scope.launch {
+                                    com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
+                                    val err = recorder.start()
+                                    if (err != null) snackbar.toast(err) else {
+                                        haptic(HapticKind.Light)
+                                        panel = TeacherPanel.VOICE
+                                    }
                                 }
                             }
-                        }
-                    }) { ChatGlyphIcon(COUIIcons.Mic) }
+                        },
+                    )
                 },
+                // 教师端有自己的 ATTACH / VOICE 面板状态机：只换 InputView 视觉与 8 列表情面板
+                useBuiltinPanels = false,
             )
         }
 

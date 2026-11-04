@@ -949,20 +949,24 @@ internal fun ChatInputDock(
     /** 待发图片（本地路径）：显示在输入栏上方，可单独发送。 */
     stagedImage: String? = null,
     onRemoveImage: () -> Unit = {},
+    // ── U4：mtjsoft/InputView 1:1 复刻（15 个 attrs 见 InputViewConfig，4 个回调见下） ──
+    config: InputViewConfig = InputViewConfig(),
+    /** setFuncationData(FunctionEntity) */
+    functionItems: List<InputViewFunctionItem> = defaultInputViewFunctions(),
+    /** setFuncationClickListener.onItemClick(view, position) */
+    onFunctionClick: (Int) -> Unit = {},
+    /** setVoiceOverListener：onStart / onOver(按住说话) 与 noPermission */
+    onVoiceStart: () -> Unit = {},
+    onVoiceStop: (cancelled: Boolean) -> Unit = {},
+    onVoiceNoPermission: (String) -> Unit = {},
+    /** 内置表情 / 功能 / 按住说话面板；false = 只换微信视觉，面板仍由页面自己管 */
+    useBuiltinPanels: Boolean = true,
 ) {
-    val cs = COUITheme.colorScheme
     val density = LocalDensity.current
     val imeVisible = WindowInsets.ime.getBottom(density) > 0
     var enter by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(120); enter = true }
     val dockY by animateDpAsState(if (enter) 0.dp else 84.dp, spring(dampingRatio = 0.52f, stiffness = 330f), label = "dockY")
-    val dockBlur by animateDpAsState(if (enter) 22.dp else 4.dp, spring(dampingRatio = 0.52f, stiffness = 330f), label = "dockBlur")
-    val dockCorner by animateDpAsState(if (enter) 28.dp else 40.dp, spring(dampingRatio = 0.52f, stiffness = 330f), label = "dockCorner")
-    val dockTint by animateFloatAsState(
-        if (enter) 0.38f else 0.04f,
-        spring(dampingRatio = 0.52f, stiffness = 330f, visibilityThreshold = 0.0005f),
-        label = "dockTint",
-    )
     // ★ 临界阻尼不过冲：欠阻尼从 110 收到 8 会冲成负数 → Padding must be non-negative 闪退（2026-10-26 小米）
     val bottomPad by animateDpAsState(
         if (imeVisible) ChatImeGap else restingBottom,
@@ -970,69 +974,52 @@ internal fun ChatInputDock(
         label = "dockBottomPad",
     )
     val canSend = sendEnabled && (input.isNotBlank() || quote != null || stagedImage != null)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .offset(y = dockY) // placement 位移（采样者安全）
-            .padding(horizontal = 16.dp)
-            .padding(top = 4.dp, bottom = bottomPad.coerceAtLeast(0.dp)),
-    ) {
-        AnimatedVisibility(
-            visible = quote != null,
-            enter = fadeIn(tween(140)) + slideInVertically(tween(180)) { -it / 2 },
-            exit = fadeOut(tween(110)) + slideOutVertically(tween(140)) { -it / 2 },
-        ) {
-            // 退场动画期间 quote 已置空，仍显示最后一条引用
-            var last by remember { mutableStateOf("") }
-            if (quote != null) last = quote
-            Box(Modifier.padding(bottom = 6.dp)) { QuotePreviewBar(text = last) { onCancelQuote() } }
-        }
-        AnimatedVisibility(
-            visible = stagedImage != null,
-            enter = fadeIn(tween(160)) + expandVertically(spring(dampingRatio = 0.8f, stiffness = 420f)) +
-                androidx.compose.animation.scaleIn(spring(dampingRatio = 0.6f, stiffness = 420f), initialScale = 0.9f),
-            exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
-        ) {
-            var last by remember { mutableStateOf("") }
-            if (stagedImage != null) last = stagedImage
-            Box(Modifier.padding(bottom = 6.dp)) { ChatStagedImageBar(last, onRemoveImage) }
-        }
-        KewuGlassCard(
-            backdrop = backdrop,
-            shape = RoundedCornerShape(dockCorner),
-            blurRadius = dockBlur,
-            tintAlpha = dockTint,
-            modifier = Modifier.height(56.dp).fillMaxWidth(),
-        ) {
-            DockStroke(RoundedCornerShape(28.dp))
-            Row(
-                Modifier.fillMaxSize().padding(horizontal = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
+    var voiceMode by remember { mutableStateOf(false) }
+
+    ChatInputView(
+        input = input,
+        onInput = onInput,
+        onSend = { if (canSend) onSend() },
+        config = config,
+        modifier = modifier.offset(y = dockY), // placement 位移（采样者安全）
+        placeholder = placeholder,
+        sendEnabled = sendEnabled,
+        hasContent = canSend,
+        voiceMode = voiceMode,
+        onVoiceModeChange = { voiceMode = it },
+        functionItems = functionItems,
+        onFunctionClick = onFunctionClick,
+        onVoiceStart = onVoiceStart,
+        onVoiceStop = onVoiceStop,
+        onVoiceNoPermission = onVoiceNoPermission,
+        onEmojiDelete = { if (input.isNotEmpty()) onInput(input.dropLast(1)) },
+        useBuiltinPanels = useBuiltinPanels,
+        leading = leading,
+        trailing = trailing,
+        above = {
+            AnimatedVisibility(
+                visible = quote != null,
+                enter = fadeIn(tween(140)) + slideInVertically(tween(180)) { -it / 2 },
+                exit = fadeOut(tween(110)) + slideOutVertically(tween(140)) { -it / 2 },
             ) {
-                if (leading != null) leading() else Spacer(Modifier.width(8.dp))
-                Box(
-                    Modifier.weight(1f).padding(horizontal = 9.dp),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    if (input.isEmpty()) {
-                        Text(placeholder, color = cs.onSurfaceSecondary, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    BasicTextField(
-                        value = input,
-                        onValueChange = onInput,
-                        textStyle = TextStyle(color = cs.onSurface, fontSize = 14.sp),
-                        cursorBrush = SolidColor(cs.primary),
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                        keyboardActions = KeyboardActions(onSend = { if (canSend) onSend() }),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                trailing?.invoke()
-                Spacer(Modifier.width(4.dp))
-                ChatSendBtn(backdrop = backdrop, enabled = canSend, onSend = { if (canSend) onSend() })
+                // 退场动画期间 quote 已置空，仍显示最后一条引用
+                var last by remember { mutableStateOf("") }
+                if (quote != null) last = quote
+                Box(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 6.dp)) { QuotePreviewBar(text = last) { onCancelQuote() } }
             }
-        }
-    }
+            AnimatedVisibility(
+                visible = stagedImage != null,
+                enter = fadeIn(tween(160)) + expandVertically(spring(dampingRatio = 0.8f, stiffness = 420f)) +
+                    androidx.compose.animation.scaleIn(spring(dampingRatio = 0.6f, stiffness = 420f), initialScale = 0.9f),
+                exit = fadeOut(tween(120)) + shrinkVertically(tween(160)),
+            ) {
+                var last by remember { mutableStateOf("") }
+                if (stagedImage != null) last = stagedImage
+                Box(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 6.dp)) { ChatStagedImageBar(last, onRemoveImage) }
+            }
+        },
+        bottomPad = bottomPad.coerceAtLeast(0.dp),
+    )
 }
 
 /**
@@ -1127,6 +1114,8 @@ internal fun KewuAiChatScreen(
                 quote = quote,
                 onCancelQuote = { quote = null },
                 restingBottom = restingBottom,
+                // 统一对话页没有相册/拍照/语音链路：只启用 InputView 视觉 + 8 列表情面板
+                useBuiltinPanels = false,
             )
             Spacer(Modifier.height(6.dp))
         }
