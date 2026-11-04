@@ -182,18 +182,35 @@ internal object StudyLabStore {
     fun quizSet(sessionId: String): String? = kvGet("kewu_lab_quizset_${user}_$sessionId")?.ifBlank { null }
     fun saveQuizSet(sessionId: String, raw: String) = kvSet("kewu_lab_quizset_${user}_$sessionId", raw)
 
-    // —— 记忆卡片（间隔重复）——
+    // —— 记忆卡片（艾宾浩斯遗忘曲线间隔重复，2026-11-05 升级：参考 github.com/lgylxyyy/Words）——
+    // Words 方案：间隔阶梯 1/2/4/7/15/30/60 天，答对晋级、答错归零 + 错误权重
+    //（有效间隔 = 基础间隔 ÷ (1 + 0.3×错误次数)，下限 1 天——错得越多复习越频繁）。
+    // 本项目保留首阶 10 分钟（没记住的很快再见一次，学习体验更好）。
     data class Flashcard(
         val id: String, val deck: String, val deckTitle: String,
         val front: String, val back: String, val point: String,
         val due: Long, val step: Int,
+        /** ★ D1：累计答错次数（艾宾浩斯错误权重）；老卡片存档无此字段，默认 0。 */
+        val errors: Int = 0,
     ) {
+        /** 「已牢记」= 到达 7 天档（step≥4），与原口径一致。 */
         val remembered: Boolean get() = step >= 4
     }
 
-    /** 每一级复习间隔（分钟）：没记住回到第 0 级（10 分钟后再见）。 */
-    private val intervalsMin = longArrayOf(10, 1_440, 2 * 1_440, 4 * 1_440, 7 * 1_440, 15 * 1_440, 30 * 1_440)
-    fun intervalMs(step: Int): Long = intervalsMin[step.coerceIn(0, intervalsMin.lastIndex)] * 60_000L
+    /** 艾宾浩斯阶梯（分钟）：10 分钟、1/2/4/7/15/30/60 天。 */
+    private val STAGE_MIN = longArrayOf(10, 1_440, 2_880, 5_760, 10_080, 21_600, 43_200, 86_400)
+
+    /** 第 [step] 级的有效间隔毫秒；[errors] 越大间隔越短（Words 错误权重），首阶不受惩罚、其余下限 1 天。 */
+    fun intervalMs(step: Int, errors: Int): Long {
+        val s = step.coerceIn(0, STAGE_MIN.lastIndex)
+        val base = STAGE_MIN[s]
+        if (s == 0) return base * 60_000L
+        val eff = (base / (1 + 0.3 * errors)).toLong().coerceAtLeast(1_440)
+        return eff * 60_000L
+    }
+
+    /** 艾宾浩斯等级名（UI 小标用）：新卡 / Lv1…Lv7（对应 1/2/4/7/15/30/60 天）。 */
+    fun levelName(step: Int): String = if (step <= 0) "新卡" else "Lv$step"
 
     private fun cardsKey() = "kewu_lab_cards_$user"
 
@@ -203,6 +220,7 @@ internal object StudyLabStore {
             Flashcard(
                 o.txt("id"), o.txt("d"), o.txt("dt"), o.txt("f"), o.txt("b"), o.txt("p"),
                 (o["due"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 0L, o.num("s") ?: 0,
+                o.num("e") ?: 0,
             ).takeIf { it.id.isNotBlank() && it.front.isNotBlank() }
         }
     }.getOrDefault(emptyList())
@@ -213,6 +231,7 @@ internal object StudyLabStore {
                 add(buildJsonObject {
                     put("id", c.id); put("d", c.deck); put("dt", c.deckTitle); put("f", c.front)
                     put("b", c.back); put("p", c.point); put("due", c.due); put("s", c.step)
+                    put("e", c.errors)
                 })
             }
         }.toString())
@@ -232,14 +251,15 @@ internal object StudyLabStore {
     fun due(deck: String? = null, now: Long = labNow()): List<Flashcard> =
         cards().filter { (deck == null || it.deck == deck) && it.due <= now }.sortedBy { it.due }
 
-    /** 复习一张：记住了升一级，没记住回到 0 级。返回更新后的卡片。 */
+    /** 复习一张：记住了升到下一级（封顶最高级），没记住回到 0 级且错误数 +1（错误权重让下次间隔更短）。返回更新后的卡片。 */
     fun review(id: String, remembered: Boolean): Flashcard? {
         val now = labNow()
         var out: Flashcard? = null
         save(cards().map { c ->
             if (c.id != id) c else {
-                val step = if (remembered) c.step + 1 else 0
-                c.copy(step = step, due = now + intervalMs(step)).also { out = it }
+                val step = if (remembered) (c.step + 1).coerceAtMost(STAGE_MIN.lastIndex) else 0
+                val errors = if (remembered) c.errors else c.errors + 1
+                c.copy(step = step, errors = errors, due = now + intervalMs(step, errors)).also { out = it }
             }
         })
         return out
@@ -631,7 +651,7 @@ internal fun FlashcardsScreen(
                 LabGlass(backdrop) {
                     LabTitle("把这节课变成记忆卡片")
                     Spacer(Modifier.height(8.dp))
-                    Text("小悟读完整节转写，提炼 8 张问答卡。之后按遗忘曲线在 10 分钟、1、2、4、7、15、30 天提醒你复习，记住的越来越少出现，没记住的会反复出现。",
+                    Text("小悟读完整节转写，提炼 8 张问答卡。之后按艾宾浩斯遗忘曲线在 10 分钟、1、2、4、7、15、30、60 天提醒你复习；记住的晋级拉长时间，没记住的会缩短间隔反复出现。",
                         color = cs.onSurfaceSecondary, fontSize = 13.sp, lineHeight = 20.sp)
                     if (genFailed) {
                         Spacer(Modifier.height(8.dp))
@@ -694,7 +714,7 @@ internal fun LabStat(label: String, value: String, color: Color, modifier: Modif
     }
 }
 
-private fun dueText(ts: Long): String {
+internal fun dueText(ts: Long): String {
     val d = ts - labNow()
     return when {
         d <= 0 -> "现在"
@@ -807,6 +827,16 @@ internal fun ReviewSession(
                 if (faceFront) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         if (card.point.isNotBlank()) KewuTag(card.point, KewuBlue.copy(alpha = 0.14f), KewuBlue)
+                        // ★ D1：艾宾浩斯遗忘曲线小标——当前记忆等级 + 下次复习时间（答错多的卡间隔会更短）
+                        Spacer(Modifier.height(10.dp))
+                        KewuTag(
+                            buildString {
+                                append(StudyLabStore.levelName(card.step))
+                                if (card.errors > 0) append(" · 错过").append(card.errors).append("次")
+                                append(" · 下次").append(dueText(card.due))
+                            },
+                            cs.secondaryContainer, cs.onSurfaceSecondary,
+                        )
                         Spacer(Modifier.height(16.dp))
                         Text(card.front, color = cs.onSurface, fontSize = 19.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
                         Spacer(Modifier.height(20.dp))

@@ -550,7 +550,15 @@ private fun CardsStep(backdrop: LayerBackdrop, sid: String, pack: DailyReview.Pa
             Spacer(Modifier.height(12.dp))
             Text("卡片过完了，最后一步：讲给小悟听", color = cs.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(4.dp))
-            Text("这些卡片会按遗忘曲线在之后几天再出现", color = cs.onSurfaceSecondary, fontSize = 12.sp)
+            // ★ D1：艾宾浩斯遗忘曲线——显示这套卡最近的下次复习时间
+            val nextDue = remember(sid, done) {
+                StudyLabStore.cards().filter { it.deck == sid }.minOfOrNull { it.due }
+            }
+            Text(
+                (nextDue?.let { "下次复习 " + dueText(it) } ?: "这套卡片已全部牢记") +
+                    " · 按艾宾浩斯遗忘曲线 1/2/4/7/15/30/60 天拉开间隔",
+                color = cs.onSurfaceSecondary, fontSize = 12.sp,
+            )
         }
     }
     KewuPrimaryButton("下一步：讲给小悟听", { haptic(HapticKind.Light); onNext(done) }, Modifier.fillMaxWidth())
@@ -576,6 +584,8 @@ private fun FeynmanStep(backdrop: LayerBackdrop, sid: String, rec: ClassRecordin
 private fun DoneStep(sid: String, onAgain: () -> Unit, onNew: () -> Unit, onClose: () -> Unit) {
     val cs = COUITheme.colorScheme
     val pack = remember(sid) { DailyReview.todayPack(sid) }
+    // ★ D1：这套卡最近的下次复习时间（艾宾浩斯）
+    val nextDue = remember(sid) { StudyLabStore.cards().filter { it.deck == sid }.minOfOrNull { it.due } }
     LabCard {
         Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("今天的复习完成了", color = cs.onSurface, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
@@ -587,6 +597,11 @@ private fun DoneStep(sid: String, onAgain: () -> Unit, onNew: () -> Unit, onClos
                 LabStat("卡片", "${pack?.cardsDone ?: 0}", KewuGreen, Modifier.weight(1f))
                 LabStat("讲解", pack?.feynman?.takeIf { it >= 0 }?.toString() ?: "—", Color(0xFFF5A623), Modifier.weight(1f))
             }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "记忆卡片下次复习 " + (nextDue?.let { dueText(it) } ?: "已全部牢记"),
+                color = cs.onSurfaceSecondary, fontSize = 12.sp,
+            )
         }
     }
     KewuPrimaryButton("完成", onClose, Modifier.fillMaxWidth())
