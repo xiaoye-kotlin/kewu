@@ -61,6 +61,7 @@ fun LoginScreen(api: AdminApi, onLogin: (AdminSession) -> Unit) {
             loading = true
             error = null
             try {
+                api.resolveBaseUrl()
                 onLogin(api.login(username.trim(), password))
             } catch (e: Exception) {
                 error = e.message ?: "登录失败，请稍后重试"

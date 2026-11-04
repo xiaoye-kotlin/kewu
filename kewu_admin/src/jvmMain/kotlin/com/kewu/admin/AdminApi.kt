@@ -25,10 +25,14 @@ import kotlinx.serialization.json.put
 class AdminApiException(message: String) : Exception(message)
 
 class AdminApi(
-    private val baseUrl: String = System.getProperty("KEWU_BASE_URL")
+    baseUrl: String = System.getProperty("KEWU_BASE_URL")
         ?: System.getenv("KEWU_BASE_URL")
         ?: "http://47.99.42.168:8080",
 ) {
+    /** 实际使用的后端地址。总控端跑在服务器本机时，公网 IP 无 NAT 回环不可达，
+     *  需由 [resolveBaseUrl] 探测后切到 127.0.0.1。 */
+    var baseUrl: String = baseUrl
+        private set
     private val client = HttpClient(OkHttp) {
         expectSuccess = false
         install(HttpTimeout) {
@@ -39,6 +43,28 @@ class AdminApi(
     }
 
     private var bearerToken: String? = null
+
+    /** 登录前探活：优先本机 127.0.0.1（服务器本机运行时公网 IP 回环不通），其次当前 baseUrl。
+     *  返回最终选中的地址；全部不可达时返回原地址（随后的请求会给出连接错误）。 */
+    suspend fun resolveBaseUrl(): String {
+        val candidates = listOf("http://127.0.0.1:8080", baseUrl).distinct()
+        for (candidate in candidates) {
+            if (probeHealth(candidate)) {
+                baseUrl = candidate
+                return candidate
+            }
+        }
+        return baseUrl
+    }
+
+    private suspend fun probeHealth(url: String): Boolean = try {
+        val response = client.request("$url/api/health") { method = HttpMethod.Get }
+        response.status.value in 200..299
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
+    }
 
     private val obsBucketUrl: String = System.getProperty("KEWU_OBS_BUCKET_URL")
         ?: System.getenv("KEWU_OBS_BUCKET_URL")
