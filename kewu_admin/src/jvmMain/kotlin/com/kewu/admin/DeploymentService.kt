@@ -27,6 +27,11 @@ class DeploymentService {
         ?: System.getenv("KEWU_PREBUILT_JAR_URL")
         ?: "https://github.com/xiaoye-kotlin/kewu/releases/download/backend-latest/kewu-8080.jar"
 
+    // 首选通道：codeload 分发仓库（该域名在服务器上已多次验证可通；Release 直链作兜底）。
+    val defaultPrebuiltZipUrl: String = System.getProperty("KEWU_PREBUILT_ZIP_URL")
+        ?: System.getenv("KEWU_PREBUILT_ZIP_URL")
+        ?: "https://codeload.github.com/xiaoye-kotlin/kewu-backend-dist/zip/refs/heads/main"
+
     fun detectServerRoot(): String? {
         val explicit = System.getProperty("KEWU_SERVER_ROOT") ?: System.getenv("KEWU_SERVER_ROOT")
         if (!explicit.isNullOrBlank() && looksLikeServerRoot(File(explicit))) return File(explicit).absolutePath
@@ -95,6 +100,7 @@ class DeploymentService {
             "-ServerRoot", serverRoot.absolutePath,
             "-ZipUrl", backendZipUrl,
             "-PrebuiltJarUrl", prebuiltJarUrl,
+            "-PrebuiltZipUrl", defaultPrebuiltZipUrl,
             "-DeployTemplate", template.absolutePath,
         )
         if (onlineBuild) command.add("-OnlineBuild")

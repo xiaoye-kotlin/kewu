@@ -3,11 +3,14 @@ param(
     [Parameter(Mandatory=$true)][string]$ZipUrl,
     [switch]$OnlineBuild,
     [string]$PrebuiltJarUrl = '',
+    [string]$PrebuiltZipUrl = '',
     [string]$DeployTemplate = ''
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# 统一 UTF-8 输出：否则 .NET 本地化的异常消息按 GBK 写出，总控端按 UTF-8 读会乱码。
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 function Log([string]$message) {
     Write-Host ((Get-Date -Format 'HH:mm:ss') + '  ' + $message)
@@ -90,15 +93,43 @@ try {
     $newJar = Join-Path $root 'kewu-8080-new.jar'
     $sourceDir = $null
     if (-not $OnlineBuild) {
-        if ($PrebuiltJarUrl) {
-            Log '[2/4] Downloading prebuilt backend jar from GitHub Release...'
-            Invoke-WebRequest -UseBasicParsing -Uri $PrebuiltJarUrl -OutFile $newJar -TimeoutSec 900
-            Log ('  downloaded ' + (Get-Item $newJar).Length + ' bytes')
-        } elseif (Test-Path $newJar) {
-            Log ('[2/4] using existing jar in server root: ' + (Get-Item $newJar).Length + ' bytes')
-        } else {
-            throw "Prebuilt jar mode: no download URL and $newJar not found."
+        $gotJar = $false
+        # 通道 1（首选）：codeload 分发仓库 ZIP——该域名在本项目服务器上已多次验证可通。
+        if ($PrebuiltZipUrl) {
+            try {
+                Log '[2/4] Downloading prebuilt jar via dist repo ZIP (codeload)...'
+                $distZip = Join-Path $work 'kewu-backend-dist.zip'
+                Invoke-WebRequest -UseBasicParsing -Uri $PrebuiltZipUrl -OutFile $distZip -TimeoutSec 900
+                Log ('  downloaded ' + (Get-Item $distZip).Length + ' bytes')
+                $distExtract = Join-Path $work 'dist-extract'
+                if (Test-Path $distExtract) { Remove-Item $distExtract -Recurse -Force }
+                Expand-Archive -LiteralPath $distZip -DestinationPath $distExtract -Force
+                $distJar = Get-ChildItem $distExtract -Recurse -Filter 'kewu-8080.jar' | Select-Object -First 1
+                if (-not $distJar) { throw 'kewu-8080.jar not found inside dist zip' }
+                Copy-Item $distJar.FullName $newJar -Force
+                Remove-Item $distZip -Force -ErrorAction SilentlyContinue
+                $gotJar = $true
+            } catch {
+                Log ('  dist zip channel failed: ' + $_.Exception.Message)
+            }
         }
+        # 通道 2（兜底）：GitHub Release 直链。
+        if (-not $gotJar -and $PrebuiltJarUrl) {
+            try {
+                Log '[2/4] Downloading prebuilt backend jar from GitHub Release (fallback)...'
+                Invoke-WebRequest -UseBasicParsing -Uri $PrebuiltJarUrl -OutFile $newJar -TimeoutSec 900
+                $gotJar = $true
+            } catch {
+                Log ('  release channel failed: ' + $_.Exception.Message)
+            }
+        }
+        # 通道 3（兜底）：目录里已有的 jar（FTP/面板手动上传）。
+        if (-not $gotJar -and (Test-Path $newJar)) {
+            Log '[2/4] using existing jar in server root'
+            $gotJar = $true
+        }
+        if (-not $gotJar) { throw 'All prebuilt jar download channels failed. Check network or upload kewu-8080-new.jar manually.' }
+        Log ('  jar ready: ' + (Get-Item $newJar).Length + ' bytes')
     } else {
         Log '[2/4] Downloading backend source from GitHub...'
         Invoke-WebRequest -UseBasicParsing -Uri $ZipUrl -OutFile $zipPath -TimeoutSec 300
