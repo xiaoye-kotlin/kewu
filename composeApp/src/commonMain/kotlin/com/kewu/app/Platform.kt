@@ -74,3 +74,10 @@ expect fun openBilibiliVideo(bvid: String)
 
 /** 退出应用（一级界面双击返回键的第二下）。Android=finish 当前 Activity；iOS 不主动退出（no-op）。 */
 expect fun platformExitApp()
+
+/**
+ * ★ V10（2026-11-04 晚 2）：AI 语音通话页**只允许竖屏**。
+ * 进入通话页置 true（`SCREEN_ORIENTATION_PORTRAIT`），退出/销毁置 false 恢复系统默认。
+ * Desktop 窗口由用户自由调整、iOS 需 Info.plist + UIViewController 配合，暂为 no-op（文档 68 节注明）。
+ */
+expect fun platformLockPortrait(on: Boolean)

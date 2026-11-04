@@ -20,6 +20,13 @@ fun getPlatform(): String = IOSPlatform().platform
 
 actual fun platformHttpClient(): HttpClient = HttpClient(Darwin)
 
+/**
+ * ★ V10：iOS 方向锁需要 Info.plist supportedInterfaceOrientations + UIViewController 子类配合，
+ * Compose Multiplatform 里直接 `UIDevice.setValue(forKey:"orientation")` 属于私有用法、风险高，
+ * 暂为 no-op；通话页 UI 本身按竖屏约束布局。待 iOS target 联调时补。
+ */
+actual fun platformLockPortrait(on: Boolean) = Unit
+
 // 稳定设备标识：identifierForVendor（同一开发者的 App 共用，卸载全部后才会变），录音雷达 / 多端择优用
 actual fun platformDeviceId(): String =
     "ios-" + (UIDevice.currentDevice.identifierForVendor?.UUIDString ?: "unknown")

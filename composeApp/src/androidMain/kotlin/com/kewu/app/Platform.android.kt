@@ -19,6 +19,15 @@ internal var appActivity: MainActivity? = null
 
 actual fun platformAppContext(): Any = appContext
 actual fun platformActivity(): Any? = appActivity
+
+/** ★ V10：通话页锁竖屏；退出恢复 UNSPECIFIED（视频播放器仍可临时切横屏）。 */
+actual fun platformLockPortrait(on: Boolean) {
+    appActivity?.requestedOrientation = if (on) {
+        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+    } else {
+        android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+    }
+}
 actual fun platformCacheDir(): String = appContext.cacheDir.absolutePath
 actual fun platformReadFile(path: String): ByteArray? = try {
     java.io.File(path).readBytes()

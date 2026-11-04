@@ -13,6 +13,9 @@ actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp)
 
 actual fun platformDeviceId(): String = "desktop-${System.getProperty("user.name", "user")}"
 
+/** ★ V10：桌面窗口方向由用户控制，无系统级方向锁；通话页布局本身按竖屏比例设计。 */
+actual fun platformLockPortrait(on: Boolean) = Unit
+
 private val preferences: Preferences
     get() = Preferences.userRoot().node("com.kewu.app")
 

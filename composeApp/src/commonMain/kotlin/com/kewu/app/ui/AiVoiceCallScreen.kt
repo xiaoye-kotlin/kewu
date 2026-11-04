@@ -5,6 +5,7 @@ import com.kewu.app.AiClient
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuGreen
+import com.kewu.app.platformLockPortrait
 import com.kewu.app.haptic
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
@@ -41,6 +42,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -112,6 +114,11 @@ private fun vcFmtClock(totalSec: Int) = "${vcTwo(totalSec / 60)}:${vcTwo(totalSe
 
 @Composable
 internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
+    // ★ V10（2026-11-04 晚 2）：通话页只允许竖屏；挂断 / 返回 / 页面销毁时恢复系统默认方向
+    DisposableEffect(Unit) {
+        platformLockPortrait(true)
+        onDispose { platformLockPortrait(false) }
+    }
     val backdrop = rememberGlassBackdrop()
     val scope = rememberCoroutineScope()
     val recorder = rememberChatVoiceRecorder()
