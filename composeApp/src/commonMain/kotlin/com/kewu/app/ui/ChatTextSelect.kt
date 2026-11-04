@@ -461,125 +461,25 @@ internal fun ChatSelectToolbar(
     /** 学生端有引用输入框则传入；null 隐藏引用钮 */
     onQuote: ((String) -> Unit)? = null,
 ) {
-    // SelectTextEventBus：点空白 / 切页面统一 dismissAllPop
-    DisposableEffect(Unit) {
-        val r = { state.reset() }
-        ChatTextSelectEventBus.register(r)
-        onDispose { ChatTextSelectEventBus.unregister(r) }
-    }
-    // setPopDelay(100)
-    LaunchedEffect(state.msgKey) {
-        state.popVisible = false
-        if (state.msgKey != null) {
-            delay(state.config.popDelayMs)
-            state.popVisible = true
-        }
-    }
-    // setPopAnimationStyle：弹窗缩放淡入（关掉时直接显示）
-    val popAppear = remember { Animatable(0f) }
-    LaunchedEffect(state.popVisible) {
-        if (state.popVisible) popAppear.animateTo(1f, tween(140)) else popAppear.snapTo(0f)
-    }
-    val density = LocalDensity.current
-    val bounds = state.textBounds
+    // ★ V5（2026-11-04 晚 2）：用户「长按气泡把那个选中文字去掉……不用选择文字，直接就是
+    //   整个气泡中的内容」。文字选择模式整套停用：绿色手柄 / 选区高亮 / 放大镜 /
+    //   深色网格弹窗 / 遮罩一律不再渲染。长按统一走 [ChatBubbleMenu]（复制 / 引用 / 分享）。
+    //   这里只保留「双击查看整段文字」的全屏纯文本层（是「查看」，不是「选择」）。
     Box(Modifier.fillMaxSize()) {
-        if (state.active) {
-            // 遮罩：点空白退出（轻微压暗提示选择模式）
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.05f))
-                    .clickable { ChatTextSelectEventBus.dismissAllPop() },
-            )
-            if (bounds != null && state.popVisible && !state.customPop) {
-                val items = state.popItems.ifEmpty {
-                    defaultPopItems(state, onCopy, onShare, onQuote)
-                }
-                val span = state.config.popSpanCount.coerceAtLeast(1)
-                val rows = items.chunked(span)
-                val maxCols = rows.maxOf { it.size }
-                val popW = (56f * maxCols + 12f).dp
-                val popH = (56f * rows.size + 12f).dp
-                val placeBelow = (bounds.top - rootOrigin.y) < with(density) { (popH + 24.dp).toPx() }
-                val shape = RoundedCornerShape(state.config.popCornerRadiusDp.dp)
-                Box(
-                    Modifier
-                        .width(popW)
-                        .height(popH + 6.dp)
-                        .graphicsLayer {
-                            val v = if (state.config.popAnimationStyle) popAppear.value else 1f
-                            alpha = v
-                            scaleX = 0.88f + 0.12f * v
-                            scaleY = 0.88f + 0.12f * v
-                        }
-                        .offset {
-                            val topPx = bounds.top - rootOrigin.y
-                            val bottomPx = bounds.bottom - rootOrigin.y
-                            val popWPx = popW.toPx()
-                            val popHPx = popH.toPx()
-                            val y = if (placeBelow) bottomPx + 12.dp.toPx() else topPx - popHPx - 18.dp.toPx()
-                            val centerPx = (bounds.left + bounds.right) / 2f - rootOrigin.x
-                            IntOffset((centerPx - popWPx / 2f).roundToInt(), y.roundToInt())
-                        },
-                ) {
-                    Box(
-                        Modifier
-                            .width(popW)
-                            .height(popH)
-                            .clip(shape)
-                            .background(state.config.popBgColor)
-                            .padding(6.dp),
-                    ) {
-                        Column(verticalArrangement = Arrangement.Center) {
-                            rows.forEach { row ->
-                                Row {
-                                    row.forEach { item ->
-                                        SelectPopCell(item, state.config.popItemTextColor) {
-                                            item.onClick(state.selectedText())
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // setPopStyle 的箭头：贴在弹窗靠选区一侧
-                    if (state.config.popArrowShow) {
-                        Canvas(
-                            Modifier
-                                .size(width = 12.dp, height = 6.dp)
-                                .align(if (placeBelow) Alignment.TopCenter else Alignment.BottomCenter)
-                                .offset(y = if (placeBelow) (-5).dp else 5.dp),
-                        ) {
-                            val p = Path().apply {
-                                if (placeBelow) {
-                                    moveTo(0f, size.height); lineTo(size.width / 2f, 0f); lineTo(size.width, size.height)
-                                } else {
-                                    moveTo(0f, 0f); lineTo(size.width / 2f, size.height); lineTo(size.width, 0f)
-                                }
-                                close()
-                            }
-                            drawPath(p, state.config.popBgColor)
-                        }
-                    }
-                }
-            }
-        }
-        // 双击查看文本内容（库 demo 的 SelectTextDialog）：全屏纯文本层
         ChatTextSelectEventBus.viewerText?.let { full ->
             SelectTextDialog(
                 text = full,
                 onCopyAll = { onCopy(full); ChatTextSelectEventBus.closeViewer() },
-                onSelect = {
-                    ChatTextSelectEventBus.closeViewer()
-                    state.enter("viewer", full, state.popItems)
-                },
                 onDismiss = { ChatTextSelectEventBus.closeViewer() },
             )
         }
     }
 }
 
-/** addItem 默认项（库 demo 只 add 了「复制」，这里按用户要的 复制/全选/引用/分享 补齐）。 */
+/**
+ * ★ V6：菜单只留 复制 / 引用 / 分享 三项（删「全选」「取消」），分享走系统 `shareText`。
+ * 本函数随 V5 一并停用（长按不再进文字选择），保留定义仅为配置对照与日后恢复。
+ */
 private fun defaultPopItems(
     state: ChatTextSelectState,
     onCopy: (String) -> Unit,
@@ -587,10 +487,8 @@ private fun defaultPopItems(
     onQuote: ((String) -> Unit)?,
 ): List<SelectPopItem> = mutableListOf<SelectPopItem>().apply {
     add(SelectPopItem(COUIIcons.Copy, "复制") { t -> if (t.isNotBlank()) onCopy(t); state.reset() })
-    add(SelectPopItem(COUIIcons.Ok, "全选") { state.selectAll() })
     if (onQuote != null) add(SelectPopItem(COUIIcons.Reply, "引用") { t -> if (t.isNotBlank()) onQuote(t); state.reset() })
     add(SelectPopItem(COUIIcons.Share, "分享") { t -> if (t.isNotBlank()) onShare(t); state.reset() })
-    add(SelectPopItem(COUIIcons.Undo, "取消") { state.reset() })
 }
 
 @Composable
@@ -619,7 +517,6 @@ private fun SelectPopCell(item: SelectPopItem, color: Color, onClick: () -> Unit
 private fun SelectTextDialog(
     text: String,
     onCopyAll: () -> Unit,
-    onSelect: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -650,7 +547,6 @@ private fun SelectTextDialog(
             Spacer(Modifier.height(28.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 DialogAction("复制全文", onCopyAll)
-                DialogAction("选择文字", onSelect)
                 DialogAction("关闭", onDismiss)
             }
         }

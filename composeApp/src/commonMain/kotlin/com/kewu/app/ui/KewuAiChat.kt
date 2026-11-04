@@ -849,19 +849,13 @@ internal fun ChatMessageItem(
     /** P8 weui 规则：上一条也是 AI 消息时省略本条头像（false = 省略）。 */
     showAvatar: Boolean = true,
 ) {
-    // P4：文字消息长按 → 进入文字选择（默认全选）；语音/图片或页面未装选择状态时走原长按菜单
-    val isPlainText = !msg.isVoice && msg.image == null && msg.text.isNotBlank()
+    // ★ V5（2026-11-04 晚 2）：用户「不用选择文字直接就是整个气泡中的内容」——
+    //   长按一律弹整条消息菜单（复制 / 引用 / 分享），不再进入 SelectTextHelper 文字选择模式；
+    //   绿色手柄、选区高亮、放大镜、深色网格弹窗都不会再出现。
+    //   [selectFor] 参数保留只为兼容旧调用签名（其 msgKey 永远为 null，气泡不会渲染可选中文本）。
     val onLongPress: () -> Unit = {
-        if (selectFor != null && isPlainText) {
-            haptic(HapticKind.Medium)
-            selectFor.enter(
-                msg.id,
-                if (msg.isUser) msg.text else stripMarkdown(aiVisibleText(msg.text)),
-            )
-        } else {
-            menu.msg = msg
-            haptic(HapticKind.Medium)
-        }
+        menu.msg = msg
+        haptic(HapticKind.Medium)
     }
     if (msg.isUser) {
         ChatUserBubble(msg, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }, onLongPress = onLongPress, selectFor = selectFor)

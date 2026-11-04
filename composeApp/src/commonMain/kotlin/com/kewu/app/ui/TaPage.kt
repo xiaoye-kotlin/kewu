@@ -854,7 +854,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
         // ── 长按气泡的 QQ 式操作菜单（液态玻璃 + coui Card 选项） ──
         ChatBubbleMenu(menu, rootOrigin) { quotePreview = it }
-        // P4 文字选择工具条：复制 / 全选 / 引用 / 分享（贴选择文本区上方浮出）
+        // V5/V6：文字选择已停用，这里只剩「双击查看整段文字」全屏层；长按菜单 = 复制 / 引用 / 分享
         val clipboardSel = LocalClipboardManager.current
         ChatSelectToolbar(
             state = textSelect,
@@ -863,10 +863,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 clipboardSel.setText(androidx.compose.ui.text.AnnotatedString(t))
                 snackbar.toast("已复制")
             },
-            onShare = { t ->
-                clipboardSel.setText(androidx.compose.ui.text.AnnotatedString(t))
-                snackbar.toast("内容已复制，可以粘贴分享")
-            },
+            // V6：分享直接调系统分享，不再「复制到剪贴板 + 提示」
+            onShare = { t -> shareText(t) },
             onQuote = { t -> quotePreview = t },
         )
 

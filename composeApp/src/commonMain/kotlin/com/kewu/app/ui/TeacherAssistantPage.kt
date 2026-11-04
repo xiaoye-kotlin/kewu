@@ -778,24 +778,9 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 // P8 weui 规则：连续 AI 消息只第一条带头像
                                 showAvatar = prevMsg?.isUser != false,
                                 onLongPress = {
-                                    // 2026-11-04（P4）：文字消息长按进文字选择（SelectTextHelper 风格）；
-                                    // 图片 / 语音消息长按仍弹原菜单
-                                    if (msg.media == null) {
-                                        haptic(HapticKind.Medium)
-                                        textSelect.enter(
-                                            msg.id,
-                                            msg.blocks.joinToString("\n") { b ->
-                                                when (b) {
-                                                    is TaBlock.Text -> stripMarkdown(b.s)
-                                                    is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
-                                                    is TaBlock.Chips -> b.list.joinToString("、")
-                                                }
-                                            },
-                                        )
-                                    } else {
-                                        menuMsg = msg
-                                        haptic(HapticKind.Medium)
-                                    }
+                                    // ★ V5：长按一律弹整条消息菜单（复制 / 引用 / 分享），不再进文字选择
+                                    menuMsg = msg
+                                    haptic(HapticKind.Medium)
                                 },
                             )
                         }
@@ -917,7 +902,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
 
         // ── 长按气泡的操作菜单（液态玻璃 + coui 选项，与学生端同款）：必须是根盒最后一个子节点（盖在最上层） ──
-        // P4 文字选择工具条（复制 / 全选 / 分享），渲染在菜单层之上
+        // V5/V6：文字选择已停用，这里只剩「双击查看整段文字」全屏层；长按菜单 = 复制 / 引用 / 分享
         ChatSelectToolbar(
             state = textSelect,
             rootOrigin = rootOrigin,
@@ -925,10 +910,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 clipboard.setText(androidx.compose.ui.text.AnnotatedString(t))
                 scope.launch { snackbar.toast("已复制") }
             },
-            onShare = { t ->
-                clipboard.setText(androidx.compose.ui.text.AnnotatedString(t))
-                scope.launch { snackbar.toast("内容已复制，可以粘贴分享") }
-            },
+            // V6：分享直接调系统分享，不再「复制到剪贴板 + 提示」
+            onShare = { t -> shareText(t) },
         )
         val activeMenuMsg = menuMsg
         if (activeMenuMsg != null) {
