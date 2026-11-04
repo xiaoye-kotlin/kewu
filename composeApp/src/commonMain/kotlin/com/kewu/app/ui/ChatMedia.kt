@@ -472,9 +472,9 @@ private fun RecordingDot() {
     Canvas(Modifier.size(8.dp)) { drawCircle(Color(0xFFE5484D).copy(alpha = a)) }
 }
 
-/** 实时声纹：一组圆角竖条按两路正弦叠加起伏，入场时振幅从 0 渐入。 */
+/** 实时声纹：一组圆角竖条按两路正弦叠加起伏，入场时振幅从 0 渐入（P7 起语音通话页复用，故 internal）。 */
 @Composable
-private fun LiveVoiceWave(color: Color, modifier: Modifier = Modifier) {
+internal fun LiveVoiceWave(color: Color, modifier: Modifier = Modifier) {
     val t = rememberInfiniteTransition(label = "liveWave")
     val phase by t.animateFloat(0f, (2 * PI).toFloat(), infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "liveWavePhase")
     val amp = remember { Animatable(0f) }

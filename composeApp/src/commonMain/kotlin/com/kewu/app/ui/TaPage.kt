@@ -121,6 +121,7 @@ import io.github.suqi8.coui.kmp.icon.extended.Edit
 import io.github.suqi8.coui.kmp.icon.extended.File
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.icon.extended.Ok
+import io.github.suqi8.coui.kmp.icon.extended.Phone
 import io.github.suqi8.coui.kmp.icon.extended.Photos
 import io.github.suqi8.coui.kmp.icon.extended.Scan
 import io.github.suqi8.coui.kmp.theme.COUITheme
@@ -235,6 +236,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     var panel by remember { mutableStateOf(AssistantPanel.NONE) }
     // B 站学习视频浏览面板（2026-11-02）：快捷提问行「B站视频」chip 打开
     var showBiliPanel by remember { mutableStateOf(false) }
+    // P7 AI 语音通话全屏层：人格区电话钮进入
+    var showVoiceCall by remember { mutableStateOf(false) }
     // 助教发图 / 发语音（2026-11-03）：待发图片（本地路径）+ 录音控制器 + 媒体任务进度
     var stagedImage by remember { mutableStateOf<String?>(null) }
     val recorder = rememberChatVoiceRecorder()
@@ -583,6 +586,12 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                             Text("小悟", color = cs.onSurface, fontSize = 21.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.width(7.dp))
                             Canvas(Modifier.size(7.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
+                            // P7 语音通话入口：名旁小电话钮 → 全屏通话层（AiVoiceCallScreen）
+                            Spacer(Modifier.width(7.dp))
+                            ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                                haptic(HapticKind.Tick)
+                                showVoiceCall = true
+                            }) { ChatGlyphIcon(COUIIcons.Phone) }
                         }
                         Spacer(Modifier.height(3.dp))
                         // 2026-10-24：等待 AI 回复时顶部状态改为「小悟正在输入中…」
@@ -839,6 +848,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             BilibiliBrowsePanel(onDismiss = { showBiliPanel = false })
         }
 
+        // ── P7 AI 语音通话全屏层：深色通话界面，自带 BackHandler（挂断） ──
+        SlideOverlay(if (showVoiceCall) Unit else null) {
+            AiVoiceCallScreen(onDismiss = { showVoiceCall = false })
+        }
+
     }
 }
 
@@ -899,9 +913,9 @@ private fun ContextChip(
 
 
 
-/** 人物 icon（头 + 肩，实心白） —— AI 头像同款。 */
+/** 人物 icon（头 + 肩，实心白） —— AI 头像同款（P7 起语音通话页也用，故 internal）。 */
 @Composable
-private fun PersonGlyph(modifier: Modifier = Modifier, color: Color) {
+internal fun PersonGlyph(modifier: Modifier = Modifier, color: Color) {
     Canvas(modifier) {
         val s = size.minDimension
         drawCircle(color, radius = s * 0.17f, center = Offset(s * 0.5f, s * 0.36f))
