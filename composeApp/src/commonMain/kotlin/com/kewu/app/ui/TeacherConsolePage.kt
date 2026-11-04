@@ -278,7 +278,8 @@ fun TeacherConsolePage(
             targetState = drill,
             modifier = Modifier.fillMaxSize(),
             isForward = { a, b -> b.depth() >= a.depth() },
-            swipeEnabled = drill != ConsoleDrill.NONE && drill !is ConsoleDrill.PRECLASS,
+            // 2026-11-04（P1）：二级页右滑退出禁用，防误触（返回走 BackHandler / 左上角返回钮）
+            swipeEnabled = false,
             swipeNeighbor = { from, d -> if (d < 0 && from != ConsoleDrill.NONE) from.parent() else null },
             onSwipeCommit = { drill = it },
         ) { d ->

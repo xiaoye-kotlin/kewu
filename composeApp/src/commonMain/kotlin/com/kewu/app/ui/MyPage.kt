@@ -238,7 +238,7 @@ fun MyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit) {
             targetState = screen,
             modifier = Modifier.fillMaxSize(),
             isForward = { a, b -> b > a },
-            swipeEnabled = screen != 0 && screen != 1 && screen != 2, // 录音管理页有横向拖动的播放进度条，关右滑返回避免冲突
+            swipeEnabled = false, // 2026-11-04（P1）：二级页右滑退出全部禁用，防误触（原录音管理页进度条冲突备注随 swipe 一并失效）
             swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
             onSwipeCommit = { screen = it },
         ) { s ->

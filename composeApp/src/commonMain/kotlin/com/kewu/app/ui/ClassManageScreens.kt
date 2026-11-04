@@ -208,7 +208,8 @@ internal fun TeacherClassesScreen(backdrop: LayerBackdrop, onBack: () -> Unit) {
             targetState = drill,
             modifier = Modifier.fillMaxSize(),
             isForward = { _, to -> to != ClassDrill.LIST },
-            swipeEnabled = drill is ClassDrill.STUDENTS,
+            // 2026-11-04（P1）：二级页右滑退出禁用，防误触
+            swipeEnabled = false,
             swipeNeighbor = { from, dir -> if (dir < 0 && from != ClassDrill.LIST) ClassDrill.LIST else null },
             onSwipeCommit = { drill = it },
         ) { d ->

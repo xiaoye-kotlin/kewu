@@ -535,7 +535,8 @@ internal fun StudyPlanScreen(onBack: () -> Unit) {
                 FlashcardsScreen(deck = null, deckTitle = "全部课程", onBack = { labTool = 0 })
             } else {
                 FeynmanScreen(
-                    points = mastery.filter { !it.mastered }.map { it.m.point }.take(8),
+                    // 2026-11-04（P3）：所有未掌握（<100%）的知识点都可选择，不再截断 8 个
+                    points = mastery.filter { !it.mastered }.map { it.m.point },
                     subtitle = "挑一个薄弱知识点讲一遍",
                     onBack = { labTool = 0; selfVersion++ },
                 )

@@ -1037,7 +1037,8 @@ internal fun FeynmanSession(
 }
 
 /**
- * 讲给小悟听（学习规划入口）。[points] 候选知识点（为空且有 [summary] 时让 AI 从纪要里提炼）；[summary]/[transcript] 为课堂材料，可空。
+ * 讲给小悟听（学习规划入口）。[points] 候选知识点 = 学习规划里掌握度 <100% 的知识点（AiLearning 调用点传入）；
+ * 2026-11-04（P3）：不再支持手动输入 / AI 提炼 —— 只从已有知识点里选；全部掌握时显示完成态。
  */
 @Composable
 internal fun FeynmanScreen(
@@ -1051,22 +1052,8 @@ internal fun FeynmanScreen(
     val material = remember(summary, transcript) {
         if (summary.isBlank() && transcript.isBlank()) "" else lessonMaterial(summary, transcript, budget = 8_000)
     }
-    var candidates by remember { mutableStateOf(points) }
-    var extracting by remember { mutableStateOf(false) }
+    val candidates = points.distinct()
     var point by remember { mutableStateOf<String?>(null) }
-    var custom by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        if (candidates.isEmpty() && summary.isNotBlank()) {
-            extracting = true
-            val o = aiJsonObject(AiClient.chat(
-                "从课堂纪要里提炼 4–6 个本节课最核心、最值得学生自己讲一遍的知识点（2–10 字标准术语）。只输出 JSON：{\"points\":[\"\"]}",
-                summary.take(4_000), maxTokens = 400,
-            ))
-            candidates = o?.texts("points")?.map { it.take(16) }?.distinct()?.take(6).orEmpty()
-            extracting = false
-        }
-    }
 
     StudyLabPage("讲给小悟听", onBack, subtitle = subtitle.ifBlank { "费曼学习法" }) { backdrop ->
         val p = point
@@ -1080,24 +1067,20 @@ internal fun FeynmanScreen(
             LabCard {
                 LabTitle("选一个知识点")
                 Spacer(Modifier.height(10.dp))
-                if (extracting) {
+                if (candidates.isEmpty()) {
+                    // 2026-11-04（P3）：学习规划里所有知识点都 100% 掌握 → 不用讲了
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        InfiniteProgressIndicator(size = 18.dp)
+                        Text("🎉", fontSize = 20.sp)
                         Spacer(Modifier.width(8.dp))
-                        Text("小悟正在从本节课里挑知识点…", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                        Text("你已掌握所有知识点，小悟没有要考你的了", color = KewuGreen, fontSize = 13.sp)
                     }
-                } else if (candidates.isNotEmpty()) {
+                } else {
                     Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         candidates.forEach { c ->
                             Chip(selected = false, onClick = { haptic(HapticKind.Tick); point = c }, label = c)
                         }
                     }
-                    Spacer(Modifier.height(12.dp))
                 }
-                TextField(custom, { custom = it.take(20) }, Modifier.fillMaxWidth(),
-                    backgroundMode = TextFieldMode.Rectangle, label = "或者自己输入一个知识点")
-                Spacer(Modifier.height(10.dp))
-                KewuPrimaryButton("就讲这个", { point = custom.trim() }, Modifier.fillMaxWidth(), enabled = custom.isNotBlank())
             }
             return@StudyLabPage
         }

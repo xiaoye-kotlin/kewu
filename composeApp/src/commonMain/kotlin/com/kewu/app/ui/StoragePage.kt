@@ -148,7 +148,8 @@ internal fun StorageManagePage(onBack: () -> Unit) {
         targetState = sub,
         modifier = Modifier.fillMaxSize(),
         isForward = { a, b -> b > a },
-        swipeEnabled = sub == 1,
+        // 2026-11-04（P1）：二级页右滑退出禁用，防误触
+        swipeEnabled = false,
         swipeNeighbor = { from, d -> if (d < 0 && from == 1) 0 else null },
         onSwipeCommit = { sub = it },
     ) { s ->

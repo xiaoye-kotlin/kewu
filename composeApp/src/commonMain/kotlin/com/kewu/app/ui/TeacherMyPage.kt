@@ -147,7 +147,8 @@ fun TeacherMyPage(onLogout: () -> Unit, onNavHide: (Boolean) -> Unit = {}) {
             targetState = screen,
             modifier = Modifier.fillMaxSize(),
             isForward = { a, b -> b > a },
-            swipeEnabled = screen == 1 || (screen in 5..9),
+            // 2026-11-04（P1）：二级页右滑退出禁用，防误触
+            swipeEnabled = false,
             swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
             onSwipeCommit = { screen = it },
         ) { s ->

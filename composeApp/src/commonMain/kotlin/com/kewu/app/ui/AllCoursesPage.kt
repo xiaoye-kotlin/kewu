@@ -68,7 +68,8 @@ fun AllCoursesPage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
         targetState = depth,
         modifier = Modifier.fillMaxSize(),
         isForward = { a, b -> b > a },
-        swipeEnabled = depth == 1,
+        // 2026-11-04（P1）：二级页右滑退出禁用，防误触
+        swipeEnabled = false,
         swipeNeighbor = { from, d -> if (d < 0 && from == 1) 0 else null },
         onSwipeCommit = { openCourse = null },
     ) { d ->

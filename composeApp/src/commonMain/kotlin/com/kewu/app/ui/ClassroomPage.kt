@@ -479,29 +479,41 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     val repoCourses by CourseRepo.courses.collectAsState()
     val repoLoaded by CourseRepo.loaded.collectAsState()
     val courseInfos: List<CourseInfo>? = repoCourses
-    // 2026-10-26：课程卡带上课表里的时间 / 地点 / 任课老师（今天有课优先显示今天那节，否则显示下一次上课）
+    // 2026-10-26：课程卡带上课表里的时间 / 地点 / 任课老师
+    // 2026-11-04（P2）：只显示**今天还没上** + **明天**的课 —— 今天未上的按上课时间升序（最近的在上），
+    // 明天的排今天之后；今天已上完且明天没排的课不再显示（上过的不显示）。
     var schedule by remember { mutableStateOf<List<com.kewu.app.ScheduleEntry>>(emptyList()) }
     LaunchedEffect(Unit) { schedule = KewuApi.getMySchedule().orEmpty() }
     val realCourses = remember(repoCourses, repoLoaded, schedule) {
         val nowMs = kotlin.time.Clock.System.now().toEpochMilliseconds() + 8 * 3_600_000L
         val todayWd = ((nowMs / 86_400_000L + 3) % 7).toInt() + 1
+        val tomorrowWd = todayWd % 7 + 1
         val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+        fun minutesOf(hhmm: String): Int = hhmm.split(":").let { p ->
+            (p.getOrNull(0)?.toIntOrNull() ?: -1) * 60 + (p.getOrNull(1)?.toIntOrNull() ?: 0)
+        }
+        val nowMin = ((nowMs % 86_400_000L) / 60_000L).toInt()
         when {
-            repoCourses != null -> repoCourses.orEmpty().map { c ->
+            repoCourses != null -> repoCourses.orEmpty().mapNotNull { c ->
                 val mine = schedule.filter { it.courseId == c.id || it.courseName == c.name }
-                // 今天的那节 → 本周之后最近的一节 → 任意一节
-                val next = mine.firstOrNull { it.weekday == todayWd }
-                    ?: mine.minByOrNull { (it.weekday - todayWd + 7) % 7 }
+                // 今天未上的节（按时间升序）+ 明天的节；都没有 → 这门课今天不显示
+                val todayLeft = mine
+                    .filter { it.weekday == todayWd && minutesOf(it.startTime) > nowMin }
+                    .sortedBy { minutesOf(it.startTime) }
+                val tomorrow = mine
+                    .filter { it.weekday == tomorrowWd }
+                    .sortedBy { minutesOf(it.startTime) }
+                val next = (todayLeft + tomorrow).firstOrNull() ?: return@mapNotNull null
                 Course(
                     name = c.name,
-                    teacher = next?.teacherName?.ifBlank { null } ?: c.teacher,
-                    room = next?.location?.ifBlank { null } ?: "待定",
-                    time = next?.let { e ->
-                        (if (e.weekday == todayWd) "" else names[e.weekday - 1] + " ") + e.startTime
-                    } ?: "—",
+                    teacher = next.teacherName?.ifBlank { null } ?: c.teacher,
+                    room = next.location?.ifBlank { null } ?: "待定",
+                    time = next.let { e ->
+                        (if (e.weekday == todayWd) "" else "明天 ") + e.startTime
+                    },
                     status = CourseStatus.PENDING, summary = c.description,
                 )
-            }
+            }.sortedWith(compareBy({ if (it.time.startsWith("明天")) 1 else 0 }, { it.time }))
             // 2026-10-26：断网不再降级 mock 课程（假课程点进去必然失败，还误导用户），状态卡给「点此重试」
             else -> emptyList()
         }
@@ -631,7 +643,9 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
             targetState = drillKey,
             modifier = Modifier.fillMaxSize(),
             isForward = { a, b -> b > a },
-            swipeEnabled = drillKey != 0 && drillKey != 4,
+            // 2026-11-04（P1）：右滑退出全部禁用 —— 今日复习卡片右滑=「记住了」与宿主页右滑退出冲突，且二级页误触丢状态；
+            // 返回走 BackHandler / 左上角返回钮，推入动画保留。
+            swipeEnabled = false,
             swipeNeighbor = { from, d -> if (d < 0 && from != 0) 0 else null },
             onSwipeCommit = { drill = ClassroomDrill.NONE; attendanceId = null },
         ) { key ->
