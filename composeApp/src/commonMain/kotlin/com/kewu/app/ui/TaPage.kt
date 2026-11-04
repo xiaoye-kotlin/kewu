@@ -55,6 +55,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -239,6 +240,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     var showBiliPanel by remember { mutableStateOf(false) }
     // P7 AI 语音通话全屏层：人格区电话钮进入
     var showVoiceCall by remember { mutableStateOf(false) }
+    // ★ 2026-11-04（U1）：通话层是页内全屏层，底部导航在主界面外层仍会渲染 →
+    //   与通话页底部「说话/挂断」按钮重合。通话期间通知 MainScreen 收起导航，退出/页面销毁恢复。
+    //   navHidden 的收起动画 + 手势禁用已在 MainScreen/AppleLiquidGlassNavBar 内实现。
+    LaunchedEffect(showVoiceCall) { onNavHide(showVoiceCall) }
+    DisposableEffect(Unit) { onDispose { onNavHide(false) } }
     // 助教发图 / 发语音（2026-11-03）：待发图片（本地路径）+ 录音控制器 + 媒体任务进度
     var stagedImage by remember { mutableStateOf<String?>(null) }
     val recorder = rememberChatVoiceRecorder()
