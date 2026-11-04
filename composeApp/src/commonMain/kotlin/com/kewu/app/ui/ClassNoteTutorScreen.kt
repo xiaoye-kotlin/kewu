@@ -112,39 +112,48 @@ fun ClassNoteTutorScreen(
     }
     // 正在流式生成的回答；null = 空闲（离开页面 scope 取消，请求随之结束）
     var streamText by remember { mutableStateOf<String?>(null) }
+    // ★ B1（2026-11-05）：请求已发出还没吐字——只禁发、不出思考气泡（与 streamText 解耦）
+    var asking by remember { mutableStateOf(false) }
 
     KewuAiChatScreen(
         title = "问小悟 · 本节复习",
         onBack = onBack,
         messages = msgs,
         streamText = streamText,
+        pending = asking,
         placeholder = "围绕这节课提问…",
         onSend = { text, quote ->
+            if (asking) return@KewuAiChatScreen
+            asking = true
             val base = msgs + AiChatMsg(text, isUser = true, quote = quote, id = newChatId())
             msgs = base
             tutorSessions[sessionId] = base // 中途离开页面（请求被取消）也保留学生的问题
-            streamText = ""
+            // ★ B1（2026-11-05）：不先塞空串——拿到第一个字 streamText 才非 null，「正在思考」占位气泡才不出现
             scope.launch {
-                val system = buildSystemPrompt(courseName, teacherName, date, durationSec, summary, transcript,
-                    question = (quote.orEmpty() + text))
-                // 多轮：最近 6 条，总长度压到 4000 字内；从最新往前取，保证本次问题一定在
-                val history = base.takeLast(6).foldRight(emptyList<AiClient.Msg>()) { m, acc ->
-                    val body = (if (m.quote != null) "（引用：${m.quote}）" else "") + m.text.ifBlank { "…" }
-                    if (acc.isNotEmpty() && acc.sumOf { it.content.length } + body.length > 4000) acc
-                    else listOf(AiClient.Msg(if (m.isUser) "user" else "assistant", body)) + acc
+                try {
+                    val system = buildSystemPrompt(courseName, teacherName, date, durationSec, summary, transcript,
+                        question = (quote.orEmpty() + text))
+                    // 多轮：最近 6 条，总长度压到 4000 字内；从最新往前取，保证本次问题一定在
+                    val history = base.takeLast(6).foldRight(emptyList<AiClient.Msg>()) { m, acc ->
+                        val body = (if (m.quote != null) "（引用：${m.quote}）" else "") + m.text.ifBlank { "…" }
+                        if (acc.isNotEmpty() && acc.sumOf { it.content.length } + body.length > 4000) acc
+                        else listOf(AiClient.Msg(if (m.isUser) "user" else "assistant", body)) + acc
+                    }
+                    val reply = AiClient.chatStream(listOf(AiClient.Msg("system", system)) + history) { piece ->
+                        streamText = (streamText ?: "") + piece
+                    }
+                    msgs = msgs + if (reply == null) {
+                        // 全部通道失败：保留用户问题，给出统一官方文案，可重试
+                        AiChatMsg("小悟暂时连不上 AI 服务，请稍后重试", isUser = false, id = newChatId())
+                    } else {
+                        val (clean, kw) = splitBiliTag(reply)
+                        AiChatMsg(clean, isUser = false, id = newChatId(), biliKeyword = kw)
+                    }
+                    streamText = null
+                    tutorSessions[sessionId] = msgs
+                } finally {
+                    asking = false
                 }
-                val reply = AiClient.chatStream(listOf(AiClient.Msg("system", system)) + history) { piece ->
-                    streamText = (streamText ?: "") + piece
-                }
-                msgs = msgs + if (reply == null) {
-                    // 全部通道失败：保留用户问题，给出统一官方文案，可重试
-                    AiChatMsg("小悟暂时连不上 AI 服务，请稍后重试", isUser = false, id = newChatId())
-                } else {
-                    val (clean, kw) = splitBiliTag(reply)
-                    AiChatMsg(clean, isUser = false, id = newChatId(), biliKeyword = kw)
-                }
-                streamText = null
-                tutorSessions[sessionId] = msgs
             }
         },
     )

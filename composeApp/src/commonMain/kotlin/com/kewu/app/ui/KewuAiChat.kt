@@ -1042,6 +1042,8 @@ internal fun KewuAiChatScreen(
     restingBottom: Dp = ChatDockRestingBottom,
     header: (@Composable () -> Unit)? = null,
     chips: (@Composable RowScope.() -> Unit)? = null,
+    /** ★ B1（2026-11-05）：请求已发出但还没吐字的「忙碌」态——页面用它在不显示思考气泡的前提下禁发，防连发。 */
+    pending: Boolean = false,
 ) {
     val cs = COUITheme.colorScheme
     val backdrop = rememberGlassBackdrop()
@@ -1052,7 +1054,7 @@ internal fun KewuAiChatScreen(
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }
     var input by remember { mutableStateOf("") }
     var quote by remember { mutableStateOf<String?>(null) }
-    val busy = streamText != null
+    val busy = streamText != null || pending
 
     BackHandler { onBack() }
     ChatAutoScroll(listState, Triple(messages.lastOrNull()?.id ?: 0L, messages.size, streamText?.length?.div(40) ?: -1))

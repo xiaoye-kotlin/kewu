@@ -119,17 +119,20 @@ internal fun AiTutorSheet(
     }
     var msgs by remember(sessionKey) { mutableStateOf(TutorSessions.of(sessionKey)) }
     var streaming by remember { mutableStateOf<String?>(null) }
+    // ★ B1（2026-11-05）：请求已发出还没吐字——只禁发、不出思考气泡（与 streaming 解耦）
+    var asking by remember { mutableStateOf(false) }
     val welcome = remember { newChatId() }
     // 每条消息的稳定 id（列表 key）：按下标派生，消息只追加不删除
     val baseId = remember(sessionKey) { newChatId() * 10 }
 
     fun ask(level: String, text: String, quote: String? = null) {
-        if (streaming != null) return
+        if (streaming != null || asking) return
+        asking = true
         val shown = if (quote != null) "（引用：$quote）$text" else text
         msgs = msgs + TutorMsg(false, shown)
         TutorSessions.save(sessionKey, msgs)
         onUsed()
-        streaming = ""
+        // ★ B1（2026-11-05）：不先塞空串——拿到第一个字 streaming 才非 null，「正在思考」占位气泡才不出现
         val questionText = buildString {
             appendLine("课程：$courseName")
             appendLine("题型：${question.type.label}")
@@ -144,13 +147,17 @@ internal fun AiTutorSheet(
         }
         val history = msgs.takeLast(8).map { AiClient.Msg(if (it.fromAi) "assistant" else "user", it.text) }
         scope.launch {
-            val reply = AiClient.chatStream(
-                listOf(AiClient.Msg("system", "$TUTOR_SYSTEM\n\n$questionText\n本次学生请求的提示等级：$level")) + history,
-                maxTokens = 1024,
-            ) { piece -> streaming = (streaming ?: "") + piece }
-            msgs = msgs + TutorMsg(true, reply?.trim()?.ifBlank { null } ?: "小悟暂时连不上 AI 服务，请稍后再试～")
-            TutorSessions.save(sessionKey, msgs)
-            streaming = null
+            try {
+                val reply = AiClient.chatStream(
+                    listOf(AiClient.Msg("system", "$TUTOR_SYSTEM\n\n$questionText\n本次学生请求的提示等级：$level")) + history,
+                    maxTokens = 1024,
+                ) { piece -> streaming = (streaming ?: "") + piece }
+                msgs = msgs + TutorMsg(true, reply?.trim()?.ifBlank { null } ?: "小悟暂时连不上 AI 服务，请稍后再试～")
+                TutorSessions.save(sessionKey, msgs)
+                streaming = null
+            } finally {
+                asking = false
+            }
         }
     }
 
@@ -163,6 +170,7 @@ internal fun AiTutorSheet(
         onBack = onDismiss,
         messages = chatMsgs,
         streamText = streaming,
+        pending = asking,
         placeholder = "说说你卡在哪…",
         thinkingText = "小悟正在想怎么提示你…",
         onSend = { text, quote -> ask("学生追问", text.ifBlank { "帮我看看这段" }, quote) },

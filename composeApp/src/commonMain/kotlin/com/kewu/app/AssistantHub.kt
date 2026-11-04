@@ -60,16 +60,19 @@ object AssistantHub {
 
     private val _streaming = MutableStateFlow<Map<String, String>>(emptyMap())
 
-    /** 正在流式输出的回答（会话 key → 已到达的可见文本；「""」= 已发出请求、思考中还没吐字）。 */
+    /** 正在流式输出的回答（会话 key → 已到达的可见文本）。2026-11-05（B1）：key 只在**吐出第一个字**时才出现——
+     *  map 里没有 key = 请求已发出但还没吐字（思考中，页面不显示气泡，状态看 [pending]）。 */
     val streaming: StateFlow<Map<String, String>> = _streaming.asStateFlow()
 
     /**
      * 流式版 [ask]（2026-10-26 打字机效果）：[block] 拿到 emit，每到一段回答就 emit（累积文本由这里维护），
      * 页面订阅 [streaming] 实时显示；结束后照常 [deliver] 落盘并清掉流式草稿。
+     *
+     * ★ B1（2026-11-05）：不再先塞 `key to ""`——空串会让页面立刻渲染「小悟正在思考…」占位气泡。
+     * 用户口径：发消息后先什么都不显示，等流式输出**拿到第一个字**再出现气泡。思考状态由 [pending] 承担。
      */
     fun askStream(key: String, block: suspend (emit: (String) -> Unit) -> Reply) {
         _pending.value = _pending.value + key
-        _streaming.value = _streaming.value + (key to "")
         val acc = StringBuilder()
         scope.launch {
             val reply = try {
