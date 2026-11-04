@@ -45,25 +45,33 @@ class AdminApi(
     private var bearerToken: String? = null
 
     /** 登录前探活：优先本机 127.0.0.1（服务器本机运行时公网 IP 回环不通），其次当前 baseUrl。
-     *  返回最终选中的地址；全部不可达时返回原地址（随后的请求会给出连接错误）。 */
+     *  每个候选的结果（含失败原因）都会写入本地诊断日志；全部不可达时返回原地址。 */
     suspend fun resolveBaseUrl(): String {
         val candidates = listOf("http://127.0.0.1:8080", baseUrl).distinct()
+        val results = mutableListOf<Pair<String, String>>()
         for (candidate in candidates) {
-            if (probeHealth(candidate)) {
+            val error = probeHealthError(candidate)
+            if (error == null) {
                 baseUrl = candidate
+                results += candidate to "OK"
+                AdminDiagnostics.record("PROBE", results.joinToString("\n") { (c, r) -> "  $c -> $r" } + "\n  selected: $candidate")
                 return candidate
             }
+            results += candidate to "FAIL: $error"
         }
+        AdminDiagnostics.record("PROBE", results.joinToString("\n") { (c, r) -> "  $c -> $r" } + "\n  selected: none (keep $baseUrl)")
         return baseUrl
     }
 
-    private suspend fun probeHealth(url: String): Boolean = try {
+    /** 返回 null 表示健康；否则返回简短失败原因（写入日志用）。 */
+    private suspend fun probeHealthError(url: String): String? = try {
         val response = client.request("$url/api/health") { method = HttpMethod.Get }
-        response.status.value in 200..299
+        if (response.status.value in 200..299) null else "HTTP ${response.status.value}"
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        false
+        AdminDiagnostics.recordError("PROBE_DETAIL", e, mapOf("url" to "$url/api/health"))
+        e.message ?: e.javaClass.simpleName
     }
 
     private val obsBucketUrl: String = System.getProperty("KEWU_OBS_BUCKET_URL")
@@ -232,7 +240,19 @@ class AdminApi(
         } catch (e: AdminApiException) {
             throw e
         } catch (e: Exception) {
-            throw AdminApiException("暂时无法连接服务器，请检查网络后重试")
+            AdminDiagnostics.recordError(
+                "REQUEST",
+                e,
+                mapOf(
+                    "url" to "$baseUrl$path",
+                    "method" to method.value,
+                    "baseUrl" to baseUrl,
+                    "log" to AdminDiagnostics.logFile.absolutePath,
+                ),
+            )
+            throw AdminApiException(
+                "暂时无法连接服务器（当前后端地址 $baseUrl）。\n详情见日志：${AdminDiagnostics.logFile.absolutePath}",
+            )
         }
     }
 

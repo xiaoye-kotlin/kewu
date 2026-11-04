@@ -10,7 +10,9 @@ import androidx.compose.ui.window.rememberWindowState
 import com.kewu.admin.ui.AdminApp
 import com.kewu.admin.ui.KewuAdminTheme
 
-fun main() = application {
+fun main() {
+    AdminDiagnostics.installGlobalHandler()
+    application {
     Window(
         onCloseRequest = ::exitApplication,
         title = "课悟总控端 · Kewu Admin",
@@ -22,5 +24,6 @@ fun main() = application {
         KewuAdminTheme {
             AdminApp()
         }
+    }
     }
 }
