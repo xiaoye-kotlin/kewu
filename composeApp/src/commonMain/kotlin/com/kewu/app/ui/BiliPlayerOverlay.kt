@@ -45,11 +45,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -130,6 +130,9 @@ internal fun BilibiliPlayerHost() {
 private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
     val cs = COUITheme.colorScheme
     val backdrop = rememberGlassBackdrop()
+    // ★ H1（2026-11-05）：键盘弹起时把「标题卡 + 收藏按钮」暂时收起，把下半区空间全让给 AI 对话，
+    // 否则固定头部约 130dp + 键盘高度会把对话区压到只剩几十 dp（读原始 ime insets，不受子级消费影响）。
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     var retryToken by remember(video) { mutableStateOf(0) }
     var error by remember(video, retryToken) { mutableStateOf<String?>(null) }
     // B 站直链带过期参数：重试时按标题重新搜一次、取同一 bvid 的新直链（拿不到就沿用旧的）
@@ -163,8 +166,12 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
         Modifier
             .fillMaxSize()
             .background(if (fullscreen) Color.Black else cs.surface)
-            // 播放层挂在 App 根部，不在主界面内容区的键盘避让之下：自己避让键盘与系统导航栏
-            .then(if (fullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))),
+            // 播放层挂在 App 根部，不在主界面内容区的键盘避让之下：只自己避让**系统导航栏**。
+            // ★ H1（2026-11-05）：这里**不能再避让 ime** —— 整页级 windowInsetsPadding(ime) 会把
+            //   顶栏+16:9 播放器+标题卡+收藏按钮一起压进「全屏−键盘」，固定头部吃光高度导致对话区被挤没，
+            //   且会**消费 ime insets**，使面板内再补 imePadding() 变成 0 完全无效。
+            //   键盘避让改由 VideoTutorPanel 内层 Column 单独承担（只压缩对话区，播放器不动）。
+            .then(if (fullscreen) Modifier else Modifier.windowInsetsPadding(WindowInsets.navigationBars)),
     ) {
         if (!fullscreen) Box(Modifier.matchParentSize().layerBackdrop(backdrop).background(cs.surface))
         Column(Modifier.fillMaxSize().then(if (fullscreen) Modifier else Modifier.statusBarsPadding())) {
@@ -206,28 +213,30 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                         .padding(horizontal = 12.dp, vertical = 14.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    // 2026-11-03：顶栏标题会被省略，这里用 coui 卡片完整显示（不限行数，可长按选中复制）
-                    io.github.suqi8.coui.kmp.basic.Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        cornerRadius = 20.dp,
-                        insideMargin = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
-                        colors = kewuCardColors(),
-                    ) { Column {
-                        androidx.compose.foundation.text.selection.SelectionContainer {
-                            Text(video.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp)
-                        }
-                        Spacer(Modifier.height(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                Modifier.clip(CircleShape).background(Color(0xFFFB7299).copy(alpha = 0.14f))
-                                    .padding(horizontal = 8.dp, vertical = 2.dp),
-                            ) { Text("B 站", color = Color(0xFFFB7299), fontSize = 11.sp, fontWeight = FontWeight.Medium) }
-                            Spacer(Modifier.width(8.dp))
-                            Text(video.bvid, color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
-                        }
-                    } }
-                    // ★ X7（2026-11-05）：进入视频后标题下方也显示 COUi 满宽收藏按钮（与「AI 总结这个视频」同款）
-                    BiliFavoriteButton(video)
+                    if (!imeVisible) {
+                        // 2026-11-03：顶栏标题会被省略，这里用 coui 卡片完整显示（不限行数，可长按选中复制）
+                        io.github.suqi8.coui.kmp.basic.Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            cornerRadius = 20.dp,
+                            insideMargin = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 14.dp),
+                            colors = kewuCardColors(),
+                        ) { Column {
+                            androidx.compose.foundation.text.selection.SelectionContainer {
+                                Text(video.title, color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, lineHeight = 23.sp)
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    Modifier.clip(CircleShape).background(Color(0xFFFB7299).copy(alpha = 0.14f))
+                                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                                ) { Text("B 站", color = Color(0xFFFB7299), fontSize = 11.sp, fontWeight = FontWeight.Medium) }
+                                Spacer(Modifier.width(8.dp))
+                                Text(video.bvid, color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
+                            }
+                        } }
+                        // ★ X7（2026-11-05）：进入视频后标题下方也显示 COUi 满宽收藏按钮（与「AI 总结这个视频」同款）
+                        BiliFavoriteButton(video)
+                    }
                     // ★ X8/X9（2026-11-05）：进入即自动总结，下方直接是「视频小悟」对话面板（约占大半个屏）
                     VideoTutorPanel(backdrop, video)
                 }
@@ -487,7 +496,11 @@ private fun VideoTutorPanel(
     ChatAutoScroll(listState, (msgs.lastOrNull()?.id ?: 0L) to (stream?.length?.div(40) ?: -1))
 
     Box(Modifier.fillMaxSize().onGloballyPositioned { rootOrigin = it.positionInWindow() }) {
-        Column(Modifier.fillMaxSize()) {
+        // ★ H1（2026-11-05）：只让**对话区**随输入法收缩（状态条 + LazyColumn + 输入栏）。
+        // 播放层不在 MainScreen 内容区 imePadding 之内，且根 Box 已不再消费 ime insets，
+        // 这里拿到的是完整键盘高度；LazyColumn 有 weight(1f) 会自动让位，输入框始终可见。
+        // 参考 KewuCoui.kt OverlayBottomSheet 的 Column(...imePadding()) 同款写法。
+        Column(Modifier.fillMaxSize().imePadding()) {
             // 顶部分状态条
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(bottom = 6.dp)) {
                 Box(Modifier.size(8.dp).clip(CircleShape).background(
