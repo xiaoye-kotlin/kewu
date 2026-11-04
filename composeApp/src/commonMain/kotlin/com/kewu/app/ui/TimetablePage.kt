@@ -2,6 +2,7 @@ package com.kewu.app.ui
 
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -50,12 +52,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.app.BackHandler
 import com.kewu.app.KewuGreen
 import com.kewu.app.KewuBlue
 import io.github.suqi8.coui.kmp.basic.Card
 import io.github.suqi8.coui.kmp.basic.CardColors
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.launch
 
 // ───────────────────────── 数据模型（mock） ─────────────────────────
 
@@ -69,6 +73,10 @@ private data class ClassSlot(
     val start: String,
     val end: String,
     val state: SlotState,
+    /** 2026-11-05（A4）：课表条目的课程 id，已上课点击查课堂纪要用 */
+    val courseId: String = "",
+    /** 2026-11-05（A4）：这节课所在天的完整日期 yyyy-MMdd（查当天纪要） */
+    val date: String = "",
 )
 
 private data class DaySchedule(
@@ -135,6 +143,8 @@ private fun buildWeek(entries: List<com.kewu.app.ScheduleEntry>): Pair<List<DayS
         val parts = com.kewu.app.todayCn(mondayMs - 8 * 3_600_000L + i * 86_400_000L).split("-")
         return "${parts[1].toInt()}/${parts[2].toInt()}"
     }
+    // 2026-11-05（A4）：完整日期 yyyy-MM-dd，已上课点击查当天课堂纪要用
+    fun fullDate(i: Int): String = com.kewu.app.todayCn(mondayMs - 8 * 3_600_000L + i * 86_400_000L)
     fun minutes(t: String) = t.split(":").let { (it.getOrNull(0)?.toIntOrNull() ?: 0) * 60 + (it.getOrNull(1)?.toIntOrNull() ?: 0) }
     val names = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
     val week = (0..6).map { i ->
@@ -147,7 +157,8 @@ private fun buildWeek(entries: List<com.kewu.app.ScheduleEntry>): Pair<List<DayS
                 else -> SlotState.UPCOMING
             }
             ClassSlot(e.courseName, e.location.ifBlank { "地点待定" }, e.teacherName.ifBlank { "老师待定" } +
-                (if (e.teacherName.isNotBlank() && !e.teacherName.endsWith("老师")) "老师" else ""), e.startTime, e.endTime, state)
+                (if (e.teacherName.isNotBlank() && !e.teacherName.endsWith("老师")) "老师" else ""), e.startTime, e.endTime, state,
+                courseId = e.courseId, date = fullDate(i))
         }
         DaySchedule(names[i], dateLabel(i), isToday = i == dayIndex, slots = slots)
     }
@@ -163,6 +174,33 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
     val week = built.first
     var selected by remember { mutableIntStateOf(built.second) } // 默认选中今天
     val scrollState = rememberScrollState()
+    // ★ A4（2026-11-05）：已上过的课点击 → 查这节课当天有没有课堂纪要，有则进一步查看（页内覆盖层滑入）
+    val scope = rememberCoroutineScope()
+    val snackbar = LocalKewuSnackbar.current
+    var noteTarget by remember { mutableStateOf<com.kewu.app.ClassNoteTarget?>(null) }
+    var checkingNote by remember { mutableStateOf(false) }
+    fun openNoteIfAny(slot: ClassSlot) {
+        if (checkingNote || slot.courseId.isBlank()) return
+        checkingNote = true
+        scope.launch {
+            try {
+                val recs = com.kewu.app.KewuApi.getClassRecordings(slot.courseId).orEmpty()
+                // 当天有已生成（DONE）的纪要才进详情；转写中/失败给明确提示，没有则提示还没有纪要
+                val done = recs.filter { it.transcriptStatus == "DONE" }
+                when {
+                    done.any { it.date == slot.date } ->
+                        noteTarget = com.kewu.app.ClassNoteTarget(slot.courseId, slot.date)
+                    done.isNotEmpty() ->
+                        noteTarget = com.kewu.app.ClassNoteTarget(slot.courseId, done.first().date)
+                    recs.any { it.transcriptStatus == "TRANSCRIBING" || it.transcriptStatus == "PENDING_ASR" } ->
+                        snackbar.toast("这节课的纪要在生成中，等铃铛通知好了再来～")
+                    else -> snackbar.toast("这节课还没有课堂纪要")
+                }
+            } finally {
+                checkingNote = false
+            }
+        }
+    }
 
     // 与课堂页同款：向下浏览收起底部导航栏，回顶展开
     // 2026-11-05（A2）：基线重建首帧不动作，防返回时误判下滑藏导航。
@@ -220,7 +258,9 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                                 if (d.slots.isEmpty()) {
                                     EmptyDayCard(d.label, week.all { it.slots.isEmpty() })
                                 } else {
-                                    d.slots.forEachIndexed { i, slot -> ClassBlock(slot, i) }
+                                    d.slots.forEachIndexed { i, slot ->
+                                        ClassBlock(slot, i) { if (slot.state == SlotState.ATTENDED) openNoteIfAny(slot) }
+                                    }
                                 }
                                 Spacer(Modifier.height(8.dp))
                             }
@@ -235,6 +275,24 @@ fun TimetablePage(onBack: () -> Unit, onNavHide: (Boolean) -> Unit) {
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
                 )
             }
+        }
+
+        // ★ A4（2026-11-05）：已上课 → 课堂纪要详情（页内覆盖层，Telegram 式右推入，不生硬）
+        val nt = noteTarget
+        BackHandler(enabled = nt != null) { noteTarget = null }
+        AnimatedVisibility(
+            visible = nt != null,
+            modifier = Modifier.align(Alignment.Center),
+            enter = slideInHorizontally(spring(dampingRatio = 0.8f, stiffness = 400f)) { w -> w } + fadeIn(tween(220)),
+            exit = slideOutHorizontally(spring(dampingRatio = 0.8f, stiffness = 400f)) { w -> -w / 4 } + fadeOut(tween(180)),
+            label = "timetableNote",
+        ) {
+            val target = nt ?: return@AnimatedVisibility
+            ClassNoteDetailScreen(
+                courseId = target.courseId,
+                date = target.date,
+                onBack = { noteTarget = null },
+            )
         }
     }
 }
@@ -368,9 +426,9 @@ private fun DayStrip(
     }
 }
 
-/** 单节课卡片（coui Card）：徽章 + 时间 + 课程信息 + 状态标签。 */
+/** 单节课卡片（coui Card）：徽章 + 时间 + 课程信息 + 状态标签。2026-11-05（A4）：已上课可点击（onClick）。 */
 @Composable
-private fun ClassBlock(slot: ClassSlot, index: Int) {
+private fun ClassBlock(slot: ClassSlot, index: Int, onClick: () -> Unit = {}) {
     val cs = COUITheme.colorScheme
     Card(
         modifier = Modifier
@@ -380,6 +438,7 @@ private fun ClassBlock(slot: ClassSlot, index: Int) {
         cornerRadius = 16.dp,
         insideMargin = PaddingValues(16.dp),
         colors = kewuCardColors(),
+        onClick = { if (slot.state == SlotState.ATTENDED) onClick() },
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -405,7 +464,12 @@ private fun ClassBlock(slot: ClassSlot, index: Int) {
                 )
                 Spacer(Modifier.height(8.dp))
                 when (slot.state) {
-                    SlotState.ATTENDED -> StatusTag("已上过", cs.secondaryContainer, cs.onSecondaryVariant)
+                    // 2026-11-05（A4）：已上课可点 → 查当天课堂纪要；给可点提示
+                    SlotState.ATTENDED -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusTag("已上过", cs.secondaryContainer, cs.onSecondaryVariant)
+                        Spacer(Modifier.weight(1f))
+                        Text("课堂纪要 ›", color = KewuBlue, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                    }
                     SlotState.LIVE -> StatusTag("正在上课", cs.tertiaryContainer, cs.onTertiaryContainer)
                     SlotState.UPCOMING -> StatusTag("未开始", cs.secondaryContainer, cs.onSurfaceSecondary)
                 }
