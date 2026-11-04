@@ -117,6 +117,7 @@ import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.icon.COUIIcons
 import io.github.suqi8.coui.kmp.icon.extended.Add
 import io.github.suqi8.coui.kmp.icon.extended.Close
+import io.github.suqi8.coui.kmp.icon.extended.Edit
 import io.github.suqi8.coui.kmp.icon.extended.File
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import io.github.suqi8.coui.kmp.icon.extended.Ok
@@ -776,6 +777,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             }
 
             // ── 液态玻璃输入栏：共用组件（键盘间距 / 引用条 / 入场动画全 App 一致） ──
+            // 2026-11-04（P6，InputView 语言重构）：[语音/键盘切换][+][玻璃输入框…][发送]，
+            // 左侧 mic 钮开/关录音面板（开着时变 Edit 笔提示切回文字），「+」面板含相册/拍照（真实可用）。
             ChatInputDock(
                 backdrop = pageBackdrop,
                 input = input,
@@ -787,26 +790,28 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 stagedImage = stagedImage,
                 onRemoveImage = { stagedImage = null },
                 leading = {
-                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
-                        panel = if (panel == AssistantPanel.ATTACH) AssistantPanel.NONE else AssistantPanel.ATTACH
-                    }) { ChatGlyphIcon(COUIIcons.Add) }
-                },
-                trailing = {
-                    ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
-                        when {
-                            panel == AssistantPanel.VOICE -> finishVoice(send = false)
-                            aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
-                            else -> scope.launch {
-                                com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
-                                val err = recorder.start()
-                                if (err != null) snackbar.toast(err) else {
-                                    haptic(HapticKind.Light)
-                                    panel = AssistantPanel.VOICE
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                            when {
+                                panel == AssistantPanel.VOICE -> finishVoice(send = false)
+                                aiThinking || mediaBusy -> scope.launch { snackbar.toast("小悟还在回答，稍等一下") }
+                                else -> scope.launch {
+                                    com.kewu.app.AudioPlayback.stop() // 别把正在播放的声音录进去
+                                    val err = recorder.start()
+                                    if (err != null) snackbar.toast(err) else {
+                                        haptic(HapticKind.Light)
+                                        panel = AssistantPanel.VOICE
+                                    }
                                 }
                             }
-                        }
-                    }) { ChatGlyphIcon(COUIIcons.Mic) }
+                        }) { ChatGlyphIcon(if (panel == AssistantPanel.VOICE) COUIIcons.Edit else COUIIcons.Mic) }
+                        Spacer(Modifier.width(6.dp))
+                        ChatRoundIconBtn(backdrop = pageBackdrop, onClick = {
+                            panel = if (panel == AssistantPanel.ATTACH) AssistantPanel.NONE else AssistantPanel.ATTACH
+                        }) { ChatGlyphIcon(COUIIcons.Add) }
+                    }
                 },
+                trailing = null,
             )
             Spacer(Modifier.height(6.dp))
         }
