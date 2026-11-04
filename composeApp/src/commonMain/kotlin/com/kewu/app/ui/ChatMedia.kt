@@ -577,7 +577,8 @@ internal fun ChatImageBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
     val dim by animateFloatAsState(if (msg.mediaState == ChatMediaState.DONE) 0f else 0.38f, tween(240), label = "imgDim")
     // ★ 2026-11-04 U3 weui：图片气泡与文本气泡同一套语言（6dp 圆角 + 极淡描边 + 浅灰占位底），
     //   旧版 18dp 大圆角 + 主题容器深色底，和重做后的 weui 文本气泡并排时明显不是一家人。
-    val shape = RoundedCornerShape(6.dp)
+    // ★ X3（2026-11-05）：图片气泡圆角 6→12dp，与文本气泡统一
+    val shape = RoundedCornerShape(12.dp)
     Box(
         Modifier
             .graphicsLayer {
@@ -645,7 +646,8 @@ internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
     val widthDp = (110 + secs * 2.4f).coerceAtMost(230f)
     // ★ 2026-11-04 U3 weui：语音气泡也统一到「纯 #95EC69 + #191919 黑字 + 6dp 圆角」。
     //   旧版是品牌主色胶囊 + 白字 22dp 大圆角，与重做后的文本气泡完全不是一套语言。
-    val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 2.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
+    // ★ X3（2026-11-05）：语音气泡圆角 6→12dp（靠头像侧尖角处留 4dp），与文本气泡统一
+    val shape = RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomEnd = 12.dp, bottomStart = 12.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 40L)
     Surface(
         modifier = Modifier.widthIn(min = widthDp.dp, max = 260.dp).riseEnter(p, 26f),

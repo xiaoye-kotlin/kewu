@@ -324,7 +324,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 // ★ V7：优先用已落盘的标记，payload 仅作旧链路兜底
                 val kw = inc.entry.biliKeyword
                     ?: (inc.payload as? BiliSuggest)?.keyword?.takeIf { it.isNotBlank() }
-                messages = messages + ChatMsg(inc.entry.text, isUser = false, id = inc.entry.id, ts = inc.entry.ts, biliKeyword = kw)
+                // ★ X2（2026-11-05）：修复语音通话后气泡角色错乱——按 entry.role 判定，
+                // 否则经 deliverVoiceTurn→incoming 广播的「用户说的话」被当成 AI 气泡。
+                messages = messages + ChatMsg(inc.entry.text, isUser = inc.entry.role == "user", id = inc.entry.id, ts = inc.entry.ts, biliKeyword = kw)
             }
         }
     }
@@ -536,14 +538,28 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             // 原人格区（76dp 圆头像 / 小悟 / 电话钮 / KEWU AI）与两颗上下文 chip 整块删除，
             // LazyColumn 直接占满剩余空间；这里只留一条 36dp 细横幅显示名字，不显示头像。
             // ★ 语音通话入口原在人格区电话钮，按 W10 迁到「+」面板。
+            // ★ X1（2026-11-05）：横幅加高（36→52dp），加底部分隔线 + 微妙底色差，和聊天列区分
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(36.dp)
+                    .height(52.dp)
                     .background(cs.surface),
-                contentAlignment = Alignment.Center,
             ) {
-                Text("小悟", color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "小悟",
+                    color = cs.onSurface,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.align(Alignment.Center),
+                )
+                // 底部 1dp 分隔线：让横幅与聊天列边界清晰（深色/浅色主题下都可见）
+                Box(
+                    Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(cs.onSurface.copy(alpha = 0.12f)),
+                )
             }
 
             // ── 对话列 ──

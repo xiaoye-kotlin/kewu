@@ -430,7 +430,8 @@ internal fun ChatAiBubble(
     /** 文字选择模式（U2）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
     selectFor: ChatTextSelectState? = null,
 ) {
-    val shape = RoundedCornerShape(topStart = 2.dp, topEnd = 6.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
+    // ★ X3（2026-11-05）：气泡圆角 6→12dp（靠头像侧尖角处留 4dp），整体更圆润
+    val shape = RoundedCornerShape(topStart = 4.dp, topEnd = 12.dp, bottomEnd = 12.dp, bottomStart = 12.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
     val selecting = selectFor?.msgKey == msg.id
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
@@ -468,7 +469,7 @@ internal fun ChatAiBubble(
                 msg.formula?.let { f ->
                     Spacer(Modifier.height(7.dp))
                     Surface(
-                        shape = RoundedCornerShape(6.dp),
+                        shape = RoundedCornerShape(10.dp),
                         color = Color(0xFFF2F2F2),
                         border = BorderStroke(1.dp, WeuiBubbleBorder),
                     ) {
@@ -483,13 +484,12 @@ internal fun ChatAiBubble(
     }
 }
 
-/** weui 用户侧头像：与 AI 头像同规格（40dp / 圆角 4dp），聊天气泡左右对称。 */
+/** weui 用户侧头像：复用「我的」页同款 [GradientAvatar]（圆 + 品牌渐变环 + 姓名首字）。★ X4（2026-11-05） */
 @Composable
 internal fun ChatUserAvatar(modifier: Modifier = Modifier) {
-    Box(
-        modifier.size(40.dp).clip(RoundedCornerShape(4.dp)).background(KewuBlue),
-        contentAlignment = Alignment.Center,
-    ) { PersonGlyph(Modifier.size(18.dp), Color.White) }
+    val name = remember { KewuApi.displayName("同学") }
+    val initial = name.trim().firstOrNull()?.toString() ?: "我"
+    GradientAvatar(initial, 40.dp)
 }
 
 /** 用户气泡（2026-11-04 U3 按 weui 重做）：纯 `#95EC69` + 黑字 + 右侧小尖角 + 40dp 用户头像。 */
@@ -533,7 +533,8 @@ internal fun ChatUserBubble(
         }
         return
     }
-    val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 2.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
+    // ★ X3（2026-11-05）：气泡圆角 6→12dp（靠头像侧尖角处留 4dp），整体更圆润
+    val shape = RoundedCornerShape(topStart = 12.dp, topEnd = 4.dp, bottomEnd = 12.dp, bottomStart = 12.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
     Row(
         Modifier.fillMaxWidth(),
