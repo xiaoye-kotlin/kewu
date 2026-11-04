@@ -331,8 +331,10 @@ fun TeacherConsolePage(
                     onToast = { scope.launch { snackbar.toast(it) } },
                 )
                 is ConsoleDrill.CLASS_NOTE -> {
+                    // ★ E1（2026-11-05）：教师端课堂纪要重构 —— 与学生端完全不同的「教学视角」页：
+                    // 全班听课状态总览（谁认真/开小差/聊天）+ 逐人录音回放 + AI 课堂复盘。
                     BackHandler { drill = ConsoleDrill.NONE }
-                    ClassNoteDetailScreen(
+                    TeacherClassNoteScreen(
                         courseId = d.courseId,
                         date = d.date,
                         onBack = { drill = ConsoleDrill.NONE },

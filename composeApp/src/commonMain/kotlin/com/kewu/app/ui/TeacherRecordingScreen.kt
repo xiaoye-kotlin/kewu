@@ -277,7 +277,7 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
 }
 
 @Composable
-private fun FocusCell(label: String, count: Int, color: androidx.compose.ui.graphics.Color, modifier: Modifier) {
+internal fun FocusCell(label: String, count: Int, color: androidx.compose.ui.graphics.Color, modifier: Modifier) {
     val cs = COUITheme.colorScheme
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text("$count", color = color, fontSize = 20.sp, fontWeight = FontWeight.Bold)
@@ -287,7 +287,7 @@ private fun FocusCell(label: String, count: Int, color: androidx.compose.ui.grap
 }
 
 @Composable
-private fun StudentRecordingCard(r: SessionRecordingInfo, index: Int) {
+internal fun StudentRecordingCard(r: SessionRecordingInfo, index: Int) {
     val cs = COUITheme.colorScheme
     val teacher = r.role.equals("teacher", true)
     Card(

@@ -386,7 +386,7 @@ fun ClassNoteDetailScreen(
 
 /** 转写状态 → 顶部横幅（非 DONE 时解释为什么看不到纪要）。 */
 @Composable
-private fun StatusBanner(rec: ClassRecordingInfo) {
+internal fun StatusBanner(rec: ClassRecordingInfo) {
     val cs = COUITheme.colorScheme
     val (text, tint) = when (rec.transcriptStatus) {
         "DONE" -> return
