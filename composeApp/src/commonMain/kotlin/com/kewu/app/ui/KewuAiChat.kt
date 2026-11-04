@@ -716,9 +716,10 @@ internal fun rememberChatMenuState(): ChatMenuState = remember { ChatMenuState()
 /**
  * 一条消息：AI 走液态玻璃气泡（下方可带 B 站推荐卡），用户走品牌色气泡；长按弹菜单。
  * 放在 LazyColumn 的 item 里（调用方负责 key / animateItem）。
+ * [onBiliLoaded]：本条 AI 回答的 B 站视频卡加载完成时回调（页面用来强制滚到底）。
  */
 @Composable
-internal fun ChatMessageItem(msg: AiChatMsg, backdrop: LayerBackdrop, menu: ChatMenuState) {
+internal fun ChatMessageItem(msg: AiChatMsg, backdrop: LayerBackdrop, menu: ChatMenuState, onBiliLoaded: (() -> Unit)? = null) {
     if (msg.isUser) {
         ChatUserBubble(msg, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }) {
             menu.msg = msg
@@ -733,7 +734,7 @@ internal fun ChatMessageItem(msg: AiChatMsg, backdrop: LayerBackdrop, menu: Chat
             // B 站相关视频：只在模型判断「学生在问不懂的知识点」时出现；点卡片在 App 内直接播放
             msg.biliKeyword?.let { kw ->
                 Spacer(Modifier.height(6.dp))
-                BilibiliVideoSuggest(kw, modifier = Modifier.padding(end = 48.dp))
+                BilibiliVideoSuggest(kw, modifier = Modifier.padding(end = 48.dp), onLoaded = onBiliLoaded)
             }
         }
     }

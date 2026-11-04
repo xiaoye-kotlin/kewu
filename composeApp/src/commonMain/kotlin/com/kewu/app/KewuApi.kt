@@ -118,6 +118,15 @@ data class BiliVideoNote(
     val transcript: String,
 )
 
+/** B 站合集 / 多分P 的一集（2026-11-04）：合集→各集 bvid 不同；分P→同 bvid 不同 cid。 */
+data class BiliEpisodeInfo(
+    val bvid: String,
+    val cid: Long = 0,
+    val title: String,
+    /** m:ss / h:mm:ss；拿不到为空串 */
+    val duration: String = "",
+)
+
 /** B 站学科视频（接口文档 14.6）：videoUrl/audioUrl 为 DASH 直链，可能为空（风控/会员/超时）。 */
 data class BilibiliVideoInfo(
     val bvid: String,
@@ -127,6 +136,16 @@ data class BilibiliVideoInfo(
     val audioUrl: String?,
     /** 时长 m:ss / h:mm:ss（2026-11-03）；老后端 / 拿不到为空串 */
     val duration: String = "",
+    /** 所属 UGC 合集 id（2026-11-04）；0 = 不属于合集 */
+    val seasonId: Long = 0,
+    val seasonTitle: String = "",
+    val seasonCover: String = "",
+    /** 合集内视频数 */
+    val seasonCount: Int = 0,
+    /** 多分P 视频的分P 数；单视频为 0 */
+    val pageCount: Int = 0,
+    /** 分集元数据（非空 = 客户端发「合集卡」，点进去看全部分集） */
+    val episodes: List<BiliEpisodeInfo> = emptyList(),
 )
 
 data class UserMe(
@@ -1197,6 +1216,50 @@ object KewuApi {
                 videoUrl = o["videoUrl"].strOrNull()?.takeIf { it.isNotBlank() },
                 audioUrl = o["audioUrl"].strOrNull()?.takeIf { it.isNotBlank() },
                 duration = o["duration"].strOrNull().orEmpty(),
+                // 2026-11-04：合集 / 分P 分集元数据（老后端没有这些字段，全部落默认值）
+                seasonId = o["seasonId"].strOrNull()?.toLongOrNull() ?: 0L,
+                seasonTitle = o["seasonTitle"].strOrNull().orEmpty(),
+                seasonCover = o["seasonCover"].strOrNull().orEmpty(),
+                seasonCount = o["seasonCount"].strOrNull()?.toIntOrNull() ?: 0,
+                pageCount = o["pageCount"].strOrNull()?.toIntOrNull() ?: 0,
+                episodes = (o["episodes"] as? JsonArray).orEmpty().mapNotNull { e ->
+                    (e as? JsonObject)?.let { eo ->
+                        BiliEpisodeInfo(
+                            bvid = eo["bvid"].str(),
+                            cid = eo["cid"].strOrNull()?.toLongOrNull() ?: 0L,
+                            title = eo["title"].str(),
+                            duration = eo["duration"].strOrNull().orEmpty(),
+                        )
+                    }
+                },
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /**
+     * 单个 B 站视频的播放直链（2026-11-04）：`GET /api/bilibili/play?bvid=…&cid=…`。
+     * 合集分集 / 指定分P 点击时现取，不依赖搜索结果里可能已过期的直链；[cid] 省略 = 第一集/第一P。
+     * 返回带直链的完整信息；失败（含后端 code!=0）返回 null。
+     */
+    suspend fun getBilibiliPlay(bvid: String, cid: Long = 0): BilibiliVideoInfo? = try {
+        val url = buildString {
+            append(queryUrl("$BASE_URL/api/bilibili/play", "bvid", bvid))
+            if (cid > 0) append("&cid=").append(cid)
+        }
+        val resp = client.get(url) {
+            timeout { requestTimeoutMillis = 30_000; socketTimeoutMillis = 30_000 }
+        }
+        val el = json.parseToJsonElement(resp.bodyAsText()).jsonObject
+        if (el["code"].str() != "0") null
+        else {
+            val d = el["data"]?.jsonObject
+            BilibiliVideoInfo(
+                bvid = d?.get("bvid").str().ifBlank { bvid },
+                title = d?.get("title").str().ifBlank { bvid },
+                cover = d?.get("cover").str(),
+                videoUrl = d?.get("videoUrl").strOrNull()?.takeIf { it.isNotBlank() },
+                audioUrl = d?.get("audioUrl").strOrNull()?.takeIf { it.isNotBlank() },
             )
         }
     } catch (e: CancellationException) { throw e }

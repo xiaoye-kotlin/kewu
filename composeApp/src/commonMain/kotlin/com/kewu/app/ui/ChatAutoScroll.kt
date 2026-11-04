@@ -25,10 +25,22 @@ import kotlinx.coroutines.yield
  *   - 视口高度每变一次（键盘弹起 / 收起、人格区展开、输入框位移的每一帧），若 stick 就立刻把最后一条底边对齐视口底；
  *   - 有新消息时（[messageKey] 变化）平滑滚到最底，并重新贴底；
  *   - 最后一条 item 内容「长高」时（B 站视频卡异步加载完成、图片出图等）也自动贴底，不用用户手动拉到最底。
+ *
+ * [forceKey]（2026-11-04）：外部「内容已就绪」的强制信号（如 B 站视频卡加载完成回调）。
+ * 变化时无视 stick 直接重新贴底 —— 视频卡这类「在已结束消息下方追加内容」的场景，
+ * 用户翻上去看回答时 stick=false，靠 size 监听不会滚，但新内容就是给现在看的，必须拉下去。
  */
 @Composable
-fun ChatAutoScroll(listState: LazyListState, messageKey: Any) {
+fun ChatAutoScroll(listState: LazyListState, messageKey: Any, forceKey: Any? = null) {
     var stick by remember { mutableStateOf(true) }
+
+    // 2026-11-04：外部强制贴底信号（B 站视频卡加载完成等「给当前用户看的新内容已就绪」）
+    LaunchedEffect(forceKey) {
+        if (forceKey == null) return@LaunchedEffect
+        stick = true
+        yield()
+        listState.scrollToBottom(animated = true)
+    }
 
     // 用户拖动结束：在底部 → 继续贴底；往上翻了 → 不再自动拉回（看历史时不打扰）
     LaunchedEffect(listState) {

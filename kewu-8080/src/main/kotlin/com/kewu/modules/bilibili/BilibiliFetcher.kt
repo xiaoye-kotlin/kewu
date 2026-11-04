@@ -95,19 +95,35 @@ class BilibiliFetcher {
 
     /** 返回 (视频标题, 音频直链 baseUrl)。任何一步失败都抛带原因的异常。 */
     suspend fun fetchAudio(bvid: String): Pair<String, String> {
-        val (title, cid) = view(bvid)
+        val info = viewInfo(bvid)
         // 2026-11-02：直接走 wbi/play 在服务器 IP 上会被风控返回 HTML（JSON 解析报 Unexpected token），
         // 改为与搜索列表同一路径：playurl 优先、WBI 兜底；都拿不到 DASH 时再试老的 durl 解析
         val audio = runCatching {
-            try { fetchDashUrlsByPlayurl(bvid, cid).second } catch (e: Throwable) {
+            try { fetchDashUrlsByPlayurl(bvid, info.cid).second } catch (e: Throwable) {
                 log.warn("B站 playurl 取音频失败，尝试 WBI 兜底 bvid=$bvid：${e.message}")
-                fetchDashUrlsByWbi(bvid, cid).second
+                fetchDashUrlsByWbi(bvid, info.cid).second
             }
-        }.getOrElse { playUrl(bvid, cid) }
-        return title to audio
+        }.getOrElse { playUrl(bvid, info.cid) }
+        return info.title to audio
     }
 
-    private suspend fun view(bvid: String): Pair<String, Long> {
+    /** view 接口解析结果：基础信息 + 分P 列表 + 所属 UGC 合集（2026-11-04，合集/分P 分集展示用）。 */
+    data class BiliViewData(
+        val title: String,
+        val cover: String,
+        /** pages[0].cid（多 P 视频默认第一集），老视频兜底 data.cid */
+        val cid: Long,
+        /** 分P 列表（仅 >1 P 时非空）：同 bvid 不同 cid */
+        val pages: List<BiliEpisode>,
+        /** 所属合集 id；不属于任何合集为 0 */
+        val seasonId: Long,
+        val seasonTitle: String,
+        val seasonCover: String,
+        /** 合集分集（各集 bvid 不同）；无合集为空 */
+        val seasonEpisodes: List<BiliEpisode>,
+    )
+
+    suspend fun viewInfo(bvid: String): BiliViewData {
         val resp = client.get("https://api.bilibili.com/x/web-interface/view") {
             header("User-Agent", UA)
             header("Referer", REFERER)
@@ -120,12 +136,49 @@ class BilibiliFetcher {
         if (code != 0) throw RuntimeException("B站 view 接口错误 code=$code ${el["message"]}")
         val data = el["data"]?.jsonObject ?: throw RuntimeException("B站 view 缺少 data")
         val title = data["title"]?.jsonPrimitive?.content ?: ""
-        // 优先按 pages[0].cid 取（多分 P 视频默认第一集），老视频再兜底 data.cid
-        val pages = data["pages"]?.let { it as? JsonArray }
-        val cid = pages?.firstOrNull()?.jsonObject?.get("cid")?.jsonPrimitive?.content?.toLongOrNull()
+        val cover = normalizeCover(data["pic"]?.jsonPrimitive?.content.orEmpty())
+        // 分P：pages[].duration 为秒（int）
+        val pages = (data["pages"] as? JsonArray)?.mapNotNull { p ->
+            (p as? JsonObject)?.let { o ->
+                val pcid = o["cid"]?.jsonPrimitive?.content?.toLongOrNull() ?: return@let null
+                BiliEpisode(bvid, pcid, o["part"]?.jsonPrimitive?.content ?: "", fmtSeconds(o["duration"]))
+            }
+        }.orEmpty()
+        val cid = pages.firstOrNull()?.cid
             ?: (data["cid"] as? JsonPrimitive)?.content?.toLongOrNull()
             ?: throw RuntimeException("B站 view 缺少 cid（视频号可能无效）")
-        return title to cid
+        // UGC 合集：ugc_season.sections[].episodes[]，每集有独立 bvid/cid；duration 也是秒
+        val us = data["ugc_season"] as? JsonObject
+        val seasonEps = us?.let { s ->
+            (s["sections"] as? JsonArray)?.flatMap { sec ->
+                ((sec as? JsonObject)?.get("episodes") as? JsonArray).orEmpty()
+            }?.mapNotNull { e ->
+                (e as? JsonObject)?.let { o ->
+                    val ebv = o["bvid"]?.jsonPrimitive?.content?.trim().orEmpty()
+                    val ecid = o["cid"]?.jsonPrimitive?.content?.toLongOrNull() ?: return@let null
+                    if (ebv.isEmpty()) return@let null
+                    BiliEpisode(ebv, ecid, o["title"]?.jsonPrimitive?.content ?: "", fmtSeconds(o["duration"]))
+                }
+            }.orEmpty().distinctBy { it.bvid }
+        }.orEmpty()
+        return BiliViewData(
+            title = title, cover = cover, cid = cid,
+            pages = if (pages.size > 1) pages else emptyList(),
+            seasonId = us?.get("id")?.jsonPrimitive?.content?.toLongOrNull() ?: 0L,
+            seasonTitle = us?.get("title")?.jsonPrimitive?.content ?: "",
+            seasonCover = normalizeCover(us?.get("cover")?.jsonPrimitive?.content.orEmpty()),
+            seasonEpisodes = seasonEps.take(100),
+        )
+    }
+
+    /** 秒（int / 字符串）→ m:ss / h:mm:ss；拿不到返回空串。 */
+    private fun fmtSeconds(el: kotlinx.serialization.json.JsonElement?): String {
+        val total = (el as? JsonPrimitive)?.content?.toIntOrNull() ?: return ""
+        if (total <= 0) return ""
+        val h = total / 3600
+        val m = total % 3600 / 60
+        val s = total % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
     }
 
     private suspend fun playUrl(bvid: String, cid: Long): String {
@@ -167,16 +220,13 @@ class BilibiliFetcher {
         throw RuntimeException("B站 playurl 未解析到音频地址（dash/durl 均空）")
     }
 
-    /** 给搜索列表用：按 bvid 拿 pages[0].cid，再取 DASH 视频/音频直链。失败直接抛给上层做单条降级。 */
-    private suspend fun fetchDashUrls(bvid: String): Pair<String, String> {
-        val cid = view(bvid).second
-        return try {
-            fetchDashUrlsByPlayurl(bvid, cid)
-        } catch (e: Throwable) {
-            // 有些网络/IP 下 playurl 会被拦，退回已验证过的 WBI 播放接口再试一次
-            log.warn("B站 playurl 直链失败，尝试 WBI 兜底 bvid=$bvid：${e.message}")
-            fetchDashUrlsByWbi(bvid, cid)
-        }
+    /** 按指定 cid（某分P / 合集某集）取 DASH 视频/音频直链：playurl 优先、WBI 兜底。 */
+    suspend fun dashUrlsFor(bvid: String, cid: Long): Pair<String, String> = try {
+        fetchDashUrlsByPlayurl(bvid, cid)
+    } catch (e: Throwable) {
+        // 有些网络/IP 下 playurl 会被拦，退回已验证过的 WBI 播放接口再试一次
+        log.warn("B站 playurl 直链失败，尝试 WBI 兜底 bvid=$bvid：${e.message}")
+        fetchDashUrlsByWbi(bvid, cid)
     }
 
     private suspend fun fetchDashUrlsByPlayurl(bvid: String, cid: Long): Pair<String, String> {
@@ -314,18 +364,33 @@ class BilibiliFetcher {
             BilibiliVideoItem(bvid, title, cover, duration = normalizeDuration(obj["duration"]?.jsonPrimitive?.content.orEmpty()))
         }.take(10)
 
-        // 10 个视频并发补直链，单条最多 10 秒；某条失败只留空 URL，不影响其它视频。
+        // 10 个视频并发补直链 + 合集/分P 元数据，单条最多 10 秒；某条失败只留空 URL，不影响其它视频。
+        // 2026-11-04：view 接口顺带带出 ugc_season（合集）与 pages（分P），客户端按合集发卡、点进去看全部分集。
         return coroutineScope {
             basicItems.map { item ->
                 async {
-                    val urls = runCatching {
-                        withTimeoutOrNull(10_000) { fetchDashUrls(item.bvid) }
-                    }.onFailure { e ->
-                        log.warn("B站直链获取失败 bvid=${item.bvid}：${e.message}")
-                    }.getOrNull()
+                    val info = runCatching { withTimeoutOrNull(10_000) { viewInfo(item.bvid) } }
+                        .onFailure { e -> log.warn("B站 view 获取失败 bvid=${item.bvid}：${e.message}") }
+                        .getOrNull()
+                    val urls = info?.let {
+                        runCatching { withTimeoutOrNull(10_000) { dashUrlsFor(item.bvid, it.cid) } }
+                            .onFailure { e -> log.warn("B站直链获取失败 bvid=${item.bvid}：${e.message}") }
+                            .getOrNull()
+                    }
                     item.copy(
                         videoUrl = urls?.first.orEmpty(),
-                        audioUrl = urls?.second.orEmpty()
+                        audioUrl = urls?.second.orEmpty(),
+                        pageCount = info?.pages?.size ?: 0,
+                        seasonId = info?.seasonId ?: 0L,
+                        seasonTitle = info?.seasonTitle.orEmpty(),
+                        seasonCover = info?.seasonCover.orEmpty(),
+                        seasonCount = info?.seasonEpisodes?.size ?: 0,
+                        episodes = when {
+                            info == null -> emptyList()
+                            info.seasonId != 0L -> info.seasonEpisodes
+                            info.pages.size > 1 -> info.pages
+                            else -> emptyList()
+                        },
                     )
                 }
             }.awaitAll()
@@ -354,6 +419,7 @@ class BilibiliFetcher {
 }
 
 // 搜索结果的一项：videoUrl/audioUrl 供 App 内播放，拿不到的条目留空字符串
+// 2026-11-04：合集（ugc_season）与多分P 视频带 episodes 分集元数据（bvid/cid/标题/时长），客户端点合集卡看全部。
 data class BilibiliVideoItem(
     val bvid: String,
     val title: String,
@@ -361,5 +427,24 @@ data class BilibiliVideoItem(
     val videoUrl: String = "",
     val audioUrl: String = "",
     /** 时长 m:ss / h:mm:ss；拿不到为空串 */
-    val duration: String = ""
+    val duration: String = "",
+    /** 所属 UGC 合集 id；不属于任何合集为 0 */
+    val seasonId: Long = 0L,
+    val seasonTitle: String = "",
+    val seasonCover: String = "",
+    /** 合集内视频数（0 = 无合集） */
+    val seasonCount: Int = 0,
+    /** 多分P 视频的分P 数；单视频为 0 */
+    val pageCount: Int = 0,
+    /** 分集元数据：合集→各集 bvid 不同；分P→同 bvid 不同 cid */
+    val episodes: List<BiliEpisode> = emptyList(),
+)
+
+/** 一集：合集分集（bvid 各不相同）或分P（同 bvid 不同 cid）。 */
+data class BiliEpisode(
+    val bvid: String,
+    val cid: Long,
+    val title: String,
+    /** m:ss / h:mm:ss；拿不到为空串 */
+    val duration: String = "",
 )

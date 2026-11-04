@@ -364,7 +364,12 @@ internal fun KnowledgeVideoDialog(
                     modifier = Modifier.padding(vertical = 16.dp))
                 list.isEmpty() -> Text("暂时没搜到相关视频", color = cs.onSurfaceSecondary, fontSize = 13.sp,
                     modifier = Modifier.padding(vertical = 16.dp))
-                else -> list.forEachIndexed { i, v -> BilibiliVideoCard(v, onClick = { onPlay(v) }, index = i) }
+                // 2026-11-04：带分集的视频（合集 / 多分P）点卡片先进分集面板；单视频保持原播放逻辑
+                else -> list.forEachIndexed { i, v ->
+                    BilibiliVideoCard(v, onClick = {
+                        if (v.episodes.isNotEmpty()) BiliEpisodesHub.current = v else onPlay(v)
+                    }, index = i)
+                }
             }
         }
         // 2026-11-02：底部按钮改用 coui 弹窗原生按钮栏（与确认弹窗同款间距），旧版整宽按钮贴底没有留白

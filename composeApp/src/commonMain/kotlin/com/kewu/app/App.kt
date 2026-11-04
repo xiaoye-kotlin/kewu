@@ -99,6 +99,8 @@ fun App() {
                     MainScreen(onLogout = doLogout)
                 }
                 com.kewu.app.ui.BilibiliPlayerHost()
+                // 合集 / 分P 分集列表面板（2026-11-04）：与播放层同款「根部唯一宿主」，页面只管设置 BiliEpisodesHub
+                com.kewu.app.ui.BiliEpisodesHost()
             }
         } else {
             LoginScreen(onLogin = {

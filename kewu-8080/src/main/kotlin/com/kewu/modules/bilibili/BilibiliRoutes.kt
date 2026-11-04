@@ -93,9 +93,10 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
         call.respond(ApiResponse(0, "ok", statusMap))
     }
 
-    // 按学科获取 B站视频搜索列表（含 App 内播放所需的 DASH 直链）
+    // 按学科获取 B站视频搜索列表（含 App 内播放所需的 DASH 直链接口）
     //   GET /api/bilibili/videos?subject=初中数学
-    //   成功返回 JSON 数组 [{bvid,title,cover,videoUrl,audioUrl},...]；B站接口异常时降级为 [] + HTTP 200，绝不 500
+    //   成功返回 JSON 数组 [{bvid,title,cover,videoUrl,audioUrl,duration,seasonId,seasonTitle,seasonCover,seasonCount,pageCount,episodes[]}]
+    //   属于 UGC 合集 / 多分P 的视频带 episodes 分集元数据（客户端发合集卡、点进去看全部分集）；B站接口异常时降级为 [] + HTTP 200，绝不 500
     get("/api/bilibili/videos") {
         val subject = call.request.queryParameters["subject"]?.trim() ?: ""
         if (subject.isBlank()) {
@@ -115,6 +116,21 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
                         put("videoUrl", it.videoUrl)
                         put("audioUrl", it.audioUrl)
                         put("duration", it.duration)
+                        put("seasonId", it.seasonId)
+                        put("seasonTitle", it.seasonTitle)
+                        put("seasonCover", it.seasonCover)
+                        put("seasonCount", it.seasonCount)
+                        put("pageCount", it.pageCount)
+                        put("episodes", buildJsonArray {
+                            it.episodes.forEach { ep ->
+                                add(buildJsonObject {
+                                    put("bvid", ep.bvid)
+                                    put("cid", ep.cid)
+                                    put("title", ep.title)
+                                    put("duration", ep.duration)
+                                })
+                            }
+                        })
                     })
                 }
             }
@@ -123,6 +139,34 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
             // 任何 B站接口异常（412 风控 / 超时 / 解析失败）都降级为空数组 + 200，绝不 500
             log.warn("B站视频搜索失败 subject=$subject：${e.message}")
             call.respondText("[]", ContentType.Application.Json)
+        }
+    }
+
+    // 单集播放直链（2026-11-04）：合集分集 / 某分P 点击时现取，不依赖搜索结果里可能已过期的直链。
+    //   GET /api/bilibili/play?bvid=BVxxx&cid=123（cid 可省略 = 第一集/第一P）
+    //   成功 {code:0,data:{bvid,cid,title,cover,videoUrl,audioUrl}}；失败 {code:1,message:原因}（HTTP 200）
+    get("/api/bilibili/play") {
+        val bvid = call.request.queryParameters["bvid"]?.trim() ?: ""
+        val cid = call.request.queryParameters["cid"]?.toLongOrNull() ?: 0L
+        if (bvid.isBlank()) {
+            call.respond(ApiResponse<Unit>(1, "bvid 必填"))
+            return@get
+        }
+        try {
+            val info = fetcher.viewInfo(bvid)
+            val useCid = if (cid > 0) cid else info.cid
+            val urls = fetcher.dashUrlsFor(bvid, useCid)
+            call.respond(ApiResponse(0, "ok", mapOf(
+                "bvid" to bvid,
+                "cid" to useCid,
+                "title" to info.title,
+                "cover" to info.cover,
+                "videoUrl" to urls.first,
+                "audioUrl" to urls.second,
+            )))
+        } catch (e: Throwable) {
+            log.warn("B站单集直链获取失败 bvid=$bvid cid=$cid：${e.message}")
+            call.respond(ApiResponse<Unit>(1, "取播放直链失败：${e.message}"))
         }
     }
 }

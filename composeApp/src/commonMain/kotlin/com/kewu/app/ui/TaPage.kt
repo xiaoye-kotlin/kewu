@@ -273,7 +273,10 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     // 2026-10-26 改用 ChatAutoScroll（原 animateScrollToItem 只对齐最后一条的顶部，收起输入法会跳）
     // 流式回答每多出一截就跟随到底（按 40 字分桶，避免每个字都触发一次滚动动画）
     val streamText = AssistantHub.streaming.collectAsState().value[ChatHistory.KEY_STUDENT]
-    ChatAutoScroll(listState, (messages.lastOrNull()?.id ?: 0L) to (streamText?.length?.div(40) ?: -1))
+    // 2026-11-04：biliLoadedTick —— AI 回答下方的 B 站视频卡异步加载完成时 +1，作为 forceKey 强制滚到底
+    //（用户翻上去看回答时 stick=false，单靠「内容长高」监听不会滚；视频就是给现在看的，必须拉下去）
+    var biliLoadedTick by remember { mutableIntStateOf(0) }
+    ChatAutoScroll(listState, (messages.lastOrNull()?.id ?: 0L) to (streamText?.length?.div(40) ?: -1), forceKey = biliLoadedTick)
 
     // 上传 / 识别进度回到页面：把补丁合进对应消息
     LaunchedEffect(mediaPatches) {
@@ -659,7 +662,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     item(key = msg.id, contentType = msg.isUser) {
                         Box(Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)) { // 气泡是玻璃采样者：只做位移动画，不做淡入淡出（祖先禁 alpha）
                             androidx.compose.runtime.CompositionLocalProvider(LocalChatMediaRetry provides retryMedia) {
-                                ChatMessageItem(msg, pageBackdrop, menu)
+                                // 2026-11-04：本条回答的 B 站视频卡加载完成 → 强制滚到底（只对最后一条生效，
+                                // 避免滚动浏览历史时旧卡片的重新加载把视图拽下去）
+                                ChatMessageItem(msg, pageBackdrop, menu, onBiliLoaded = {
+                                    if (messages.lastOrNull()?.id == msg.id) biliLoadedTick++
+                                })
                             }
                         }
                     }

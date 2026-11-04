@@ -99,6 +99,14 @@ internal object VideoPlayerHub {
     var current by mutableStateOf<BilibiliVideoInfo?>(null)
 }
 
+/**
+ * 合集 / 分P 分集面板总线（2026-11-04）：带分集的视频卡被点击时设置它，
+ * App 根部唯一的 [BiliEpisodesHost] 渲染全屏分集列表面板（与播放层同一套「页面只管设置、根部统一渲染」模式）。
+ */
+internal object BiliEpisodesHub {
+    var current by mutableStateOf<BilibiliVideoInfo?>(null)
+}
+
 private val BILI_PINK = Color(0xFFFB7299)
 
 /** 把学生的问题清理成适合当搜索词的文本：去换行/首尾空白，截断。 */
@@ -111,19 +119,28 @@ internal fun biliKeywordOf(question: String, maxLen: Int = 30): String =
 internal fun BilibiliVideoCard(
     video: BilibiliVideoInfo,
     modifier: Modifier = Modifier,
-    /** 自定义点击（如知识点弹窗：先关弹窗再播放）；为空时直接交给 App 根部播放层 */
+    /** 自定义点击（如知识点弹窗：先关弹窗再播放）；为空时：有分集→打开分集面板，没有→直接播放 */
     onClick: (() -> Unit)? = null,
     /** 列表中的序号：错峰上浮入场（2026-11-02 用户：选视频时缺少动画） */
     index: Int = 0,
 ) {
     val cs = COUITheme.colorScheme
     val p = rememberEnterProgress(index, baseDelayMs = 40L, stepMs = 55L)
+    // 2026-11-04：合集卡显示合集名；分P 视频显示「全 N 集」标记。两种都带 episodes，点击进分集面板。
+    val isSeason = video.seasonId != 0L && video.seasonTitle.isNotBlank()
+    val displayTitle = if (isSeason) video.seasonTitle else video.title
     Card(
         modifier = modifier.fillMaxWidth().riseEnter(p, 36f),
         cornerRadius = 14.dp,
         insideMargin = PaddingValues(10.dp),
         colors = kewuCardColors(),
-        onClick = { haptic(HapticKind.Tick); onClick?.invoke() ?: run { VideoPlayerHub.current = video } },
+        onClick = {
+            haptic(HapticKind.Tick)
+            onClick?.invoke() ?: run {
+                if (video.episodes.isNotEmpty()) BiliEpisodesHub.current = video
+                else VideoPlayerHub.current = video
+            }
+        },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // 封面（网络图走共享 ImageLoader；失败也给占位底）
@@ -133,7 +150,7 @@ internal fun BilibiliVideoCard(
                     .clip(RoundedCornerShape(10.dp))
                     .background(cs.secondaryContainer),
             ) {
-                RemoteImage(video.cover, Modifier.fillMaxSize())
+                RemoteImage(if (isSeason && video.seasonCover.isNotBlank()) video.seasonCover else video.cover, Modifier.fillMaxSize())
                 // 播放角标
                 Box(
                     Modifier.align(Alignment.Center).size(26.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
@@ -148,13 +165,35 @@ internal fun BilibiliVideoCard(
                             .padding(horizontal = 4.dp, vertical = 1.dp),
                     )
                 }
+                // 合集/分P 标记（左上角粉色小胶囊，B 站同款语言）
+                val badge = when {
+                    isSeason && video.seasonCount > 0 -> "合集 · ${video.seasonCount}"
+                    video.pageCount > 1 -> "全 ${video.pageCount} 集"
+                    else -> ""
+                }
+                if (badge.isNotBlank()) {
+                    Text(
+                        badge, color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold, maxLines = 1,
+                        modifier = Modifier.align(Alignment.TopStart).padding(4.dp)
+                            .clip(RoundedCornerShape(4.dp)).background(BILI_PINK.copy(alpha = 0.92f))
+                            .padding(horizontal = 4.dp, vertical = 1.dp),
+                    )
+                }
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    video.title, color = cs.onSurface, fontSize = 13.sp,
+                    displayTitle, color = cs.onSurface, fontSize = 13.sp,
                     fontWeight = FontWeight.Medium, lineHeight = 18.sp, maxLines = 2,
                 )
+                if (video.episodes.isNotEmpty()) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        if (isSeason) "合集 · 点我看全部 ${video.episodes.size} 个视频"
+                        else "共 ${video.episodes.size} 个分集 · 点我查看",
+                        color = BILI_PINK, fontSize = 11.sp, maxLines = 1,
+                    )
+                }
             }
             Icon(
                 COUIIcons.ChevronForward, contentDescription = null,
@@ -169,14 +208,22 @@ internal fun BilibiliVideoCard(
 /**
  * AI 回答后自动推荐：用 [keyword] 拉学科视频，最多展示 [maxCount] 条。
  * 加载中显示占位行；无结果 / 接口失败回退 [BilibiliSuggestRow]。
+ * 2026-11-04：同一合集的多个搜索结果只发一张合集卡（distinctBy seasonId）；
+ * [onLoaded] 在视频加载完成时回调（页面用来触发自动滚到底，见 ChatAutoScroll forceKey）。
  */
 @Composable
-internal fun BilibiliVideoSuggest(keyword: String, maxCount: Int = 3, modifier: Modifier = Modifier) {
+internal fun BilibiliVideoSuggest(
+    keyword: String,
+    maxCount: Int = 3,
+    modifier: Modifier = Modifier,
+    onLoaded: (() -> Unit)? = null,
+) {
     val scope = rememberCoroutineScope()
     // null=加载中 / 空列表或失败=空 / 非空=结果
     var videos by remember(keyword) { mutableStateOf<List<BilibiliVideoInfo>?>(null) }
     LaunchedEffect(keyword) {
         videos = KewuApi.getBilibiliVideos(keyword).orEmpty().take(maxCount)
+        onLoaded?.invoke()
     }
     val list = videos
     if (list == null) {
@@ -187,8 +234,10 @@ internal fun BilibiliVideoSuggest(keyword: String, maxCount: Int = 3, modifier: 
     } else if (list.isEmpty()) {
         BilibiliSuggestRow(keyword, modifier)
     } else {
+        // 同一合集只出一张卡（后端会给同合集的多个结果都带 seasonId）
+        val display = list.distinctBy { if (it.seasonId != 0L) "s${it.seasonId}" else it.bvid }
         Column(modifier, verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
-            list.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
+            display.forEachIndexed { i, v -> BilibiliVideoCard(v, index = i) }
         }
     }
 }
@@ -363,6 +412,122 @@ internal fun BilibiliBrowsePanel(onDismiss: () -> Unit) {
                 }
                 // 底部给悬浮导航栏让位（2026-11-02 用户报「换一批推荐」被导航栏挡住点不到）
                 Spacer(Modifier.height(KewuNavClearance))
+            }
+        }
+    }
+}
+
+// ───────────────────────── 合集 / 分P 分集面板（2026-11-04） ─────────────────────────
+
+/**
+ * 分集列表面板宿主：全 App 根部唯一（App.kt 与 [BilibiliPlayerHost] 并列挂载）。
+ * 带分集的视频卡（合集卡 / 多分P 卡）点击后经 [BiliEpisodesHub] 打开；
+ * 点某集现取直链播放，播放层盖在面板之上，退出播放回到面板继续选集。
+ */
+@Composable
+internal fun BiliEpisodesHost() {
+    SlideOverlay(BiliEpisodesHub.current) { video ->
+        BiliEpisodesPanel(video, onDismiss = { BiliEpisodesHub.current = null })
+    }
+}
+
+@Composable
+private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
+    val cs = COUITheme.colorScheme
+    val scope = rememberCoroutineScope()
+    val isSeason = video.seasonId != 0L && video.seasonTitle.isNotBlank()
+    val title = if (isSeason) video.seasonTitle else video.title
+    val cover = if (isSeason && video.seasonCover.isNotBlank()) video.seasonCover else video.cover
+    // 正在取直链的集（bvid）；同一时刻只允许一集在取
+    var fetchingBvid by remember { mutableStateOf<String?>(null) }
+
+    fun play(ep: com.kewu.app.BiliEpisodeInfo) {
+        if (fetchingBvid != null) return
+        haptic(HapticKind.Tick)
+        scope.launch {
+            fetchingBvid = ep.bvid
+            // 现取这一集的播放直链（合集分集 bvid 各不相同；分P 用 cid 区分）
+            val info = KewuApi.getBilibiliPlay(ep.bvid, ep.cid)
+            fetchingBvid = null
+            VideoPlayerHub.current = if (info != null && info.videoUrl != null) {
+                info
+            } else {
+                // 兜底：交给播放层按标题重搜刷新直链，再不行由播放层报「重试」
+                BilibiliVideoInfo(ep.bvid, ep.title, video.cover, null, null)
+            }
+        }
+    }
+
+    BackHandler { onDismiss() }
+
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.matchParentSize().layerBackdrop(rememberGlassBackdrop()).background(cs.surface))
+        Column(Modifier.fillMaxSize()) {
+            HubTopBar(title, onDismiss)
+            // 头部信息卡：封面 + 来源视频名 + 分集数
+            Card(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
+                cornerRadius = 14.dp,
+                insideMargin = PaddingValues(10.dp),
+                colors = kewuCardColors(),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        Modifier.size(width = 104.dp, height = 66.dp).clip(RoundedCornerShape(10.dp)).background(cs.secondaryContainer),
+                    ) { RemoteImage(cover, Modifier.fillMaxSize()) }
+                    Spacer(Modifier.width(10.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            title, color = cs.onSurface, fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold, lineHeight = 19.sp, maxLines = 2,
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            (if (isSeason) "合集" else "分P") + " · 共 ${video.episodes.size} 集",
+                            color = BILI_PINK, fontSize = 12.sp, maxLines = 1,
+                        )
+                    }
+                }
+            }
+            // 分集列表
+            androidx.compose.foundation.lazy.LazyColumn(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+            ) {
+                items(video.episodes.size) { i ->
+                    val ep = video.episodes[i]
+                    val fetching = fetchingBvid == ep.bvid
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        cornerRadius = 12.dp,
+                        insideMargin = PaddingValues(horizontal = 10.dp, vertical = 9.dp),
+                        colors = kewuCardColors(),
+                        onClick = { if (!fetching) play(ep) },
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                Modifier.clip(RoundedCornerShape(6.dp)).background(BILI_PINK.copy(alpha = 0.14f))
+                                    .padding(horizontal = 7.dp, vertical = 2.dp),
+                            ) {
+                                Text("P${i + 1}", color = BILI_PINK, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Text(
+                                ep.title.ifBlank { "第 ${i + 1} 集" },
+                                color = cs.onSurface, fontSize = 13.5.sp, maxLines = 2,
+                                lineHeight = 18.sp, modifier = Modifier.weight(1f),
+                            )
+                            if (fetching) {
+                                Spacer(Modifier.width(8.dp))
+                                InfiniteProgressIndicator(Modifier.size(16.dp))
+                            } else if (ep.duration.isNotBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(ep.duration, color = cs.onSurfaceSecondary, fontSize = 11.5.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+                item { Spacer(Modifier.height(24.dp)) }
             }
         }
     }
