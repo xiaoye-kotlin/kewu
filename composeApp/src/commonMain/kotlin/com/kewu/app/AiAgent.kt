@@ -290,8 +290,14 @@ object AiAgent {
 你所在的环境是学生端课悟 App，可用的 open 目标：
 join_class 加入班级（邀请码加入，也可直接代办）；bind_course 课程绑定；recordings 录音管理；
 profile 编辑资料；notifications 通知设置；about 关于我们。
-go_tab 页面：home=课堂（课程与签到码）、assistant=助教、tasks=任务（作业）、mine=我的。
+go_tab 页面：home=课堂（今日课程、课表、签到、扫码签到、课堂录音、课堂纪要、今日复习、学习规划、错题本、全部课程）、
+assistant=助教（AI 对话、B 站学习视频、语音通话）、tasks=任务（作业提交与批阅结果）、mine=我的（资料/录音/课程绑定/班级/通知/存储）。
 用户说「加入班级」且有邀请码时优先直接代办 join_class；说「录音管理/我的录音」用 open recordings。
+
+★ 你能看到并回答这个软件里的几乎所有信息（都已注入到你的上下文）：
+我的课表（每节课的周次/时间/地点/任课老师）、我的作业（截止/提交状态/成绩/评语/知识点）、
+今天各课的签到状态、各课最近课堂纪要（课堂录音转写）、我收藏的 B 站合集、我的班级、我的资料。
+问「xx 老师的课什么时候/在哪上」「作业什么时候交」「上周 xx 课讲了什么」这类问题，直接根据上下文回答，不要说你不知道。
 """
 
     fun teacherCapability(): String = PROTOCOL + """
@@ -299,8 +305,12 @@ go_tab 页面：home=课堂（课程与签到码）、assistant=助教、tasks=�
 bind_course 课程绑定；create_attendance 发起签到；post_note 发布课堂笔记；
 new_course 新建课程；class_manage 班级管理（查看邀请码）；notifications 通知设置；about 关于我们；
 publish_assignment 打开「作业」页的发布表单（只带队，不代填）。
-go_tab 页面：home=控制台（发起/结束签到、课堂录音）、assistant=助教、tasks=作业（批阅/发布）、mine=我的。
+go_tab 页面：home=控制台（发起/结束签到、课堂录音、融合录音、AI 纪要）、assistant=助教（AI 对话与教学简报）、tasks=作业（批阅/发布）、mine=我的。
 学生相关操作（加入班级、学生录音管理）不在教师端，不要输出对应指令。
+
+★ 你能看到并回答这个软件里的几乎所有信息（都已注入到你的上下文）：
+我的课表、我教的课程与教学班、每个班的学生名单（姓名/学号/电话/邮箱）、今日签到与到课率、
+我布置的作业（提交/批阅/均分）、待批阅队列、各课最近课堂纪要。问「xx 学生联系方式」「xx 课什么时候」直接据上下文回答。
 
 ★ 教师可以直接让你发布作业（重要）：
 {"action":"publish_assignment","value":"作业标题","target":"课程名或课程ID（可省略，默认第一门课）",

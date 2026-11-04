@@ -51,6 +51,8 @@ object AiContext {
         val classNotes = withTimeoutOrNull(4_000) {
             courses.map { c -> async { c.name to KewuApi.getClassNotes(c.id, 2) } }.awaitAll()
         }.orEmpty().filter { it.second.isNotEmpty() }
+        // ★ C1（2026-11-05）：课表（上课时间/地点/周次/任课老师）——用户「问老师课程时间安排、在哪上课都不知道」
+        val schedule = withTimeoutOrNull(3_000) { KewuApi.getMySchedule().orEmpty() }.orEmpty()
         val profile = ProfileStore.load(uname)
         buildString {
             appendLine("【当前时间】${nowCn()}")
@@ -62,6 +64,20 @@ object AiContext {
                 (profile?.className?.takeIf { it.isNotBlank() }?.let { "，班级 $it" } ?: ""))
             appendLine("【我的课程（${courses.size} 门）】" +
                 courses.joinToString("；") { "${it.name}（${it.teacher.ifBlank { "老师未知" }}）" }.ifBlank { "暂无" })
+            // ★ C1：课表全貌——每节课的星期/时间/地点/任课老师，AI 据此能答「xx 老师的课什么时候、在哪上」
+            val wdNames = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+            appendLine("【我的课表（共 ${schedule.size} 节）】" +
+                schedule.sortedWith(compareBy({ it.weekday }, { it.startTime })).take(48)
+                    .joinToString("；") { e ->
+                        buildString {
+                            append(wdNames.getOrElse(e.weekday - 1) { "周${e.weekday}" })
+                            append(" ").append(e.startTime).append("-").append(e.endTime)
+                            append("《").append(e.courseName).append("》")
+                            e.location.takeIf { it.isNotBlank() }?.let { append(" @").append(it) }
+                            e.teacherName.takeIf { it.isNotBlank() }?.let { append("（").append(it).append("）") }
+                            e.weeks.takeIf { it.isNotBlank() }?.let { append("〔").append(it).append(" 周〕") }
+                        }
+                    }.ifBlank { "暂无课表" })
             appendLine("【我的作业（${items.size} 份）】")
             if (items.isEmpty()) appendLine("暂无作业")
             items.forEach { it ->
@@ -104,6 +120,14 @@ object AiContext {
         if (KewuApi.currentUser == null) KewuApi.me()
         val console = consoleD.await()
         val classes = classesD.await()
+        // ★ C1（2026-11-05）：老师自己的课表 + 各教学班学生名单（姓名/学号/联系方式，老师本就有权查看）——
+        //   用户「把软件中所有信息都告诉 AI，了解所有用户信息」。
+        val scheduleT = async { withTimeoutOrNull(3_000) { KewuApi.getMySchedule().orEmpty() }.orEmpty() }
+        val rosters = withTimeoutOrNull(6_000) {
+            classes?.classes.orEmpty().map { cls -> async {
+                cls.name to (KewuApi.getClassContacts(cls.id).first.orEmpty())
+            } }.awaitAll()
+        }.orEmpty()
         // 老师的课程：/user/me 绑定课 → 控制台今日课程 → 教学班所属课程（教师账号通常不在 /me 里绑课，
         // 旧版只看 /me，小悟回答「当前暂无课程」）
         val courses = (KewuApi.currentUser?.courses.orEmpty() +
@@ -120,6 +144,32 @@ object AiContext {
             appendLine("【当前时间】${nowCn()}")
             appendLine("【我】${KewuApi.displayName("老师")}（教师，工号 ${KewuApi.username.orEmpty()}）")
             appendLine("【我的课程（${courses.size} 门）】" + courses.joinToString("；") { it.name }.ifBlank { "暂无" })
+            // ★ C1：老师自己的课表（上课时间/地点/周次）
+            val wdNamesT = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+            val schedT = scheduleT.await()
+            appendLine("【我的课表（共 ${schedT.size} 节）】" +
+                schedT.sortedWith(compareBy({ it.weekday }, { it.startTime })).take(48)
+                    .joinToString("；") { e ->
+                        buildString {
+                            append(wdNamesT.getOrElse(e.weekday - 1) { "周${e.weekday}" })
+                            append(" ").append(e.startTime).append("-").append(e.endTime)
+                            append("《").append(e.courseName).append("》")
+                            e.location.takeIf { it.isNotBlank() }?.let { append(" @").append(it) }
+                            e.weeks.takeIf { it.isNotBlank() }?.let { append("〔").append(it).append(" 周〕") }
+                        }
+                    }.ifBlank { "暂无课表" })
+            // ★ C1：各教学班学生名单（老师端接口，含联系方式——老师在 app 里本来就能看到）
+            rosters.filter { it.second.isNotEmpty() }.forEach { (clsName, students) ->
+                appendLine("【$clsName 学生名单（${students.size} 人）】" +
+                    students.take(80).joinToString("；") { s ->
+                        buildString {
+                            append(s.name)
+                            s.studentNo.takeIf { it.isNotBlank() }?.let { append("（学号 ").append(it).append("）") }
+                            s.phone?.takeIf { it.isNotBlank() }?.let { append(" 电话 ").append(it) }
+                            s.email?.takeIf { it.isNotBlank() }?.let { append(" 邮箱 ").append(it) }
+                        }
+                    })
+            }
             classes?.let { c ->
                 appendLine("【教学班】" + c.classes.joinToString("；") { "${it.name}（${it.courseName}，${it.studentCount} 人，邀请码 ${it.inviteCode}）" }.ifBlank { "暂无" })
             }
