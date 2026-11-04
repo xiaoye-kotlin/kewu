@@ -136,9 +136,13 @@ fun MainScreen(
     // 2026-10-26：未读数改由 AssistantHub 统一维护（在助教页里看着回答的不算未读；切走后才到的、
     // 以及小悟主动发来的消息才算）。每分钟重算一次，跨天时教师端「今日简报未读」能自动出现。
     val assistantUnread by AssistantHub.unread(ChatHistory.KEY_STUDENT).collectAsState()
-    // 2026-11-02：「任务」tab 红点 = 未交且没截止的作业数（新作业到达 / 被打回都会 +1，交完 -1）
+    // ★ H3（2026-11-05）：「任务」tab 红点改用**持久化已读快照**算「新增未读作业数」。
+    // 旧版 pendingTaskCount(taskItems) 是待交作业的派生存量，TaskPage 没有任何已读写入，只靠 navBar
+    // 的 `selected != i` 临时不画红点 → 切走再回来必然重现（用户「根本消不掉」）。
+    // 现在进任务页会 markAllSeen 落 kv，seen StateFlow 一变这里就重算，badge 真正归零且切 tab 不再出现。
     val taskItems by com.kewu.app.AssignmentRepo.items.collectAsState()
-    val taskPending = pendingTaskCount(taskItems)
+    val seenAssignments by com.kewu.app.AssignmentRepo.seen.collectAsState()
+    val taskPending = com.kewu.app.AssignmentRepo.unreadCount(taskItems, seenAssignments)
     LaunchedEffect(Unit) {
         ChatHistory.seedWelcomeIfEmpty(ChatHistory.KEY_STUDENT)
         AssistantHub.refreshUnread(ChatHistory.KEY_STUDENT)

@@ -39,6 +39,44 @@ object AssignmentRepo {
     private val lock = Mutex()
     private var fetchedAt = 0L
 
+    // ── ★ H3（2026-11-05）：「任务」tab 红点的持久化已读快照 ──
+    // 旧版 badge = 待交作业的派生存量，TaskPage 没有任何已读写入，只靠 navBar 的 `selected != i`
+    // 临时不画红点 → 切走再回来必然重现（用户「根本消不掉」）。这里存每条作业的「id#提交状态」签名：
+    // 新作业(mine==null) 或被打回(RETURNED) 与已读时签名不同 → 重新算未读；交完作业 pending=false 不计入。
+    private const val KEY_SEEN = "kewu_seen_assignments"
+    private fun seenKey(): String =
+        KewuApi.username?.takeIf { it.isNotBlank() }?.let { "${KEY_SEEN}_u_$it" } ?: KEY_SEEN
+    private fun loadSeen(): Set<String> = kvGet(seenKey()).orEmpty()
+        .split(',').filter { it.isNotBlank() }.toSet()
+    private fun signature(item: Item) = item.assignment.id + "#" + (item.mine?.status ?: "none")
+
+    private val _seen = MutableStateFlow(loadSeen())
+    /** 已读作业签名集合（MainScreen collect 后红点即时归零，切 tab 不再重现）。 */
+    val seen: StateFlow<Set<String>> = _seen.asStateFlow()
+
+    /** 已绑定到哪个账号的 key；同账号只重载一次，避免 refresh 与 markAllSeen 并发时把快照覆盖回旧值。 */
+    private var boundKey: String? = null
+
+    /** 账号变化 / 刷新后重新绑定已读快照（object 初始化时 username 可能还是空的）。 */
+    fun reloadSeen() {
+        val k = seenKey()
+        if (k == boundKey) return
+        boundKey = k
+        _seen.value = loadSeen()
+    }
+
+    /** 进入任务页时调用：把当前看到的全部作业记为已读（仿 ChatHistory.markAllAssistantRead）。 */
+    fun markAllSeen(items: List<Item>) {
+        val merged = (loadSeen().toList() + items.map(::signature)).takeLast(300).toSet()
+        if (merged == _seen.value) return
+        kvSet(seenKey(), merged.joinToString(","))
+        _seen.value = merged
+    }
+
+    /** 红点数 = 待交且「未见过」的作业（新发布 / 被打回才算；存量待办不再常亮）。 */
+    fun unreadCount(items: List<Item>?, seenSet: Set<String> = _seen.value): Int =
+        items.orEmpty().count { it.pending && signature(it) !in seenSet }
+
     /**
      * 刷新。[maxAgeMs] 内刚刷过就直接返回缓存（多个页面同时进来只打一轮）。
      * 返回最新列表；作业列表都拿不到时返回 null 并置 [failed]。
@@ -69,6 +107,8 @@ object AssignmentRepo {
         _items.value = items
         _failed.value = false
         fetchedAt = now
+        // ★ H3：刷新后按当前账号重新绑定已读快照（避免 object 初始化时 username 为空读到错的账号）
+        reloadSeen()
         items
     }
 

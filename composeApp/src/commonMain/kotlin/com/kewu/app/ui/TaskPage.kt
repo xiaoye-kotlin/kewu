@@ -111,6 +111,9 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
     LaunchedEffect(repoItems, repoFailed) {
         val items = repoItems
         if (items != null) {
+            // ★ H3（2026-11-05）：进任务页（拿到真实列表）就把当前所有作业记为已读，落 kv。
+            // 之后切 tab / 切页面回来红点都不会再重现；老师发布新作业或被打回时签名变化才重新亮一次。
+            AssignmentRepo.markAllSeen(items)
             val courseNames = CourseRepo.courses.value.orEmpty().associate { it.id to it.name }
             val today = todayCn()
             // 排序见 [sortedForDisplay]：未到期按截止由近到远 → 未设截止 → 已截止（放最后）
@@ -463,11 +466,6 @@ private fun nowCnString(): String {
     return todayCn() + " " + p2(minOfDay / 60) + ":" + p2(minOfDay % 60)
 }
 
-/**
- * 底部「任务」tab 的红点数（2026-11-02）：未交（含被打回）且没过截止的作业数。
- * 已截止交不了的不算，否则红点永远消不掉；新作业到达时 AssignmentRepo 刷新后自动 +1。
- */
-internal fun pendingTaskCount(items: List<com.kewu.app.AssignmentRepo.Item>?): Int {
-    val now = deadlineSortKey(nowCnString()) ?: ""
-    return items.orEmpty().count { it.pending && (deadlineSortKey(it.assignment.deadline)?.let { k -> k >= now } ?: true) }
-}
+// ★ H3（2026-11-05）：原 `pendingTaskCount(items)`（待交存量）已删除。
+// 底部「任务」tab 红点改由 AssignmentRepo.unreadCount(items, seen) 计算 —— 按持久化已读快照算
+// 「新增未读作业数」，见 MainScreen.kt:139-145 与 AssignmentRepo.kt 的 KEY_SEEN / markAllSeen。
