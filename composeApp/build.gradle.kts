@@ -86,6 +86,17 @@ kotlin {
             implementation(compose.desktop.currentOs)
             implementation(libs.kotlinx.coroutines.swing)
             implementation(libs.ktor.client.okhttp)
+            // ★ G2（2026-11-05）：桌面端视频播放 = JavaFX Media（MediaPlayer/MediaView 经 SwingPanel 嵌入 Compose）。
+            // 走 B 站 html5 progressive mp4（音视频合一，JavaFX 可播；DASH 分离流它合不了）。
+            // classifier 按当前 OS 选原生库（win / mac / linux），避免换平台构建时 JFX 原生库缺失。
+            val javafxPlatform = when {
+                System.getProperty("os.name").startsWith("Windows", ignoreCase = true) -> "win"
+                System.getProperty("os.name").startsWith("Mac", ignoreCase = true) -> "mac"
+                else -> "linux"
+            }
+            listOf("base", "graphics", "media", "swing").forEach {
+                implementation("org.openjfx:javafx-$it:21.0.4:$javafxPlatform")
+            }
         }
 
         iosMain.dependencies {

@@ -143,7 +143,13 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
             fetching = false
         }
     }
-    val sources = remember(fresh) { DashVideoSources(fresh.title, fresh.cover, fresh.videoUrl, fresh.audioUrl) }
+    // ★ G2：带 bvid/cid —— Desktop 端据此现取 html5 progressive mp4（DASH 分离流桌面端合不了）
+    val sources = remember(fresh) {
+        DashVideoSources(
+            fresh.title, fresh.cover, fresh.videoUrl, fresh.audioUrl, fresh.bvid,
+            cid = fresh.episodes.firstOrNull { it.bvid == fresh.bvid }?.cid ?: 0L,
+        )
+    }
     val fullscreen = VideoFullscreen.on
 
     BackHandler {

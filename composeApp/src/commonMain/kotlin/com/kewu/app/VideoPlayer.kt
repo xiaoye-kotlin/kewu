@@ -20,12 +20,16 @@ import androidx.compose.ui.Modifier
  * media3 ExoPlayer，本项目直接采用同一方案，不额外引入封装层。
  */
 
-/** 一次应用内播放请求：标题 + 封面（仅展示用）+ DASH 分离流直链（可空）。 */
+/** 一次应用内播放请求：标题 + 封面（仅展示用）+ DASH 分离流直链（可空）。
+ *  ★ G2（2026-11-05）：带 bvid/cid —— Desktop 端据此现取 B 站 html5 progressive mp4
+ *  （音视频合一，JavaFX MediaPlayer 可播；DASH 分离流它合不了）。cid=0 表示未知（桌面端自行查 view 接口）。 */
 data class DashVideoSources(
     val title: String,
     val cover: String,
     val videoUrl: String?,
     val audioUrl: String?,
+    val bvid: String = "",
+    val cid: Long = 0,
 ) {
     /** 至少一路流可播才算可播放。 */
     val playable: Boolean get() = !videoUrl.isNullOrBlank()
