@@ -101,6 +101,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
+import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.haptic
 import com.kewu.app.shareText
@@ -263,17 +264,43 @@ internal data class AiChatMsg(
 
 // ───────────────────────── 通用按压 Q 弹 ─────────────────────────
 
-/** P8 微信风格用户气泡绿：#95EC69 向品牌绿微调的双截渐变（白字可读，weui 用户泡语言）。 */
-internal val ChatUserGreenBrush: Brush
-    @Composable get() = Brush.horizontalGradient(
-        listOf(Color(0xFF8ADF6E), Color(0xFF4ECD6A), KewuGreen.copy(alpha = 0.92f)),
-    )
+/** weui 微信聊天规范色（2026-11-04 U3，用户明确要求「用微信的 weui 气泡」）。 */
+internal val WeuiUserGreen: Color = Color(0xFF95EC69)
+internal val WeuiAiWhite: Color = Color(0xFFFFFFFF)
+internal val WeuiText: Color = Color(0xFF191919)
+internal val WeuiChatBg: Color = Color(0xFFEDEDED)
+internal val WeuiBubbleBorder: Color = Color(0x14000000)
 
-/** P8 微信风格 AI 头像：32dp 品牌绿圆 + 白色人物 glyph（连续 AI 消息省略，由 ChatMessageItem 控制）。 */
+/** 用户气泡纯色 #95EC69（保留 Brush 形状是给教师端 TeacherAssistantPage 直接复用，避免它再改一遍）。 */
+internal val ChatUserGreenBrush: Brush
+    @Composable get() = Brush.horizontalGradient(listOf(WeuiUserGreen, WeuiUserGreen))
+
+/**
+ * weui 气泡小尖角：靠头像一侧顶部 ~12dp 处的三角形，颜色与气泡一致。
+ * 微信不是「圆角+无尾」的气泡，缺了这个尖角就不是 weui 语言（P8 旧版一直没做）。
+ */
+@Composable
+internal fun WeuiBubbleTail(isUser: Boolean, modifier: Modifier = Modifier) {
+    val color = if (isUser) WeuiUserGreen else WeuiAiWhite
+    Canvas(modifier.size(width = 7.dp, height = 14.dp)) {
+        val w = size.width
+        val h = 12.dp.toPx()
+        val p = Path().apply {
+            if (isUser) {
+                moveTo(0f, 0f); lineTo(w, h / 2f); lineTo(0f, h); close()
+            } else {
+                moveTo(w, 0f); lineTo(0f, h / 2f); lineTo(w, h); close()
+            }
+        }
+        drawPath(p, color)
+    }
+}
+
+/** P8→U3 weui AI 头像：40dp 圆角 4dp 方头像（微信头像是圆角方形，不是圆形），与省略占位宽度严格一致。 */
 @Composable
 internal fun ChatAiAvatar(modifier: Modifier = Modifier) {
     Box(
-        modifier.size(32.dp).clip(CircleShape).background(KewuGreen),
+        modifier.size(40.dp).clip(RoundedCornerShape(4.dp)).background(KewuGreen),
         contentAlignment = Alignment.Center,
     ) {
         Canvas(Modifier.fillMaxSize()) {
@@ -287,7 +314,7 @@ internal fun ChatAiAvatar(modifier: Modifier = Modifier) {
                 radius = size.minDimension / 2f,
             )
         }
-        PersonGlyph(Modifier.size(15.dp), Color.White)
+        PersonGlyph(Modifier.size(18.dp), Color.White)
     }
 }
 
@@ -385,10 +412,9 @@ internal fun DockStroke(shape: RoundedCornerShape) {
 }
 
 /**
- * AI 气泡（2026-10-18 强化）：**整颗液态玻璃包裹** —— 足够大的圆角（尾部小角 + 22dp）、
- * 22dp 毛玻璃 blur + 奶白磨砂 tint + outlineVariant 描边，透出身后列表内容。
- * 长按 → QQ 式操作菜单（复制/引用/分享，LiquidGlassActionMenu）。
- * 入场 = 玻璃凝结（tint/blur 从近零插值）+ placement 上浮 + 内容透明 —— 采样者安全。
+ * AI 气泡（2026-11-04 U3 按 weui 重做）：纯白 `#FFFFFF` + 6dp 圆角 + 左侧小尖角、
+ * 正文 `#191919`，无昵称行、无毛玻璃、无渐变。长按进文字选择，媒体消息长按弹原菜单。
+ * 入场保留凝结动效（只做 placement 位移，采样者安全约束仍遵守）。
  */
 @Composable
 internal fun ChatAiBubble(
@@ -398,63 +424,52 @@ internal fun ChatAiBubble(
     reportBounds: Boolean,
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
-    /** 文字选择模式（P4）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
+    /** 文字选择模式（U2）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
     selectFor: ChatTextSelectState? = null,
 ) {
-    val cs = COUITheme.colorScheme
-    val shape = RoundedCornerShape(topStart = 8.dp, topEnd = 22.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
+    val shape = RoundedCornerShape(topStart = 2.dp, topEnd = 6.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
     val selecting = selectFor?.msgKey == msg.id
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        WeuiBubbleTail(isUser = false, modifier = Modifier.padding(top = 13.dp))
         Box(
             Modifier
-                .border(1.dp, cs.dividerLine, shape)
+                .widthIn(max = 280.dp)
+                .riseEnter(p, 26f)
+                .border(1.dp, WeuiBubbleBorder, shape)
+                .clip(shape)
+                .background(WeuiAiWhite)
                 .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
         ) {
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = shape,
-                blurRadius = glassCondenseBlur(p, 22f),
-                tintAlpha = 0.36f * p,
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .glassEnter(p, 30f),
+            Column(
+                Modifier
+                    .bubblePress(onLongPress)
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
             ) {
-                Column(
-                    Modifier
-                        .alpha(p)
-                        .bubblePress(onLongPress)
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Canvas(Modifier.size(6.dp)) { drawCircle(KewuGreen, radius = size.minDimension / 2f) }
-                        Spacer(Modifier.width(5.dp))
-                        Text("小悟", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
-                    }
-                    Spacer(Modifier.height(5.dp))
-                    if (selecting && selectFor != null) {
-                        // P4 选择模式：markdown 退化为纯文本（选区按字符稳定映射），带高亮 + 拖柄
-                        SelectableChatText(
-                            text = stripMarkdown(aiVisibleText(msg.text)),
-                            state = selectFor,
-                            color = cs.onSurface,
-                            selectedBg = cs.primary.copy(alpha = 0.20f),
+                if (selecting && selectFor != null) {
+                    // 选择模式渲染纯文本：宽度与常态完全一致（见 ChatTextSelect 的 wrapContentSize 修复）
+                    SelectableChatText(
+                        text = stripMarkdown(aiVisibleText(msg.text)),
+                        state = selectFor,
+                        color = WeuiText,
+                        fontSize = 15.sp,
+                        lineHeight = 22.sp,
+                        selectedBg = Color(0xFF3D7BEF).copy(alpha = 0.26f),
+                    )
+                } else {
+                    MarkdownText(aiVisibleText(msg.text), color = WeuiText, fontSize = 15.sp, lineHeight = 22.sp)
+                }
+                msg.formula?.let { f ->
+                    Spacer(Modifier.height(7.dp))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = Color(0xFFF2F2F2),
+                        border = BorderStroke(1.dp, WeuiBubbleBorder),
+                    ) {
+                        Text(
+                            f, color = WeuiText, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
                         )
-                    } else {
-                        MarkdownText(aiVisibleText(msg.text), color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
-                    }
-                    msg.formula?.let { f ->
-                        Spacer(Modifier.height(7.dp))
-                        Surface(
-                            shape = RoundedCornerShape(10.dp),
-                            color = cs.secondaryContainer,
-                            border = BorderStroke(1.dp, KewuGreen.copy(alpha = 0.4f)),
-                        ) {
-                            Text(
-                                f, color = cs.primary, fontSize = 14.sp, fontWeight = FontWeight.Medium,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            )
-                        }
                     }
                 }
             }
@@ -462,7 +477,16 @@ internal fun ChatAiBubble(
     }
 }
 
-/** 用户气泡：coui Surface 品牌色实心填充 / 语音气泡带 mic + 时长，右对齐；同支持长按菜单。 */
+/** weui 用户侧头像：与 AI 头像同规格（40dp / 圆角 4dp），聊天气泡左右对称。 */
+@Composable
+internal fun ChatUserAvatar(modifier: Modifier = Modifier) {
+    Box(
+        modifier.size(40.dp).clip(RoundedCornerShape(4.dp)).background(KewuBlue),
+        contentAlignment = Alignment.Center,
+    ) { PersonGlyph(Modifier.size(18.dp), Color.White) }
+}
+
+/** 用户气泡（2026-11-04 U3 按 weui 重做）：纯 `#95EC69` + 黑字 + 右侧小尖角 + 40dp 用户头像。 */
 @Composable
 internal fun ChatUserBubble(
     msg: AiChatMsg,
@@ -470,14 +494,19 @@ internal fun ChatUserBubble(
     reportBounds: Boolean,
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
-    /** 文字选择模式（P4） */
+    /** 文字选择模式（U2） */
     selectFor: ChatTextSelectState? = null,
 ) {
     if (msg.isVoice) {
-        Box(
+        Row(
             Modifier.fillMaxWidth().onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
-            contentAlignment = Alignment.CenterEnd,
-        ) { ChatVoiceBubble(msg, onLongPress) }
+            verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.End,
+        ) {
+            ChatVoiceBubble(msg, onLongPress)
+            WeuiBubbleTail(isUser = true, modifier = Modifier.padding(top = 13.dp))
+            Spacer(Modifier.width(8.dp))
+            ChatUserAvatar()
+        }
         return
     }
     if (msg.image != null) {
@@ -486,74 +515,83 @@ internal fun ChatUserBubble(
             horizontalAlignment = Alignment.End,
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            ChatImageBubble(msg, onLongPress)
+            Row(verticalAlignment = Alignment.Top) {
+                ChatImageBubble(msg, onLongPress)
+                WeuiBubbleTail(isUser = true, modifier = Modifier.padding(top = 13.dp))
+                Spacer(Modifier.width(8.dp))
+                ChatUserAvatar()
+            }
             if (msg.text.isNotBlank() || msg.quote != null) {
                 ChatUserBubble(msg.copy(image = null), reportBounds = false, onBounds = {}, onLongPress = onLongPress)
             }
         }
         return
     }
-    val cs = COUITheme.colorScheme
-    val shape = RoundedCornerShape(topStart = 22.dp, topEnd = 8.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
+    val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 2.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        // P8 微信风格：用户泡 = #95EC69→品牌绿渐变（代替原纯色 cs.primary），白字保留
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.End,
+    ) {
         Box(
             Modifier
                 .widthIn(max = 280.dp)
                 .riseEnter(p, 26f)
                 .clip(shape)
-                .background(ChatUserGreenBrush)
+                .background(WeuiUserGreen)
                 .onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) },
         ) {
-        Column(
-            Modifier
-                .bubblePress(onLongPress)
-                .padding(horizontal = 14.dp, vertical = 11.dp),
-        ) {
-            // ★ 引用（12.8）：气泡顶部渲染一块半透明引用小条（被引用原文）
-            msg.quote?.let { quoted ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(cs.onPrimary.copy(alpha = 0.16f))
-                        .padding(horizontal = 9.dp, vertical = 6.dp),
-                ) {
-                    // 左侧竖条：一眼认出是"引用"而非正文
-                    Box(
+            Column(
+                Modifier
+                    .bubblePress(onLongPress)
+                    .padding(horizontal = 12.dp, vertical = 9.dp),
+            ) {
+                // 微信引用条：灰底 + 左侧竖条 + 小字（不再用白字半透明）
+                msg.quote?.let { quoted ->
+                    Row(
                         Modifier
-                            .width(2.5.dp)
-                            .heightIn(min = 22.dp)
-                            .clip(RoundedCornerShape(2.dp))
-                            .background(cs.onPrimary.copy(alpha = 0.5f)),
-                    )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        quoted,
-                        color = cs.onPrimary.copy(alpha = 0.72f),
-                        fontSize = 11.sp, lineHeight = 15.sp,
-                        maxLines = 3, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f),
-                    )
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(Color(0x1A000000))
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .width(2.5.dp)
+                                .heightIn(min = 20.dp)
+                                .clip(RoundedCornerShape(2.dp))
+                                .background(Color(0xFF9A9A9A)),
+                        )
+                        Spacer(Modifier.width(7.dp))
+                        Text(
+                            quoted,
+                            color = Color(0xFF5B5B5B),
+                            fontSize = 11.5.sp, lineHeight = 16.sp,
+                            maxLines = 3, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 220.dp),
+                        )
+                    }
+                    Spacer(Modifier.height(7.dp))
                 }
-                Spacer(Modifier.height(7.dp))
-            }
-            if (msg.text.isNotEmpty()) {
-                if (selectFor?.msgKey == msg.id) {
-                    // P4 选择模式：白字品牌底上的选区背景用白色半透明，对比足够
-                    SelectableChatText(
-                        text = msg.text,
-                        state = selectFor,
-                        color = cs.onPrimary,
-                        selectedBg = Color.White.copy(alpha = 0.28f),
-                    )
-                } else {
-                    Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
+                if (msg.text.isNotEmpty()) {
+                    if (selectFor?.msgKey == msg.id) {
+                        SelectableChatText(
+                            text = msg.text,
+                            state = selectFor,
+                            color = WeuiText,
+                            fontSize = 15.sp,
+                            lineHeight = 22.sp,
+                            selectedBg = Color(0xFFFFFFFF).copy(alpha = 0.45f),
+                        )
+                    } else {
+                        Text(msg.text, color = WeuiText, fontSize = 15.sp, lineHeight = 22.sp)
+                    }
                 }
             }
         }
-        }
+        WeuiBubbleTail(isUser = true, modifier = Modifier.padding(top = 13.dp))
+        Spacer(Modifier.width(8.dp))
+        ChatUserAvatar()
     }
 }
 

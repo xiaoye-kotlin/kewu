@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -115,7 +117,10 @@ internal fun SelectableChatText(
     }
     Box(
         Modifier
-            .fillMaxWidth()
+            // ★ 2026-11-04（U3）：这里原先是 fillMaxWidth() —— 长按进入选择模式时文本区
+            //   从「按内容自适应」突然撑满气泡最大宽度，用户看到「自己的气泡突然变长」。
+            //   改成 wrapContentSize，与常态 Text 完全同一套测量约束，宽度不再跳。
+            .wrapContentSize()
             .onGloballyPositioned { coords ->
                 textOrigin = coords.boundsInWindow().topLeft
                 state.textBounds = coords.boundsInWindow()
@@ -123,7 +128,7 @@ internal fun SelectableChatText(
     ) {
         Text(
             annotated,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.wrapContentWidth(),
             onTextLayout = { layout = it },
         )
         val lr = layout

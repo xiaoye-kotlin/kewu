@@ -995,52 +995,58 @@ private fun TaBubble(
             }
         }
     } else if (msg.isUser) {
-        // P8 微信风格：用户泡 = #95EC69→品牌绿渐变（与学生端同款），白字保留
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        // U3 weui：用户泡纯 #95EC69 + 黑字 + 6dp 圆角 + 右侧尖角 + 40dp 方头像（与学生端一致）
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.Top,
+        ) {
             Box(
                 Modifier
-                    .widthIn(max = 300.dp)
+                    .widthIn(max = 280.dp)
                     .then(bounds)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(ChatUserGreenBrush),
+                    .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 2.dp, bottomEnd = 6.dp, bottomStart = 6.dp))
+                    .background(WeuiUserGreen),
             ) {
-            Column(press.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                Column(press.padding(horizontal = 12.dp, vertical = 9.dp)) {
                     if (selecting && selectFor != null) {
-                        SelectableChatText(plainText, selectFor, color = Color.White, selectedBg = Color.White.copy(alpha = 0.28f))
+                        SelectableChatText(plainText, selectFor, color = WeuiText,
+                            fontSize = 15.sp, lineHeight = 22.sp, selectedBg = Color.White.copy(alpha = 0.45f))
                     } else {
-                    // 引用小条（与学生端 UserBubble 同款：半透明底 + 左侧竖条）
-                    msg.quote?.let { quoted ->
-                        Row(
-                            Modifier
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(Color.White.copy(alpha = 0.16f))
-                                .padding(horizontal = 9.dp, vertical = 6.dp),
-                        ) {
-                            Box(
+                        // 微信引用条：灰底 + 左侧竖条 + 小字
+                        msg.quote?.let { quoted ->
+                            Row(
                                 Modifier
-                                    .width(2.5.dp)
-                                    .heightIn(min = 22.dp)
-                                    .clip(RoundedCornerShape(2.dp))
-                                    .background(Color.White.copy(alpha = 0.5f)),
-                            )
-                            Spacer(Modifier.width(8.dp))
-                            Text(
-                                quoted, color = Color.White.copy(alpha = 0.72f),
-                                fontSize = 11.sp, lineHeight = 15.sp,
-                                maxLines = 3, overflow = TextOverflow.Ellipsis,
-                            )
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(Color(0x1A000000))
+                                    .padding(horizontal = 8.dp, vertical = 6.dp),
+                            ) {
+                                Box(
+                                    Modifier.width(2.5.dp).heightIn(min = 20.dp)
+                                        .clip(RoundedCornerShape(2.dp)).background(Color(0xFF9A9A9A)),
+                                )
+                                Spacer(Modifier.width(7.dp))
+                                Text(
+                                    quoted, color = Color(0xFF5B5B5B),
+                                    fontSize = 11.5.sp, lineHeight = 16.sp,
+                                    maxLines = 3, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 220.dp),
+                                )
+                            }
+                            if (msg.blocks.isNotEmpty()) Spacer(Modifier.height(7.dp))
                         }
-                        if (msg.blocks.isNotEmpty()) Spacer(Modifier.height(7.dp))
-                    }
-                    msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
-                        Text(t.s, color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp)
-                    }
+                        msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
+                            Text(t.s, color = WeuiText, fontSize = 15.sp, lineHeight = 22.sp)
+                        }
                     }
                 }
             }
+            WeuiBubbleTail(isUser = true, modifier = Modifier.padding(top = 13.dp))
+            Spacer(Modifier.width(8.dp))
+            ChatUserAvatar()
         }
     } else {
-        // AI：奶白毛玻璃气泡（左对齐）+ P8 微信头像（由调用方按 weui 连续规则传 showAvatar）
+        // U3 weui：AI 泡纯白 + 黑字 + 左侧尖角（不再整颗毛玻璃），40dp 方头像
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.Top) {
             if (showAvatar) {
                 ChatAiAvatar()
@@ -1048,30 +1054,32 @@ private fun TaBubble(
             } else {
                 Spacer(Modifier.width(40.dp))
             }
-            KewuGlassCard(
-                backdrop = backdrop,
-                shape = RoundedCornerShape(20.dp),
-                blurRadius = 16.dp,
-                tintAlpha = 0.30f,
-                modifier = Modifier
-                    .fillMaxWidth(0.88f)
-                    .border(1.dp, cs.dividerLine, RoundedCornerShape(20.dp))
+            WeuiBubbleTail(isUser = false, modifier = Modifier.padding(top = 13.dp))
+            val aiShape = RoundedCornerShape(topStart = 2.dp, topEnd = 6.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
+            Box(
+                Modifier
+                    .widthIn(max = 300.dp)
+                    .border(1.dp, WeuiBubbleBorder, aiShape)
+                    .clip(aiShape)
+                    .background(WeuiAiWhite)
                     .then(bounds),
             ) {
-                Column(press.padding(14.dp)) {
+                Column(press.padding(horizontal = 12.dp, vertical = 9.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("小悟", color = KewuGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("小悟", color = Color(0xFF7A7A7A), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.width(6.dp))
-                        Surface(shape = RoundedCornerShape(5.dp), color = KewuGreen.copy(alpha = 0.16f)) {
+                        Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFF0F0F0)) {
                             Text(
-                                "KEWU AI", color = KewuGreen, fontSize = 9.sp, fontWeight = FontWeight.Bold,
+                                "KEWU AI", color = Color(0xFF8A8A8A), fontSize = 9.sp, fontWeight = FontWeight.Bold,
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
                             )
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(6.dp))
                     if (selecting && selectFor != null) {
-                        SelectableChatText(plainText, selectFor, color = cs.onSurface, selectedBg = cs.primary.copy(alpha = 0.20f))
+                        SelectableChatText(plainText, selectFor, color = WeuiText,
+                            fontSize = 15.sp, lineHeight = 22.sp,
+                            selectedBg = Color(0xFF3D7BEF).copy(alpha = 0.26f))
                     } else {
                     msg.blocks.forEach { block ->
                         when (block) {

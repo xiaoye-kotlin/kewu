@@ -555,7 +555,9 @@ internal fun ChatImageBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
     val enter = remember { Animatable(if (msg.mediaState == ChatMediaState.DONE) 1f else 0f) }
     LaunchedEffect(Unit) { enter.animateTo(1f, spring(dampingRatio = 0.62f, stiffness = 360f)) }
     val dim by animateFloatAsState(if (msg.mediaState == ChatMediaState.DONE) 0f else 0.38f, tween(240), label = "imgDim")
-    val shape = RoundedCornerShape(18.dp)
+    // ★ 2026-11-04 U3 weui：图片气泡与文本气泡同一套语言（6dp 圆角 + 极淡描边 + 浅灰占位底），
+    //   旧版 18dp 大圆角 + 主题容器深色底，和重做后的 weui 文本气泡并排时明显不是一家人。
+    val shape = RoundedCornerShape(6.dp)
     Box(
         Modifier
             .graphicsLayer {
@@ -567,8 +569,8 @@ internal fun ChatImageBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
             }
             .size(w.dp, h.dp)
             .clip(shape)
-            .border(1.dp, cs.dividerLine, shape)
-            .background(cs.secondaryContainer)
+            .border(1.dp, WeuiBubbleBorder, shape)
+            .background(WeuiChatBg)
             .bubblePress(onLongPress)
             .clickable {
                 when (msg.mediaState) {
@@ -611,7 +613,6 @@ private fun FailedBadge(error: String?) {
  */
 @Composable
 internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
-    val cs = COUITheme.colorScheme
     val retry = LocalChatMediaRetry.current
     val src = msg.voice
     val key = "chatvoice:${msg.id}"
@@ -622,13 +623,15 @@ internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
     val progress = if (mine && play.durationMs > 0) (play.positionMs.toFloat() / play.durationMs).coerceIn(0f, 1f) else 0f
     val secs = msg.voiceSecs.coerceAtLeast(1)
     val widthDp = (110 + secs * 2.4f).coerceAtMost(230f)
-    val shape = RoundedCornerShape(topStart = 22.dp, topEnd = 8.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
+    // ★ 2026-11-04 U3 weui：语音气泡也统一到「纯 #95EC69 + #191919 黑字 + 6dp 圆角」。
+    //   旧版是品牌主色胶囊 + 白字 22dp 大圆角，与重做后的文本气泡完全不是一套语言。
+    val shape = RoundedCornerShape(topStart = 6.dp, topEnd = 2.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 40L)
     Surface(
         modifier = Modifier.widthIn(min = widthDp.dp, max = 260.dp).riseEnter(p, 26f),
         shape = shape,
-        color = cs.primary,
-        contentColor = cs.onPrimary,
+        color = WeuiUserGreen,
+        contentColor = WeuiText,
     ) {
         Column(
             Modifier
@@ -644,7 +647,7 @@ internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
                     Modifier
                         .size(30.dp)
                         .clip(CircleShape)
-                        .background(cs.onPrimary.copy(alpha = 0.18f))
+                        .background(WeuiText.copy(alpha = 0.10f))
                         .clickable(enabled = src != null) {
                             haptic(HapticKind.Tick)
                             if (src != null) AudioPlayback.toggle(key, src)
@@ -653,8 +656,8 @@ internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
                 ) {
                     when {
                         loading -> InfiniteProgressIndicator(size = 14.dp)
-                        playing -> Icon(COUIIcons.Pause, contentDescription = "暂停", tint = cs.onPrimary, modifier = Modifier.size(14.dp))
-                        else -> Icon(COUIIcons.Play, contentDescription = "播放", tint = cs.onPrimary, modifier = Modifier.size(14.dp))
+                        playing -> Icon(COUIIcons.Pause, contentDescription = "暂停", tint = WeuiText, modifier = Modifier.size(14.dp))
+                        else -> Icon(COUIIcons.Play, contentDescription = "播放", tint = WeuiText, modifier = Modifier.size(14.dp))
                     }
                 }
                 Spacer(Modifier.width(9.dp))
@@ -662,11 +665,11 @@ internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
                     seed = msg.id,
                     playing = playing,
                     progress = progress,
-                    color = cs.onPrimary,
+                    color = WeuiText,
                     modifier = Modifier.weight(1f).height(22.dp),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text("$secs″", color = cs.onPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text("$secs″", color = WeuiText, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
             val transcript = msg.text.trim()
             AnimatedVisibility(
@@ -675,20 +678,20 @@ internal fun ChatVoiceBubble(msg: AiChatMsg, onLongPress: () -> Unit) {
                 exit = shrinkVertically(tween(160)) + fadeOut(tween(120)),
             ) {
                 Column(Modifier.width((widthDp - 24).dp).padding(top = 8.dp)) {
-                    Box(Modifier.fillMaxWidth().height(1.dp).background(cs.onPrimary.copy(alpha = 0.18f)))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(WeuiText.copy(alpha = 0.12f)))
                     Spacer(Modifier.height(7.dp))
                     when (msg.mediaState) {
                         ChatMediaState.SENDING -> Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("正在识别", color = cs.onPrimary.copy(alpha = 0.78f), fontSize = 12.5.sp)
-                            TypingDots(cs.onPrimary.copy(alpha = 0.78f))
+                            Text("正在识别", color = WeuiText.copy(alpha = 0.65f), fontSize = 12.5.sp)
+                            TypingDots(WeuiText.copy(alpha = 0.65f))
                         }
                         ChatMediaState.FAILED -> Text(
                             (msg.mediaError ?: "没听清") + "，点击重试",
-                            color = cs.onPrimary,
+                            color = WeuiText,
                             fontSize = 12.5.sp,
                             modifier = Modifier.clickable { haptic(HapticKind.Light); retry(msg) },
                         )
-                        ChatMediaState.DONE -> Text(transcript, color = cs.onPrimary.copy(alpha = 0.92f), fontSize = 13.sp, lineHeight = 19.sp)
+                        ChatMediaState.DONE -> Text(transcript, color = WeuiText.copy(alpha = 0.85f), fontSize = 13.sp, lineHeight = 19.sp)
                     }
                 }
             }
