@@ -68,6 +68,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.BackHandler
+import kotlinx.coroutines.Job
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -119,10 +120,11 @@ private fun vcTwo(n: Int) = if (n < 10) "0$n" else "$n"
 private fun vcFmtClock(totalSec: Int) = "${vcTwo(totalSec / 60)}:${vcTwo(totalSec % 60)}"
 
 // ── ★ V11 自动断句参数（2026-11-04 晚 2）──
+// ★ X5（2026-11-05）：用户说完一句话后再停 3 秒才判定「说完了」，留余地让他接话
 /** 实时转录文本连续稳定多久判定「一句话说完了」 */
-private const val AUTO_SILENCE_MS = 1200L
+private const val AUTO_SILENCE_MS = 3000L
 /** 句末标点出现时可更快收尾（仍需稳定一小段，避免识别中间态误判） */
-private const val AUTO_PUNCT_SILENCE_MS = 600L
+private const val AUTO_PUNCT_SILENCE_MS = 1500L
 /** 至少识别到几个字才允许自动提交 */
 private const val AUTO_MIN_CHARS = 2
 private const val SENTENCE_END_CHARS = "。？！?!,.、；;～~"
@@ -153,6 +155,8 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
     // 本轮：用户最终识别文本 + AI 流式回复
     var liveUser by remember { mutableStateOf("") }
     var aiReply by remember { mutableStateOf("") }
+    // ★ X6（2026-11-05）：持有 AI 回答协程，便于用户开口说话时打断它
+    var aiJob by remember { mutableStateOf<Job?>(null) }
     // 通话计时
     var callStartMs by remember { mutableStateOf(vcNowMs()) }
     var elapsedSec by remember { mutableIntStateOf(0) }
@@ -188,7 +192,7 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
 
     /** 结束本轮：取实时转录（失败退回整段上传转写）→ 流式问 AI → 大字展示。 */
     fun stopTalk() {
-        scope.launch {
+        aiJob = scope.launch {
             if (!recorder.recording) {
                 phase = VoiceCallPhase.IDLE
                 return@launch
@@ -295,7 +299,40 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit) {
                     delay(120)
                 }
             }
-            VoiceCallPhase.THINKING -> Unit
+            // ★ X6（2026-11-05）：AI 回答过程中用户开口 → 立刻打断 AI 回答，重新聆听用户
+            VoiceCallPhase.THINKING -> {
+                if (muted) return@LaunchedEffect
+                // 开一路监听麦（只听不提交），用来实时检测用户是否要继续说话
+                scope.launch {
+                    try {
+                        com.kewu.app.AudioPlayback.stop() // 别把 AI 回放录回去
+                        val err = recorder.start()
+                        if (err != null) return@launch
+                        var last = recorder.liveText.trim()
+                        var stableAt = vcNowMs()
+                        var barged = false
+                        // AI 回答没结束（isActive）且麦在录时持续监听
+                        while (recorder.recording && aiJob?.isActive == true) {
+                            val t = recorder.liveText.trim()
+                            if (t != last) { last = t; stableAt = vcNowMs() }
+                            // 用户开口：识别到字且稳定 500ms 即认定「要接话」→ 打断
+                            if (t.length >= AUTO_MIN_CHARS && (vcNowMs() - stableAt) >= 500) {
+                                barged = true
+                                break
+                            }
+                            delay(80)
+                        }
+                        if (barged) {
+                            aiJob?.cancel() // 打断正在生成的 AI 回答
+                            hint = "已打断，继续听你说～"
+                            phase = VoiceCallPhase.IDLE // IDLE→自动重新 startTalk 聆听用户
+                        }
+                    } finally {
+                        // AI 自行说完（phase 变回 IDLE 会取消本协程）或打断后，都先停掉监听麦
+                        if (recorder.recording) recorder.cancel()
+                    }
+                }
+            }
         }
     }
 
