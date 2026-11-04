@@ -351,10 +351,13 @@ internal fun ChatAiBubble(
     reportBounds: Boolean,
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
+    /** 文字选择模式（P4）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
+    selectFor: ChatTextSelectState? = null,
 ) {
     val cs = COUITheme.colorScheme
     val shape = RoundedCornerShape(topStart = 8.dp, topEnd = 22.dp, bottomEnd = 22.dp, bottomStart = 22.dp)
     val p = rememberEnterProgress(0, baseDelayMs = 60L)
+    val selecting = selectFor?.msgKey == msg.id
     Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
         Box(
             Modifier
@@ -382,7 +385,17 @@ internal fun ChatAiBubble(
                         Text("小悟", color = cs.onSurfaceSecondary, fontSize = 10.5.sp, fontWeight = FontWeight.Medium)
                     }
                     Spacer(Modifier.height(5.dp))
-                    MarkdownText(aiVisibleText(msg.text), color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
+                    if (selecting && selectFor != null) {
+                        // P4 选择模式：markdown 退化为纯文本（选区按字符稳定映射），带高亮 + 拖柄
+                        SelectableChatText(
+                            text = stripMarkdown(aiVisibleText(msg.text)),
+                            state = selectFor,
+                            color = cs.onSurface,
+                            selectedBg = cs.primary.copy(alpha = 0.20f),
+                        )
+                    } else {
+                        MarkdownText(aiVisibleText(msg.text), color = cs.onSurface, fontSize = 13.5.sp, lineHeight = 20.sp)
+                    }
                     msg.formula?.let { f ->
                         Spacer(Modifier.height(7.dp))
                         Surface(
@@ -410,6 +423,8 @@ internal fun ChatUserBubble(
     reportBounds: Boolean,
     onBounds: (Rect) -> Unit,
     onLongPress: () -> Unit,
+    /** 文字选择模式（P4） */
+    selectFor: ChatTextSelectState? = null,
 ) {
     if (msg.isVoice) {
         Box(
@@ -478,7 +493,19 @@ internal fun ChatUserBubble(
                 }
                 Spacer(Modifier.height(7.dp))
             }
-            if (msg.text.isNotEmpty()) Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
+            if (msg.text.isNotEmpty()) {
+                if (selectFor?.msgKey == msg.id) {
+                    // P4 选择模式：白字品牌底上的选区背景用白色半透明，对比足够
+                    SelectableChatText(
+                        text = msg.text,
+                        state = selectFor,
+                        color = cs.onPrimary,
+                        selectedBg = Color.White.copy(alpha = 0.28f),
+                    )
+                } else {
+                    Text(msg.text, color = cs.onPrimary, fontSize = 13.5.sp, lineHeight = 20.sp)
+                }
+            }
         }
         }
     }
@@ -717,20 +744,35 @@ internal fun rememberChatMenuState(): ChatMenuState = remember { ChatMenuState()
  * 一条消息：AI 走液态玻璃气泡（下方可带 B 站推荐卡），用户走品牌色气泡；长按弹菜单。
  * 放在 LazyColumn 的 item 里（调用方负责 key / animateItem）。
  * [onBiliLoaded]：本条 AI 回答的 B 站视频卡加载完成时回调（页面用来强制滚到底）。
+ * [selectFor]：文字选择模式（P4，SelectTextHelper 风格）——文字消息长按进选择，媒体消息长按仍弹原菜单。
  */
 @Composable
-internal fun ChatMessageItem(msg: AiChatMsg, backdrop: LayerBackdrop, menu: ChatMenuState, onBiliLoaded: (() -> Unit)? = null) {
-    if (msg.isUser) {
-        ChatUserBubble(msg, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }) {
+internal fun ChatMessageItem(
+    msg: AiChatMsg,
+    backdrop: LayerBackdrop,
+    menu: ChatMenuState,
+    onBiliLoaded: (() -> Unit)? = null,
+    selectFor: ChatTextSelectState? = null,
+) {
+    // P4：文字消息长按 → 进入文字选择（默认全选）；语音/图片或页面未装选择状态时走原长按菜单
+    val isPlainText = !msg.isVoice && msg.image == null && msg.text.isNotBlank()
+    val onLongPress: () -> Unit = {
+        if (selectFor != null && isPlainText) {
+            haptic(HapticKind.Medium)
+            selectFor.enter(
+                msg.id,
+                if (msg.isUser) msg.text else stripMarkdown(aiVisibleText(msg.text)),
+            )
+        } else {
             menu.msg = msg
             haptic(HapticKind.Medium)
         }
+    }
+    if (msg.isUser) {
+        ChatUserBubble(msg, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }, onLongPress = onLongPress, selectFor = selectFor)
     } else {
         Column {
-            ChatAiBubble(msg, backdrop, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }) {
-                menu.msg = msg
-                haptic(HapticKind.Medium)
-            }
+            ChatAiBubble(msg, backdrop, reportBounds = msg == menu.msg, onBounds = { menu.anchor = it }, onLongPress = onLongPress, selectFor = selectFor)
             // B 站相关视频：只在模型判断「学生在问不懂的知识点」时出现；点卡片在 App 内直接播放
             msg.biliKeyword?.let { kw ->
                 Spacer(Modifier.height(6.dp))
@@ -745,8 +787,8 @@ internal fun ChatMessageItem(msg: AiChatMsg, backdrop: LayerBackdrop, menu: Chat
 internal fun ChatStreamingBubble(text: String, backdrop: LayerBackdrop, thinkingText: String = "小悟正在思考…") {
     ChatAiBubble(
         AiChatMsg(text.ifEmpty { thinkingText }, isUser = false, id = -1L, ts = nowMs()),
-        backdrop, reportBounds = false, onBounds = {},
-    ) {}
+        backdrop, reportBounds = false, onBounds = {}, onLongPress = {},
+    )
 }
 
 /** 长按菜单（复制 / 引用 / 分享）。放在页面根 Box 的最后，[rootOrigin] 是该根 Box 的窗口原点。 */

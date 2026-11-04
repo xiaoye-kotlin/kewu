@@ -171,6 +171,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }
     val snackbar = LocalKewuSnackbar.current
     val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    // 2026-11-04（P4）：文字选择状态（与学生端共用组件），教师端操作条 = 复制 / 全选 / 分享
+    val textSelect = remember { ChatTextSelectState() }
 
     // ── 学情数据（全部带兜底；问答与主动简报共用） ──
     var teacherName by remember { mutableStateOf("老师") }
@@ -666,6 +668,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
     }
     BackHandler(panel != TeacherPanel.NONE) { panel = TeacherPanel.NONE }
+    // P4：文字选择模式下返回键先退出选择（后组合者优先）
+    BackHandler(textSelect.active) { textSelect.exit() }
 
     Box(
         Modifier
@@ -766,10 +770,28 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 // 只有被长按的这条持续上报坐标（滚动时菜单跟着走）；其余不报，避免每帧写状态
                                 reportBounds = msg == menuMsg,
                                 onBounds = { menuAnchor = it },
-                            ) {
-                                menuMsg = msg
-                                haptic(HapticKind.Medium)
-                            }
+                                selectFor = textSelect,
+                                onLongPress = {
+                                    // 2026-11-04（P4）：文字消息长按进文字选择（SelectTextHelper 风格）；
+                                    // 图片 / 语音消息长按仍弹原菜单
+                                    if (msg.media == null) {
+                                        haptic(HapticKind.Medium)
+                                        textSelect.enter(
+                                            msg.id,
+                                            msg.blocks.joinToString("\n") { b ->
+                                                when (b) {
+                                                    is TaBlock.Text -> stripMarkdown(b.s)
+                                                    is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
+                                                    is TaBlock.Chips -> b.list.joinToString("、")
+                                                }
+                                            },
+                                        )
+                                    } else {
+                                        menuMsg = msg
+                                        haptic(HapticKind.Medium)
+                                    }
+                                },
+                            )
                         }
                     }
                     Spacer(Modifier.height(10.dp))
@@ -873,6 +895,19 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
 
         // ── 长按气泡的操作菜单（液态玻璃 + coui 选项，与学生端同款）：必须是根盒最后一个子节点（盖在最上层） ──
+        // P4 文字选择工具条（复制 / 全选 / 分享），渲染在菜单层之上
+        ChatSelectToolbar(
+            state = textSelect,
+            rootOrigin = rootOrigin,
+            onCopy = { t ->
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(t))
+                scope.launch { snackbar.toast("已复制") }
+            },
+            onShare = { t ->
+                clipboard.setText(androidx.compose.ui.text.AnnotatedString(t))
+                scope.launch { snackbar.toast("内容已复制，可以粘贴分享") }
+            },
+        )
         val activeMenuMsg = menuMsg
         if (activeMenuMsg != null) {
             val relRect = menuAnchor?.let { r ->
@@ -914,10 +949,21 @@ private fun TaBubble(
     reportBounds: Boolean = false,
     onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
     onLongPress: (() -> Unit)? = null,
+    /** 文字选择模式（P4）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
+    selectFor: ChatTextSelectState? = null,
 ) {
     val cs = COUITheme.colorScheme
     val press = if (onLongPress != null) Modifier.bubblePress(onLongPress) else Modifier
     val bounds = Modifier.onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
+    // P4 选择模式：整条消息的纯文本（blocks → 纯文本），选区按字符稳定映射
+    val selecting = selectFor?.msgKey == msg.id
+    val plainText = if (selecting) msg.blocks.joinToString("\n") { b ->
+        when (b) {
+            is TaBlock.Text -> stripMarkdown(b.s)
+            is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
+            is TaBlock.Chips -> b.list.joinToString("、")
+        }
+    } else ""
     val media = msg.media
     if (msg.isUser && media != null) {
         // 图片 / 语音：与学生端同一套气泡（上传 / 识别状态、失败点按重试）
@@ -943,6 +989,9 @@ private fun TaBubble(
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(modifier = bounds.widthIn(max = 300.dp), shape = RoundedCornerShape(18.dp), color = KewuBlue, contentColor = Color.White) {
                 Column(press.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    if (selecting && selectFor != null) {
+                        SelectableChatText(plainText, selectFor, color = Color.White, selectedBg = Color.White.copy(alpha = 0.28f))
+                    } else {
                     // 引用小条（与学生端 UserBubble 同款：半透明底 + 左侧竖条）
                     msg.quote?.let { quoted ->
                         Row(
@@ -969,6 +1018,7 @@ private fun TaBubble(
                     }
                     msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
                         Text(t.s, color = Color.White, fontSize = 14.5.sp, lineHeight = 21.sp)
+                    }
                     }
                 }
             }
@@ -998,6 +1048,9 @@ private fun TaBubble(
                         }
                     }
                     Spacer(Modifier.height(8.dp))
+                    if (selecting && selectFor != null) {
+                        SelectableChatText(plainText, selectFor, color = cs.onSurface, selectedBg = cs.primary.copy(alpha = 0.20f))
+                    } else {
                     msg.blocks.forEach { block ->
                         when (block) {
                             is TaBlock.Text -> {
@@ -1060,6 +1113,7 @@ private fun TaBubble(
                                 Spacer(Modifier.height(4.dp))
                             }
                         }
+                    }
                     }
                 }
             }

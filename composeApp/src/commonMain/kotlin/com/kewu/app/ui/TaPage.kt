@@ -247,6 +247,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     // ── 长按气泡的 QQ 式操作菜单 + 轻提示（复制/引用/分享） ──
     // 菜单状态与贴气泡定位见共用组件 ChatMenuState / ChatBubbleMenu（KewuAiChat.kt）
     val menu = rememberChatMenuState()
+    // 2026-11-04（P4）：文字选择状态（SelectTextHelper 风格）——长按文字消息进入，工具条渲染在页面根
+    val textSelect = remember { ChatTextSelectState() }
     var rootOrigin by remember { mutableStateOf(Offset.Zero) }  // 页面根盒的窗口原点
     // 轻提示走全局 coui Snackbar（原自建中央胶囊已下线）
     val snackbar = LocalKewuSnackbar.current
@@ -494,10 +496,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         }
     }
 
-    // 返回键优先级：先关面板，再交给导航
+    // 返回键优先级：文字选择（P4）> 关面板 > 导航（BackHandler 后组合者优先）
     BackHandler(showAttach || isRecording) {
         panel = AssistantPanel.NONE
     }
+    BackHandler(textSelect.active) { textSelect.exit() }
 
     // 凝结出场动画值（弹簧过冲 = "加速冲上来后晃一下"）
     val personaAlpha by animateFloatAsState(if (enterPersona) 1f else 0f, tween(280), label = "personaA")
@@ -666,7 +669,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                                 // 避免滚动浏览历史时旧卡片的重新加载把视图拽下去）
                                 ChatMessageItem(msg, pageBackdrop, menu, onBiliLoaded = {
                                     if (messages.lastOrNull()?.id == msg.id) biliLoadedTick++
-                                })
+                                }, selectFor = textSelect)
                             }
                         }
                     }
@@ -810,6 +813,21 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
 
         // ── 长按气泡的 QQ 式操作菜单（液态玻璃 + coui Card 选项） ──
         ChatBubbleMenu(menu, rootOrigin) { quotePreview = it }
+        // P4 文字选择工具条：复制 / 全选 / 引用 / 分享（贴选择文本区上方浮出）
+        val clipboardSel = LocalClipboardManager.current
+        ChatSelectToolbar(
+            state = textSelect,
+            rootOrigin = rootOrigin,
+            onCopy = { t ->
+                clipboardSel.setText(androidx.compose.ui.text.AnnotatedString(t))
+                snackbar.toast("已复制")
+            },
+            onShare = { t ->
+                clipboardSel.setText(androidx.compose.ui.text.AnnotatedString(t))
+                snackbar.toast("内容已复制，可以粘贴分享")
+            },
+            onQuote = { t -> quotePreview = t },
+        )
 
         // ── B 站学习视频浏览面板（2026-11-02）：页内全屏覆盖层，自带 BackHandler ──
         SlideOverlay(if (showBiliPanel) Unit else null) {
