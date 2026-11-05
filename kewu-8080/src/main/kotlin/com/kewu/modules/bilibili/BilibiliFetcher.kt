@@ -339,7 +339,7 @@ class BilibiliFetcher {
      * 带 UA + Referer + X-Bili-Api-Source(pc) + buvid cookie 防 412 风控；
      * 单个视频直链失败只把该条 URL 留空，不让整个接口崩掉；每条直链请求最多等 10 秒。
      */
-    suspend fun searchVideos(keyword: String): List<BilibiliVideoItem> {
+    suspend fun searchVideos(keyword: String, withUrls: Boolean = true): List<BilibiliVideoItem> {
         val resp = client.get("https://api.bilibili.com/x/web-interface/search/type") {
             header("User-Agent", UA)
             header("Referer", REFERER)
@@ -372,7 +372,10 @@ class BilibiliFetcher {
                     val info = runCatching { withTimeoutOrNull(10_000) { viewInfo(item.bvid) } }
                         .onFailure { e -> log.warn("B站 view 获取失败 bvid=${item.bvid}：${e.message}") }
                         .getOrNull()
-                    val urls = info?.let {
+                    // 推荐列表只要元数据时跳过 DASH 直链：每条要额外打一次 playurl 接口，
+                    // 10 条并发也要等最慢的那条（线上实测 8.4s -> 0.6s）。view 接口仍然要调，
+                    // 合集 / 分P 元数据就靠它，不能一起省掉；点播直链由 /api/bilibili/play 现取。
+                    val urls = if (!withUrls) null else info?.let {
                         runCatching { withTimeoutOrNull(10_000) { dashUrlsFor(item.bvid, it.cid) } }
                             .onFailure { e -> log.warn("B站直链获取失败 bvid=${item.bvid}：${e.message}") }
                             .getOrNull()

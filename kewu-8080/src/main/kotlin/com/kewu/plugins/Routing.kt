@@ -35,6 +35,7 @@ import com.kewu.recserver.config.loadRecConfig
 import com.kewu.modules.bilibili.BilibiliFetcher
 import com.kewu.modules.bilibili.BilibiliNoteService
 import com.kewu.modules.bilibili.bilibiliRoutes
+import com.kewu.modules.config.maasConfigRoutes
 import com.kewu.modules.audio.TranscribeFusionService
 import com.kewu.modules.audio.audioFusionRoutes
 import com.kewu.recserver.services.ai.MaasAiService
@@ -226,5 +227,8 @@ fun Application.configureRouting() {
         audioFusionRoutes(audioFusionService, bg)
         // AI 语音对话：POST /api/ai/voice-chat（发一段语音，回一段 AI 语音）
         voiceChatRoutes(voiceChatService)
+        // 兼容旧客户端 / 总控端：GET /api/config/maas + /api/admin/config/maas
+        // （转发到总控端加密配置 SecretStore，不再用旧 app_configs 表）
+        maasConfigRoutes(adminService)
     }
 }

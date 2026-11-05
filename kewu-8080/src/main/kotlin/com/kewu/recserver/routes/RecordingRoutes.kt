@@ -8,6 +8,7 @@ import com.kewu.recserver.model.DeviceStatus
 import com.kewu.recserver.model.FuseRequest
 import com.kewu.recserver.model.RecordingMeta
 import com.kewu.recserver.model.RecordingUploadResult
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.content.forEachPart
 import io.ktor.http.content.PartData
@@ -15,6 +16,7 @@ import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.principal
 import io.ktor.server.request.receive
 import io.ktor.server.request.receiveMultipart
+import io.ktor.server.request.receiveText
 import io.ktor.server.response.respond
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
@@ -23,6 +25,10 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.utils.io.toByteArray
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
@@ -231,6 +237,40 @@ fun Route.recordingRoutes() {
                     return@get
                 }
             call.respond(com.kewu.models.ApiResponse(0, "ok", list))
+        }
+    }
+
+    // OBS 预签名直传（2026-11-05 兼容保留）：返回 15 分钟有效的 PUT 地址。
+    // 当前 App 已改成分段上传 /api/recordings/upload，本接口只为老客户端 / 总控端升级后不 404。
+    post("/api/recordings/presign") {
+        val obs = services.storage as? com.kewu.recserver.services.storage.ObsStorageService
+        if (obs == null) {
+            call.respond(HttpStatusCode.NotImplemented, mapOf("error" to "当前存储不支持预签名直传"))
+            return@post
+        }
+        try {
+            val root = runCatching { Json.parseToJsonElement(call.receiveText()).jsonObject }.getOrNull()
+            val classId = root?.get("classId")?.jsonPrimitive?.content?.trim().orEmpty()
+            if (classId.isBlank()) {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "classId 必填"))
+                return@post
+            }
+            val ext = (root?.get("ext")?.jsonPrimitive?.content?.trim().orEmpty().ifBlank { "wav" })
+                .lowercase().replace(Regex("[^a-z0-9]"), "").ifBlank { "wav" }
+            val recordingId = UUID.randomUUID().toString()
+            val (uploadUrl, fileUrl) = obs.presignPut(recordingId, ext)
+            call.respondText(
+                buildJsonObject {
+                    put("recordingId", recordingId)
+                    put("uploadUrl", uploadUrl)
+                    put("fileUrl", fileUrl)
+                    put("objectKey", obs.objectKey(recordingId, ext))
+                }.toString(),
+                ContentType.Application.Json,
+            )
+        } catch (t: Throwable) {
+            println("PRESIGN-ERROR: $t")
+            call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "预签名失败：${t.message}"))
         }
     }
 

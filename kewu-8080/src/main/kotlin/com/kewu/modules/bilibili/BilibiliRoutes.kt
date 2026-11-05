@@ -97,7 +97,9 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
     }
 
     // 按学科获取 B站视频搜索列表（含 App 内播放所需的 DASH 直链接口）
-    //   GET /api/bilibili/videos?subject=初中数学
+    //   GET /api/bilibili/videos?subject=初中数学[&withUrls=false]
+    //   withUrls 默认 true（兼容旧客户端仍返回直链）；传 false 时视频/音频直链为空串，
+    //   只回 bvid/title/cover/duration 与合集元数据，推荐页从 ~8s 降到 ~0.6s，点播走 /api/bilibili/play。
     //   成功返回 JSON 数组 [{bvid,title,cover,videoUrl,audioUrl,duration,seasonId,seasonTitle,seasonCover,seasonCount,pageCount,episodes[]}]
     //   属于 UGC 合集 / 多分P 的视频带 episodes 分集元数据（客户端发合集卡、点进去看全部分集）；B站接口异常时降级为 [] + HTTP 200，绝不 500
     get("/api/bilibili/videos") {
@@ -106,10 +108,14 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
             call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(1, "subject 必填（如 初中数学 / 高中数学 / 大学数学）"))
             return@get
         }
+        val withUrls = call.request.queryParameters["withUrls"]?.equals("true", ignoreCase = true) ?: true
         try {
             // subject -> B站搜索关键词；不在映射表里的学科直接用 subject 本身搜
             val keyword = SUBJECT_KEYWORDS[subject] ?: subject
-            val items = fetcher.searchVideos(keyword)
+            // 不带直链时只打 view（12s 封顶），带直链要再打 playurl（30s 封顶）；超时都降级空数组
+            val items = kotlinx.coroutines.withTimeoutOrNull(if (withUrls) 30_000L else 12_000L) {
+                fetcher.searchVideos(keyword, withUrls)
+            }.orEmpty()
             val result = buildJsonArray {
                 items.forEach { it ->
                     add(buildJsonObject {

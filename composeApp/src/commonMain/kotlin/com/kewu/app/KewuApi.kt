@@ -1295,12 +1295,15 @@ object KewuApi {
     /**
      * 按学科 / 关键词搜 B 站视频（2026-11-02，后端文档 14.6）：`GET /api/bilibili/videos?subject=…`。
      * 返回**裸 JSON 数组**（无 ApiResponse 壳），最多 10 条；B 站整体异常时后端返 200 + []（真空列表）。
-     * 网络 / 解析失败返回 null。后端逐条取播放直链较慢（每条最多 10s），超时放宽到 30s。
-     * 无鉴权。
+     * 网络 / 解析失败返回 null。无鉴权。
+     *
+     * 2026-11-05：带 `withUrls=false`，列表只回元数据不逐条抓 DASH 直链（线上实测 8.4s -> 0.6s）；
+     * 播放直链在点开时由 [getBilibiliPlay] 现取。老后端不认这个参数会忽略它、仍返回带直链的列表，不会坏。
      */
     suspend fun getBilibiliVideos(subject: String): List<BilibiliVideoInfo>? = try {
-        val resp = client.get(queryUrl("$BASE_URL/api/bilibili/videos", "subject", subject)) {
-            timeout { requestTimeoutMillis = 30_000; socketTimeoutMillis = 30_000 }
+        val url = queryUrl("$BASE_URL/api/bilibili/videos", "subject", subject) + "&withUrls=false"
+        val resp = client.get(url) {
+            timeout { requestTimeoutMillis = 20_000; socketTimeoutMillis = 20_000 }
         }
         val el = json.parseToJsonElement(resp.bodyAsText())
         (el as? JsonArray)?.mapNotNull { it as? JsonObject }?.map { o ->
@@ -1342,13 +1345,21 @@ object KewuApi {
             append(queryUrl("$BASE_URL/api/bilibili/play", "bvid", bvid))
             if (cid > 0) append("&cid=").append(cid)
         }
-        val resp = client.get(url) {
+        var resp = client.get(url) {
             timeout { requestTimeoutMillis = 30_000; socketTimeoutMillis = 30_000 }
         }
-        val el = json.parseToJsonElement(resp.bodyAsText()).jsonObject
-        if (el["code"].str() != "0") null
+        // 老服务器（11-04 那版）play 是路径参数 /api/bilibili/play/{bvid}，查询参数版会 404。
+        // 部署新版后端之前也要能点开，补一次路径版回退（该版返回裸对象，下面按有没有 code 字段区分）。
+        if (resp.status.value == 404 && cid == 0L) {
+            resp = client.get("$BASE_URL/api/bilibili/play/$bvid") {
+                timeout { requestTimeoutMillis = 30_000; socketTimeoutMillis = 30_000 }
+            }
+        }
+        val root = json.parseToJsonElement(resp.bodyAsText()).jsonObject
+        val isWrapped = root.containsKey("code")   // 新版 {code,data} / 旧版裸对象
+        if (isWrapped && root["code"].str() != "0") null
         else {
-            val d = el["data"]?.jsonObject
+            val d = if (isWrapped) root["data"]?.jsonObject else root
             BilibiliVideoInfo(
                 bvid = d?.get("bvid").str().ifBlank { bvid },
                 title = d?.get("title").str().ifBlank { bvid },
