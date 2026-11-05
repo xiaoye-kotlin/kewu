@@ -24,7 +24,10 @@ import kotlinx.serialization.json.put
  */
 fun Route.maasConfigRoutes(adminService: AdminService) {
 
-    // 旧版 App / 外部探测用：公开读当前生效的 MaaS 配置
+    // 旧版 App / 外部探测用：公开读当前生效的 MaaS 配置。
+    // 2026-11-05 安全修复：这个路径无鉴权，以前会把完整 API Key 明文吐给公网。
+    // 最新 App 已改成服务器中转、根本不调它，所以保留字段结构但只回脱敏值；
+    // 真要读完整密钥走下面有管理员鉴权的 /api/admin/config/maas。
     get("/api/config/maas") {
         val apiUrl = SecretStore.get("MAAS_API_URL")?.trim().orEmpty()
         val apiKey = SecretStore.get("MAAS_API_KEY")?.trim().orEmpty()
@@ -35,11 +38,12 @@ fun Route.maasConfigRoutes(adminService: AdminService) {
                 put("message", "AI 配置未就绪，请在总控端「密钥配置」填写 MAAS_API_URL / MAAS_API_KEY / MAAS_MODEL_NAME")
             } else {
                 put("code", 0)
-                put("message", "ok")
+                put("message", "ok（公开接口不返回完整密钥，管理员请走 /api/admin/config/maas）")
                 put("data", buildJsonObject {
                     put("apiUrl", apiUrl)
-                    put("apiKey", apiKey)
+                    put("apiKey", maskKey(apiKey))
                     put("modelName", modelName)
+                    put("masked", true)
                 })
             }
         }
@@ -93,3 +97,7 @@ fun Route.maasConfigRoutes(adminService: AdminService) {
 }
 
 private const val UNAUTHORIZED = """{"code":401,"message":"未授权：需要管理员凭证（Bearer 管理员Token 或 X-Admin-Key）"}"""
+
+/** 只留头 4 位 + 尾 4 位，够确认「配的是哪把 key」，又拿不去调用。 */
+private fun maskKey(key: String): String =
+    if (key.length > 12) "${key.take(4)}****${key.takeLast(4)}" else "****"

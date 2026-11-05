@@ -11,6 +11,8 @@ import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -20,6 +22,47 @@ import kotlinx.serialization.json.put
 import org.slf4j.LoggerFactory
 
 private val log = LoggerFactory.getLogger("BilibiliRoutes")
+
+// 单集直链缓存：key = bvid:请求里的 cid（0 = 第一P），10 分钟有效。
+// B站直链本身带时效参数，10 分钟远短于有效期；命中后连 view 接口都不用再打。
+// 服务器内存吃紧，超过 200 条就顺手清掉过期的，不让缓存一直涨。
+private data class PlayData(
+    val at: Long,
+    val cid: Long,
+    val title: String,
+    val cover: String,
+    val videoUrl: String,
+    val audioUrl: String,
+)
+
+private suspend fun loadPlay(
+    fetcher: BilibiliFetcher,
+    cache: ConcurrentHashMap<String, PlayData>,
+    bvid: String,
+    cid: Long,
+): PlayData? {
+    val key = "$bvid:$cid"
+    val now = System.currentTimeMillis()
+    cache[key]?.let { if (now - it.at < 600_000L) return it }
+    if (cache.size > 200) {
+        cache.entries.toList().forEach { e ->
+            if (now - e.value.at >= 600_000L) cache.remove(e.key, e.value)
+        }
+    }
+    // 首次点播实测会被 B站接口拖到 30s 以上，整体 20s 封顶：
+    // 超时就给明确提示让 App 重试，而不是让用户对着转圈干等。
+    return try {
+        withTimeoutOrNull(20_000L) {
+            val info = fetcher.viewInfo(bvid)
+            val useCid = if (cid > 0) cid else info.cid
+            val urls = fetcher.dashUrlsFor(bvid, useCid)
+            PlayData(System.currentTimeMillis(), useCid, info.title, info.cover, urls.first, urls.second)
+        }
+    } catch (e: Throwable) {
+        log.warn("B站单集直链异常 bvid=$bvid cid=$cid：${e.message}")
+        null
+    }?.also { cache[key] = it }
+}
 
 // 学科 -> B站搜索关键词。不在表里的学科直接用 subject 本身当关键词搜。
 private val SUBJECT_KEYWORDS = mapOf(
@@ -42,8 +85,9 @@ private val SUBJECT_KEYWORDS = mapOf(
 //
 // 解析前端入参用 Json.parseToJsonElement（项目未开 @Serializable 数据类，按统一约定走手解）。
 fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher, scope: CoroutineScope) {
-    // 路由组只在服务启动时注册一次，等于单例：cid 缓存 / 分段缓存都活在整个进程里
+    // 路由组只在服务启动时注册一次，等于单例：cid 缓存 / 分段缓存 / 直链缓存都活在整个进程里
     val danmakuService = BilibiliDanmakuService(fetcher)
+    val playCache = ConcurrentHashMap<String, PlayData>()
     // 触发生成：立刻返回，不阻塞前端
     post("/api/bilibili/note/generate") {
         val raw = runCatching { call.receiveText() }.getOrNull() ?: ""
@@ -152,8 +196,9 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
     }
 
     // 单集播放直链（2026-11-04）：合集分集 / 某分P 点击时现取，不依赖搜索结果里可能已过期的直链。
-    //   GET /api/bilibili/play?bvid=BVxxx&cid=123（cid 可省略 = 第一集/第一P）
-    //   成功 {code:0,data:{bvid,cid,title,cover,videoUrl,audioUrl}}；失败 {code:1,message:原因}（HTTP 200）
+    //   新版 query：GET /api/bilibili/play?bvid=BVxxx&cid=123 → {code:0,data:{...}}
+    //   兼容 path：GET /api/bilibili/play/BVxxx[?cid=123] → 裸对象 {...}（旧 APK / 总控端）
+    //   cid 省略 = 第一集/第一P；取不到或超时给 code=1 / error 字段，HTTP 200，绝不 500
     get("/api/bilibili/play") {
         val bvid = call.request.queryParameters["bvid"]?.trim() ?: ""
         val cid = call.request.queryParameters["cid"]?.toLongOrNull() ?: 0L
@@ -161,28 +206,44 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
             call.respond(ApiResponse<Unit>(1, "bvid 必填"))
             return@get
         }
-        try {
-            val info = fetcher.viewInfo(bvid)
-            val useCid = if (cid > 0) cid else info.cid
-            val urls = fetcher.dashUrlsFor(bvid, useCid)
-            // 2026-11-04 修复：不能 respond(ApiResponse(0,"ok",mapOf(...))) —— map 里混 String/Long 会擦成
-            // Map<String,Any>，运行期找不到序列化器抛异常（线上表现为点击分集永远失败）。显式 buildJsonObject。
-            call.respondText(buildJsonObject {
-                put("code", 0)
-                put("message", "ok")
-                put("data", buildJsonObject {
-                    put("bvid", bvid)
-                    put("cid", useCid)
-                    put("title", info.title)
-                    put("cover", info.cover)
-                    put("videoUrl", urls.first)
-                    put("audioUrl", urls.second)
-                })
-            }.toString(), ContentType.Application.Json)
-        } catch (e: Throwable) {
-            log.warn("B站单集直链获取失败 bvid=$bvid cid=$cid：${e.message}")
-            call.respond(ApiResponse<Unit>(1, "取播放直链失败：${e.message}"))
+        val data = loadPlay(fetcher, playCache, bvid, cid)
+        if (data == null) {
+            call.respondText(
+                """{"code":1,"message":"取播放直链超时或失败（20s），请重试"}""",
+                ContentType.Application.Json,
+            )
+            return@get
         }
+        // 2026-11-04 修复：不能 respond(ApiResponse(0,"ok",mapOf(...))) —— map 里混 String/Long 会擦成
+        // Map<String,Any>，运行期找不到序列化器抛异常（线上表现为点击分集永远失败）。显式 buildJsonObject。
+        call.respondText(buildJsonObject {
+            put("code", 0)
+            put("message", "ok")
+            put("data", buildJsonObject {
+                put("bvid", bvid)
+                put("cid", data.cid)
+                put("title", data.title)
+                put("cover", data.cover)
+                put("videoUrl", data.videoUrl)
+                put("audioUrl", data.audioUrl)
+            })
+        }.toString(), ContentType.Application.Json)
+    }
+
+    // 旧线上是路径参数版，新基线一度只剩 query 版导致老客户端 404；补回来，响应保持旧版裸对象结构。
+    get("/api/bilibili/play/{bvid}") {
+        val bvid = call.parameters["bvid"]?.trim().orEmpty()
+        val cid = call.request.queryParameters["cid"]?.toLongOrNull() ?: 0L
+        val data = if (bvid.isBlank()) null else loadPlay(fetcher, playCache, bvid, cid)
+        call.respondText(buildJsonObject {
+            put("bvid", bvid)
+            put("cid", data?.cid ?: 0L)
+            put("title", data?.title ?: "")
+            put("cover", data?.cover ?: "")
+            put("videoUrl", data?.videoUrl ?: "")
+            put("audioUrl", data?.audioUrl ?: "")
+            if (data == null) put("error", "取播放直链超时或失败（20s），请重试")
+        }.toString(), ContentType.Application.Json)
     }
 
     // 视频弹幕（2026-11-05）：按 6 分钟分段拉取，长视频不用一次把整部弹幕灌进内存。
