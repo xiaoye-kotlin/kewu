@@ -41,6 +41,8 @@ dependencies {
     // 调华为云 MaaS（盘古大模型）做语义提取
     implementation("io.ktor:ktor-client-core:3.3.3")
     implementation("io.ktor:ktor-client-cio:3.3.3")
+    // B站弹幕 seg.so 返回 protobuf 二进制，用 CodedInputStream 按 wire 格式解（不引 protoc 插件）
+    implementation("com.google.protobuf:protobuf-java:3.25.5")
 }
 
 tasks.shadowJar {

@@ -102,7 +102,9 @@ class VoiceChatSisService(private val tokens: SisTokenManager = SisTokenManager(
             put("text", text.take(500))   // 官方文档：单次合成不超过 500 字符
             put("config", buildJsonObject {
                 put("audio_format", get("SIS_TTS_AUDIO_FORMAT") ?: "mp3")
-                // sample_rate 不传：它是可选字段，默认就是 16000，避开各版本 string/int 类型差异
+                // 显式指定 16kHz 宽带：SIS 在 wav 格式下默认只给 8kHz 电话音质（发闷、清晰度差），
+                // 实测 int 或 string 的 16000 都能拿到 16kHz 无损 PCM，清晰度明显更好。
+                put("sample_rate", 16000)
                 put("property", get("SIS_TTS_PROPERTY") ?: "chinese_huaxiaomei_common")
                 put("speed", 0)
                 put("pitch", 0)

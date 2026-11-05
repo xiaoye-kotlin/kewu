@@ -38,9 +38,12 @@ private val SUBJECT_KEYWORDS = mapOf(
 //   POST /api/bilibili/note/generate  { "bvid": "BVxxxx" } -> 立即返回 {"status":"PROCESSING"}，流水线后台跑
 //   GET  /api/bilibili/note/{bvid}                       -> 落库后返回笔记；未完成返回 Redis 状态（兼做进度轮询）
 //   GET  /api/bilibili/videos?subject=初中数学           -> 返回 B站视频搜索列表 [{bvid,title,cover,videoUrl,audioUrl,duration}]
+//   GET  /api/bilibili/danmaku?bvid=…&segmentIndex=1    -> 该 6 分钟分段的弹幕 [{progress,mode,fontsize,color,content}]
 //
 // 解析前端入参用 Json.parseToJsonElement（项目未开 @Serializable 数据类，按统一约定走手解）。
 fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher, scope: CoroutineScope) {
+    // 路由组只在服务启动时注册一次，等于单例：cid 缓存 / 分段缓存都活在整个进程里
+    val danmakuService = BilibiliDanmakuService(fetcher)
     // 触发生成：立刻返回，不阻塞前端
     post("/api/bilibili/note/generate") {
         val raw = runCatching { call.receiveText() }.getOrNull() ?: ""
@@ -173,6 +176,35 @@ fun Route.bilibiliRoutes(service: BilibiliNoteService, fetcher: BilibiliFetcher,
         } catch (e: Throwable) {
             log.warn("B站单集直链获取失败 bvid=$bvid cid=$cid：${e.message}")
             call.respond(ApiResponse<Unit>(1, "取播放直链失败：${e.message}"))
+        }
+    }
+
+    // 视频弹幕（2026-11-05）：按 6 分钟分段拉取，长视频不用一次把整部弹幕灌进内存。
+    //   GET /api/bilibili/danmaku?bvid=BVxxx&segmentIndex=1[&cid=123]
+    //   segmentIndex = currentTimeMs / 360000 + 1（从 1 开始）；cid 省略 = 第一P/第一集，分P 由前端传对应 cid。
+    //   返回裸 JSON 数组 [{progress(ms),mode,fontsize,color(0xRRGGBB),content}]；
+    //   B站风控 / 超时 / protobuf 解析失败一律降级为 [] + HTTP 200，绝不 500。
+    get("/api/bilibili/danmaku") {
+        val bvid = call.request.queryParameters["bvid"]?.trim().orEmpty()
+        val segmentIndex = call.request.queryParameters["segmentIndex"]?.toIntOrNull() ?: 1
+        val cid = call.request.queryParameters["cid"]?.toLongOrNull() ?: 0L
+        when {
+            bvid.isBlank() -> {
+                call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(1, "bvid 必填"))
+                return@get
+            }
+            segmentIndex !in 1..10_000 -> {
+                call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(1, "segmentIndex 只能是 1..10000（每段 6 分钟）"))
+                return@get
+            }
+        }
+        try {
+            val arr = danmakuService.segment(bvid, cid, segmentIndex)
+            call.respondText(arr.toString(), ContentType.Application.Json)
+        } catch (e: Throwable) {
+            // 服务内部已经兜了一层，这里再兜一次确保连序列化异常也不会变成 500
+            log.warn("B站弹幕段异常 bvid=$bvid seg=$segmentIndex：${e.message}")
+            call.respondText("[]", ContentType.Application.Json)
         }
     }
 }

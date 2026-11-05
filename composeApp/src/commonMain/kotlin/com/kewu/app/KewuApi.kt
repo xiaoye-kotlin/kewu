@@ -149,6 +149,18 @@ data class BilibiliVideoInfo(
     val episodes: List<BiliEpisodeInfo> = emptyList(),
 )
 
+/**
+ * B 站弹幕一条（2026-11-05，后端文档 14.7）：
+ * [progress] 是弹幕在视频里的时间点（毫秒），[color] 是 0xRRGGBB，[fontsize] 常见 18/25/36。
+ */
+data class DanmakuItem(
+    val progress: Long,
+    val mode: Int,
+    val fontsize: Int,
+    val color: Int,
+    val content: String,
+)
+
 data class UserMe(
     val user: UserInfo?, val courses: List<CourseInfo>,
     /** 学生加入的教学班（2026-10-26：学生「班级」以此为准，不可手改）。 */
@@ -1347,6 +1359,41 @@ object KewuApi {
         }
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
+
+    /**
+     * B 站弹幕分段（2026-11-05，后端文档 14.7）：`GET /api/bilibili/danmaku?bvid=…&segmentIndex=…[&cid=…]`。
+     * 一段 = 6 分钟，[segmentIndex] 从 1 开始；[cid] 省略时后端自己去取第一P/第一集。
+     * 后端任何异常都返回 200 + []，这里再兜一层网络/解析异常，总之永远给一个列表，调用方不用判空。
+     */
+    suspend fun getBilibiliDanmaku(bvid: String, segmentIndex: Int, cid: Long = 0): List<DanmakuItem> {
+        return try {
+            val url = buildString {
+                append(queryUrl("$BASE_URL/api/bilibili/danmaku", "bvid", bvid))
+                append("&segmentIndex=").append(segmentIndex)
+                if (cid > 0) append("&cid=").append(cid)
+            }
+            val resp = client.get(url) {
+                timeout { requestTimeoutMillis = 15_000; socketTimeoutMillis = 15_000 }
+            }
+            if (resp.status.value !in 200..299) emptyList()
+            else {
+                val arr = json.parseToJsonElement(resp.bodyAsText()) as? JsonArray
+                arr.orEmpty().mapNotNull { e ->
+                    val o = e as? JsonObject ?: return@mapNotNull null
+                    val text = o["content"].strOrNull().orEmpty()
+                    if (text.isBlank()) return@mapNotNull null
+                    DanmakuItem(
+                        progress = o["progress"].strOrNull()?.toLongOrNull() ?: 0L,
+                        mode = o["mode"].strOrNull()?.toIntOrNull() ?: 1,
+                        fontsize = o["fontsize"].strOrNull()?.toIntOrNull() ?: 25,
+                        color = o["color"].strOrNull()?.toIntOrNull() ?: 0xFFFFFF,
+                        content = text,
+                    )
+                }
+            }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { emptyList() }
+    }
 
     /**
      * 某课最近几节课的 AI 课堂纪要（2026-10-26：下课后服务器用华为云 SIS 把最佳录音转成文字，再由大模型整理成纪要）。
