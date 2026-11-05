@@ -347,9 +347,14 @@ object NoticeCenter {
     private suspend fun deliver(fresh: List<Notifications.Info>) {
         if (fresh.isEmpty()) return
         withContext(Dispatchers.Main) {
-            if (SystemNotifier.foreground) {
+            val fg = SystemNotifier.foreground
+            if (fg) {
                 SystemNotifier.playSound?.invoke()
                 fresh.take(3).forEach { _incoming.tryEmit(it) }
+                // ★ D1（2026-11-05）：老师发布作业 → 用户要求「系统也要发通知」。
+                // 前台也走系统通知栏（后台已统一发）；其余类型仍只走应用内铃铛 + 提示音，避免打扰。
+                fresh.filter { it.type == Notifications.TYPE_NEW_ASSIGNMENT }.take(3)
+                    .forEach { SystemNotifier.post?.invoke(it.id, it.title, it.body) }
             } else {
                 fresh.take(5).forEach { SystemNotifier.post?.invoke(it.id, it.title, it.body) }
             }

@@ -209,6 +209,9 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                             "你好，我是小悟～上课没听懂的地方直接问我：拍张板书、传个课件、发段语音都可以。",
                             isUser = false,
                             id = ChatHistory.nextId(),
+                            // ★ C1（2026-11-05）：无聊天记录首次进入只有这一条介绍语时，也带上当前时间，
+                            // 让微信风格时间条显示「现在」的时刻，表示 AI 是刚刚发的（否则 ts=0 不显示时间）。
+                            ts = nowMs(),
                         )
                     )
                 }

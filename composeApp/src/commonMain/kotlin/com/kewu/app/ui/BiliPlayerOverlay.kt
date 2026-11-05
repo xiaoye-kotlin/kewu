@@ -1,7 +1,7 @@
 package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
@@ -70,6 +70,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -246,19 +247,44 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
 }
 
 /**
- * ★ X7（2026-11-05）：进入视频后标题下方的 COUi 满宽收藏按钮（与「AI 总结这个视频」同款样式）。
+ * ★ X7（2026-11-05）：进入视频后标题下方的满宽收藏按钮（与「AI 总结这个视频」同款样式）。
  * 状态随 [BiliFavorites] 实时变化：未收藏显示「收藏这个视频」，已收藏显示「已收藏 · 点击取消」。
+ * ★ B7（2026-11-05）：收藏 / 取消收藏时星星先放大到 1.5 再低阻尼回弹到 1，明显「弹」一下。
  */
 @Composable
 private fun BiliFavoriteButton(video: BilibiliVideoInfo) {
+    val cs = COUITheme.colorScheme
     val isFav = BiliFavorites.isFavorite(video)
-    // ★ A1（2026-11-05）：文字 Crossfade 过渡，切换不突兀（coui TextButton 自带按压 Q 弹）
-    Crossfade(targetState = isFav, animationSpec = tween(200), label = "favBtn") { fav ->
-        KewuPrimaryButton(
-            text = if (fav) "已收藏 · 点击取消" else "收藏这个视频",
-            onClick = { BiliFavorites.toggle(video) },
-            modifier = Modifier.fillMaxWidth(),
-        )
+    // 星星回弹：状态变化（来自任意入口）时触发一次「放大→回弹」
+    val pop = remember { Animatable(1f) }
+    var first by remember { mutableStateOf(true) }
+    LaunchedEffect(isFav) {
+        if (first) { first = false; return@LaunchedEffect }
+        pop.snapTo(1.5f)
+        pop.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = 360f, visibilityThreshold = 0.0005f))
+    }
+    val starColor = if (isFav) Color(0xFFFB7299) else cs.onSurfaceSecondary
+    val labelColor = if (isFav) Color(0xFFFB7299) else KewuBlue
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (isFav) Color(0xFFFB7299).copy(alpha = 0.12f) else KewuBlue.copy(alpha = 0.10f))
+            .clickable {
+                haptic(HapticKind.Tick)
+                BiliFavorites.toggle(video)
+            }
+            .padding(vertical = 13.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("★", color = starColor, fontSize = 18.sp, modifier = Modifier.scale(pop.value))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                if (isFav) "已收藏 · 点击取消" else "收藏这个视频",
+                color = labelColor, fontSize = 14.sp, fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 
@@ -406,6 +432,13 @@ private fun VideoTutorPanel(
                         append("这个视频上次没能总结成功（学生可以退出重进让它重试），你**没有**视频内容。")
                         append("能根据视频标题和常识回答的问题就正常回答；凡是涉及视频具体内容的，不要编造，")
                         append("明确告诉用户「这个视频还没总结成功，具体内容我暂时不知道，你可以退出重进让它再试一次」。")
+                    }
+                    // ★ A2（2026-11-05）：用户已点「取消总结」——明确告诉 AI 没有视频内容，
+                    // 别再说「我还在总结（还要几分钟）」，否则会一直骗用户说正在总结。
+                    cancelled -> {
+                        append("视频总结已被用户主动取消，你**没有**这个视频的任何内容（没有总结、也没有转写）。")
+                        append("能根据视频标题和常识回答的问题就正常回答；凡是涉及视频具体内容的（讲了什么、某段怎么讲、结论是什么），")
+                        append("不要编造，明确告诉用户「这个视频的总结已经被取消了，具体内容我暂时不知道；如果你需要，可以点『重新总结』让我再帮你总结一次」。")
                     }
                     else -> {
                         append("这个视频还在自动总结中（当前阶段：").append(note?.stage ?: "准备中").append("，一般还需 1-3 分钟），你**还没有**视频内容。")

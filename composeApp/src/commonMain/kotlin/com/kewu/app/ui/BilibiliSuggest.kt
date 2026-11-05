@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -233,16 +234,14 @@ internal fun BilibiliVideoCard(
 private fun BiliFavStar(video: BilibiliVideoInfo) {
     val cs = COUITheme.colorScheme
     val fav = BiliFavorites.isFavorite(video)
-    var tick by remember { mutableStateOf(0) }
-    LaunchedEffect(fav) { tick++ }
-    val pop = if (tick <= 1) 1f else key(tick) {
-        var grown by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { grown = true }
-        animateFloatAsState(
-            targetValue = if (grown) 1f else 0.55f,
-            animationSpec = spring(dampingRatio = 0.38f, stiffness = 560f, visibilityThreshold = 0.0005f),
-            label = "favPop",
-        ).value
+    // ★ B7（2026-11-05）：收藏 / 取消时星星先放大到 1.5，再用低阻尼弹簧回弹到 1（带明显过冲），
+    // 比旧版「0.55→1 轻微长大」更夸张、更有「弹」感。
+    val pop = remember { Animatable(1f) }
+    var first by remember { mutableStateOf(true) }
+    LaunchedEffect(fav) {
+        if (first) { first = false; return@LaunchedEffect }
+        pop.snapTo(1.5f)
+        pop.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = 360f, visibilityThreshold = 0.0005f))
     }
     val tint by animateColorAsState(
         targetValue = if (fav) BILI_PINK else cs.onSurfaceSecondary,
@@ -252,7 +251,7 @@ private fun BiliFavStar(video: BilibiliVideoInfo) {
     Box(
         Modifier
             .size(28.dp)
-            .scale(pop)
+            .scale(pop.value)
             .pressBounce { BiliFavorites.toggle(video) },
         contentAlignment = Alignment.Center,
     ) {
@@ -608,6 +607,14 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
             }
             // ★ W5：收藏这个合集（在分集面板里收藏最自然；卡片上也有星标）；A1（2026-11-05）按压+底色+文字三层动画
             val fav = BiliFavorites.isFavorite(video)
+            // ★ B7（2026-11-05）：收藏 / 取消时整段文字先放大再低阻尼回弹，与星标卡同款"弹"感
+            val pop = remember { Animatable(1f) }
+            var first by remember { mutableStateOf(true) }
+            LaunchedEffect(fav) {
+                if (first) { first = false; return@LaunchedEffect }
+                pop.snapTo(1.4f)
+                pop.animateTo(1f, spring(dampingRatio = 0.32f, stiffness = 360f, visibilityThreshold = 0.0005f))
+            }
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.Center,
@@ -634,6 +641,7 @@ private fun BiliEpisodesPanel(video: BilibiliVideoInfo, onDismiss: () -> Unit) {
                         Text(
                             if (f) "★ 已收藏 · 点此取消" else "☆ 收藏这个合集",
                             color = labelColor, fontSize = 13.sp, fontWeight = FontWeight.Medium,
+                            modifier = Modifier.scale(pop.value),
                         )
                     }
                 }
