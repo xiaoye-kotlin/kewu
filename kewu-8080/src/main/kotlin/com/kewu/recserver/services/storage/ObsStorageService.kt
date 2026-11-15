@@ -15,6 +15,25 @@ class ObsStorageService(private val cfg: ObsConfig) : AudioStorage {
         ObsClient(cfg.ak ?: "", cfg.sk ?: "", config)
     }
 
+    fun objectKey(recordingId: String, ext: String) = "recordings/$recordingId.$ext"
+
+    fun publicUrl(key: String): String {
+        val base = cfg.endpoint.removePrefix("https://").removePrefix("http://").removeSuffix("/")
+        return "https://${cfg.bucket}.$base/$key"
+    }
+
+    /** 预签名 PUT 直传地址（15 分钟有效）：兼容旧版 /api/recordings/presign 链路。 */
+    fun presignPut(recordingId: String, ext: String, expiresSec: Long = 900): Pair<String, String> {
+        val key = objectKey(recordingId, ext)
+        val req = com.obs.services.model.TemporarySignatureRequest(
+            com.obs.services.model.HttpMethodEnum.PUT, expiresSec
+        ).apply {
+            bucketName = cfg.bucket
+            objectKey = key
+        }
+        return client.createTemporarySignature(req).signedUrl to publicUrl(key)
+    }
+
     override suspend fun save(recordingId: String, bytes: ByteArray, ext: String, metadata: Map<String, String>): String {
         val key = "recordings/$recordingId.$ext"
         val obsMeta = ObjectMetadata().apply { metadata.forEach { (k, v) -> addUserMetadata(k, v) } }

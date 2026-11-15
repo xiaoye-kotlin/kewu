@@ -94,7 +94,13 @@ fun Route.voiceChatRoutes(service: VoiceChatService) {
                     call.response.header("Cache-Control", "no-store")
                     val mp3 = r.audio
                     if (mp3 != null) {
-                        call.respondBytes(mp3, ContentType.Audio.MPEG)
+                        // SIS 可能返回 wav（无损 16k）或 mp3（降级），按实际文件头设 Content-Type，
+                        // 不要写死 audio/mpeg：App 端按文件头判断不受影响，但别的客户端会误判。
+                        val isWav = mp3.size >= 4 &&
+                            mp3[0] == 0x52.toByte() && mp3[1] == 0x49.toByte() &&
+                            mp3[2] == 0x46.toByte() && mp3[3] == 0x46.toByte() // "RIFF"
+                        val ct = if (isWav) ContentType.parse("audio/wav") else ContentType.Audio.MPEG
+                        call.respondBytes(mp3, ct)
                     } else {
                         // TTS 挂了：按需求返回包含错误信息的纯文本，前端看到 X-AI-Fallback 就只显示字幕
                         call.response.header("X-AI-Fallback", "1")

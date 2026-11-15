@@ -155,6 +155,8 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
         )
     }
     val fullscreen = VideoFullscreen.on
+    // 弹幕开关（2026-11-05）：默认开，画面右上角可一键关掉；关掉时 DanmakuLayer 会清空弹幕池
+    var danmakuOn by remember(video.bvid) { mutableStateOf(true) }
 
     BackHandler {
         when {
@@ -190,6 +192,31 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                         onError = { error = it },
                         modifier = Modifier.fillMaxSize(),
                     )
+                    // 弹幕层：叠在视频画面上、控制条下面；Canvas 单画布 + 同屏 50 条上限
+                    DanmakuLayer(
+                        bvid = fresh.bvid,
+                        cid = sources.cid,
+                        enabled = danmakuOn,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                    // 右上角开关放在弹幕之上，保证能点到
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(10.dp)
+                            .clip(CircleShape)
+                            .background(
+                                if (danmakuOn) Color(0xFFFB7299).copy(alpha = 0.65f)
+                                else Color.Black.copy(alpha = 0.42f),
+                            )
+                            .clickable { danmakuOn = !danmakuOn }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(
+                            if (danmakuOn) "弹幕 开" else "弹幕 关",
+                            color = Color.White, fontSize = 11.sp,
+                        )
+                    }
                     if (VideoControls.available) VideoControlsLayer(fullscreen)
                 } else {
                     Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
