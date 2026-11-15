@@ -28,7 +28,7 @@ class AdminApiException(message: String) : Exception(message)
 class AdminApi(
     baseUrl: String = System.getProperty("KEWU_BASE_URL")
         ?: System.getenv("KEWU_BASE_URL")
-        ?: "http://47.99.42.168:8080",
+        ?: "http://8.136.151.139:8080",
 ) {
     /** 实际使用的后端地址。总控端跑在服务器本机时，公网 IP 无 NAT 回环不可达，
      *  需由 [resolveBaseUrl] 探测后切到 127.0.0.1。 */
@@ -51,7 +51,12 @@ class AdminApi(
     /** 登录前探活：优先本机 127.0.0.1（服务器本机运行时公网 IP 回环不通），其次当前 baseUrl。
      *  每个候选的结果（含失败原因）都会写入本地诊断日志；全部不可达时返回原地址。 */
     suspend fun resolveBaseUrl(): String {
-        val candidates = listOf("http://127.0.0.1:8080", "http://localhost:8080", baseUrl).distinct()
+        // 2026-11-16：云端 server_url 作为额外候选（优先级最低，仅当本机与已配地址都不通时兜底）。
+        // 总控端常驻服务器本机，127.0.0.1 仍优先；拉云端失败返回 null，不影响原有探测。
+        val cloud = ServerConfig.fetch()
+        val candidates = listOfNotNull(
+            "http://127.0.0.1:8080", "http://localhost:8080", baseUrl, cloud
+        ).distinct()
         val results = mutableListOf<Pair<String, String>>()
         for (candidate in candidates) {
             val error = probeHealthError(candidate)

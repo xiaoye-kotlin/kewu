@@ -36,6 +36,12 @@ fun currentRole(): String = kvGet("kewu_role") ?: ROLE_STUDENT
 
 @Composable
 fun App() {
+    // 2026-11-16：服务器地址云端可配。先用本地缓存立即生效，再后台拉 Gitee 的 server_url。
+    // 拉到后所有 KewuApi / AiClient 请求自动指向新地址（BASE_URL 是 getter），无需重装 App。
+    LaunchedEffect(Unit) {
+        ServerConfig.loadCached()
+        ServerConfig.refresh()
+    }
     // 根主题 = COUITheme + 对齐的 M3 色板 + 根 coui Scaffold（覆盖层弹窗 / 底部弹层 / Snackbar 宿主），
     // 见 ui/KewuCoui.kt。绿色只作为品牌强调色用在「勾勾」徽章上。
     KewuTheme {

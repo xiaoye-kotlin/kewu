@@ -47,7 +47,7 @@ actual fun platformReadFile(path: String): ByteArray? = try {
 }
 
 actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp) {
-    // 明文 HTTP（http://47.99.42.168:8080，非 https）——Android 9+ 需 usesCleartextTraffic，
+    // 明文 HTTP（服务器地址见 ServerConfig，非 https）——Android 9+ 需 usesCleartextTraffic，
     // 已在 AndroidManifest 开启；这里不额外配置引擎信任。
     engine {
         // 适当超时，避免弱网卡死；read 放宽到 120s 兼容大模型推理耗时（AiClient），

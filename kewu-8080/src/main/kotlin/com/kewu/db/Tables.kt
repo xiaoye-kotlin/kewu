@@ -316,6 +316,23 @@ object AudioFusionNotes : Table("audio_fusion_notes") {
     override val primaryKey = PrimaryKey(id)
 }
 
+// 专注番茄钟（2026-11-15）：一次专注一条记录，CANCELLED 的不会被 AI 分析（查询只取 COMPLETED）。
+// 时间一律存服务端毫秒时间戳，客户端不传时间。
+object FocusRecords : Table("focus_records") {
+    val id = varchar("id", 36)
+    val userId = varchar("user_id", 64).index()
+    val taskId = varchar("task_id", 64).nullable()
+    val startTime = long("start_time")
+    val endTime = long("end_time")
+    val plannedMinutes = integer("planned_minutes")
+    val actualMinutes = integer("actual_minutes")
+    val distractionCount = integer("distraction_count").default(0)
+    val taskDifficulty = integer("task_difficulty").default(3)
+    val fatigueLevel = integer("fatigue_level").default(3)
+    val status = varchar("status", 16).index()
+    override val primaryKey = PrimaryKey(id)
+}
+
 val allTables = arrayOf(
     Users, UserCourses, Courses, ClassNotes,
     Classes, ClassStudents, ClassStates,
@@ -324,7 +341,7 @@ val allTables = arrayOf(
     Questions,
     Uploads, CourseMaterials, ClassRecordings, CourseSchedules, CrashReports,
     Recordings, RecordingSessions, BilibiliNotes, UserSessions, RecordingTranscripts, AudioFusionNotes,
-    SystemConfigs
+    SystemConfigs, FocusRecords
 )
 
 // 单设备登录（2026-11-02）：每个账号每类平台（android / desktop / ios）只认最新一次登录的 sid，

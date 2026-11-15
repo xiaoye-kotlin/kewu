@@ -102,7 +102,7 @@ object CrashLog {
                         .put("reason", reason).put("detail", detail).put("happenedAt", at)
                         .toString()
                     val ok = runCatching {
-                        val conn = java.net.URL("http://47.99.42.168:8080/api/crash-reports").openConnection() as java.net.HttpURLConnection
+                        val conn = java.net.URL("${ServerConfig.baseUrl}/api/crash-reports").openConnection() as java.net.HttpURLConnection
                         conn.requestMethod = "POST"
                         conn.connectTimeout = 8000
                         conn.readTimeout = 8000

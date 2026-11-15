@@ -48,7 +48,8 @@ import kotlinx.serialization.json.put
 object AiClient {
 
     // 兜底中转：非流式 POST /api/ai/answer {question, context} → {answer}（服务器用总控端配置的模型）
-    private const val RELAY_URL = "http://47.99.42.168:8080/api/ai/answer"
+    // 2026-11-16：跟随云端 server_url，不再写死 IP
+    private val RELAY_URL: String get() = "${ServerConfig.baseUrl}/api/ai/answer"
 
     // 共享引擎 + 显式安装 HttpTimeout：Ktor 的 per-request `timeout {}` 必须配合该插件，
     // 否则抛 IllegalArgumentException（2026-10-24 真机踩坑）
@@ -89,7 +90,7 @@ object AiClient {
     }
 
     /** 后端流式中转（2026-10-26）：SSE，`data: {"d":"片段"}` … `data: [DONE]`，失败 `data: {"error":"…"}`。 */
-    private const val STREAM_RELAY_URL = "http://47.99.42.168:8080/api/ai/stream"
+    private val STREAM_RELAY_URL: String get() = "${ServerConfig.baseUrl}/api/ai/stream"
 
     /**
      * 流式对话（打字机效果，2026-10-26）：回答一段段到达就回调 [onDelta]（只含最终回答，不含思维链），

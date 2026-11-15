@@ -42,6 +42,11 @@ import com.kewu.recserver.services.ai.MaasAiService
 import com.kewu.modules.voicechat.VoiceChatService
 import com.kewu.modules.voicechat.VoiceChatSisService
 import com.kewu.modules.voicechat.voiceChatRoutes
+import com.kewu.modules.focus.FocusAiClient
+import com.kewu.modules.focus.FocusRedis
+import com.kewu.modules.focus.FocusRepository
+import com.kewu.modules.focus.FocusService
+import com.kewu.modules.focus.focusRoutes
 import io.ktor.server.auth.authenticate
 import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.principal
@@ -141,6 +146,8 @@ fun Application.configureRouting() {
         redis = recServices.redis,
         maas = recServices.ai as? MaasAiService ?: MaasAiService()
     )
+    // 专注番茄钟 + AI 认知习惯分析（2026-11-15）：Redis 状态 + MySQL 记录 + DeepSeek 推荐，零新增部署物
+    val focusService = FocusService(FocusRepository(), FocusRedis(), FocusAiClient())
     routing {
         get("/") {
             call.respondText("kewu backend is running")
@@ -230,5 +237,7 @@ fun Application.configureRouting() {
         // 兼容旧客户端 / 总控端：GET /api/config/maas + /api/admin/config/maas
         // （转发到总控端加密配置 SecretStore，不再用旧 app_configs 表）
         maasConfigRoutes(adminService)
+        // 专注番茄钟：7 个动作接口，所有时间由服务端 System.currentTimeMillis() 计算
+        focusRoutes(focusService)
     }
 }
