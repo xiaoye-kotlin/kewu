@@ -12,6 +12,13 @@ $out = Join-Path $logDir 'deploy-8080-output.txt'
 $newJar = Join-Path $root 'kewu-8080-new.jar'
 $liveJar = Join-Path $root 'kewu-8080.jar'
 $java = Join-Path $root 'jdk21\bin\java.exe'
+# 冒烟端口不能写死 8090：服务器上常有其它业务占着该端口（例如 python server.py），
+# 旧版 FreezeBackend 会 KillPort 8090 误杀别人的服务。这里从 18090 起找一个空闲端口。
+$smokePort = 18090
+while ((Get-NetTCPConnection -State Listen -LocalPort $smokePort -ErrorAction SilentlyContinue | Select-Object -First 1) -and $smokePort -lt 18110) {
+    $smokePort++
+}
+Write-Host ("smoke port: " + $smokePort + " (auto-picked, avoids killing unrelated services on 8090)")
 Set-Content -Path $out -Value '' -Encoding utf8
 # Recover from a previous interrupted run that may have left the task disabled.
 schtasks /change /tn KewuBackend8080 /enable 2>$null | Out-Null
@@ -71,7 +78,7 @@ function FreezeBackend {
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Seconds 2
-    KillPort 8090
+    KillPort $smokePort
     KillPort 8080
     Start-Sleep -Seconds 2
 }
@@ -145,29 +152,31 @@ try {
     }
     if (-not (PortBusy 6379)) { Log '  [WARN] Redis 6379 not listening (radar/AI status may be degraded)' }
 
-    # ---------------- 1. smoke test on 8090 (live 8080 untouched)
-    Log '[1/3] smoke test: new jar on port 8090'
+    # ---------------- 1. smoke test on the auto-picked free port (live 8080 untouched)
+    Log ("[1/3] smoke test: new jar on port " + $smokePort)
     LoadEnv
     FreezeBackend
     $taskDisabled = $true
     $smokeOut = Join-Path $logDir 'smoke-8090.log'
     $smokeErr = Join-Path $logDir 'smoke-8090.err.log'
-    [Environment]::SetEnvironmentVariable('PORT', '8090', 'Process')
+    [Environment]::SetEnvironmentVariable('PORT', "$smokePort", 'Process')
     $smokeProc = Start-Process -FilePath $java -ArgumentList @(
         '-Xmx384m', '-XX:+UseSerialGC', '-Dfile.encoding=UTF-8',
         '-Djava.net.useSystemProxies=false', '-jar', "`"$newJar`""
     ) -WorkingDirectory $root -PassThru -WindowStyle Hidden `
         -RedirectStandardOutput $smokeOut -RedirectStandardError $smokeErr
-    $smokeOk = WaitHealth 8090 300
+    $smokeOk = WaitHealth $smokePort 300
     foreach ($c in @('/api/health', '/health', '/api/courses')) {
-        $p = Probe ("http://127.0.0.1:8090" + $c)
-        Log ("  8090$c -> " + $p.code + '  ' + ($p.body -replace "`r?`n", ' '))
+        $p = Probe ("http://127.0.0.1:" + $smokePort + $c)
+        Log ("  " + $smokePort + $c + " -> " + $p.code + '  ' + ($p.body -replace "`r?`n", ' '))
     }
     Stop-Process -Id $smokeProc.Id -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
     if (-not $smokeOk) {
-        Log '[FAIL] new jar not healthy on 8090. Nothing was changed.'
-        if (Test-Path $smokeErr) { Get-Content $smokeErr -Tail 25 | ForEach-Object { Add-Content -Path $out -Value $_ -Encoding utf8 } }
+        Log ("[FAIL] new jar not healthy on " + $smokePort + ". Nothing was changed.")
+        if (Test-Path $smokeErr) {
+            Get-Content $smokeErr -Tail 25 | ForEach-Object { Log ('  backend-stderr: ' + $_) }
+        }
         exit 1
     }
     Log '  smoke test passed'

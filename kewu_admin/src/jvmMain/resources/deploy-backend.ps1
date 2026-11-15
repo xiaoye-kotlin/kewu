@@ -12,8 +12,56 @@ $ProgressPreference = 'SilentlyContinue'
 # 统一 UTF-8 输出：否则 .NET 本地化的异常消息按 GBK 写出，总控端按 UTF-8 读会乱码。
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
+# 文件日志：一键部署在 GUI 里跑时，SSH 无法看到控制台，所有输出同步落盘，
+# 便于运维直接读 $root\logs\admin-deploy.log 定位问题。
+$script:deployLog = $null
 function Log([string]$message) {
-    Write-Host ((Get-Date -Format 'HH:mm:ss') + '  ' + $message)
+    $line = (Get-Date -Format 'HH:mm:ss') + '  ' + $message
+    Write-Host $line
+    if ($script:deployLog) {
+        try { Add-Content -Path $script:deployLog -Value ((Get-Date -Format 'yyyy-MM-dd ') + $line) -Encoding UTF8 } catch { }
+    }
+}
+
+# native exe 的 stderr 在 PS5.1 下会变成 ErrorRecord（$ErrorActionPreference='Stop' 时甚至是终止异常），
+# 且 $LASTEXITCODE 在 2>&1 管道后不可靠。统一改走 Start-Process -Wait -PassThru 拿真实 ExitCode，
+# stdout/stderr 各自重定向到临时文件，再把内容写进部署日志。
+function Invoke-Native([string]$exe, [string[]]$argList, [string]$label) {
+    $tmp = Join-Path $env:TEMP ('kewu-native-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $o = $tmp + '.out'; $e = $tmp + '.err'
+    try {
+        $p = Start-Process -FilePath $exe -ArgumentList $argList -Wait -PassThru `
+            -WindowStyle Hidden -RedirectStandardOutput $o -RedirectStandardError $e
+        $code = $p.ExitCode
+        foreach ($f in @($o, $e)) {
+            if (Test-Path $f) {
+                $txt = (Get-Content $f -Raw -ErrorAction SilentlyContinue)
+                if ($txt -and $txt.Trim()) { Log ('  [' + $label + '] ' + ($txt.Trim() -replace "`r?`n", ' | ')) }
+            }
+        }
+        return $code
+    } finally {
+        Remove-Item $o, $e -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# 用 stdin 文件执行 .sql：SQL 里含空格、分号、单引号，走命令行参数会被拆坏。
+function Invoke-MySql([string]$exe, [string]$sqlFile, [string[]]$argList, [string]$label) {
+    $tmp = Join-Path $env:TEMP ('kewu-sql-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $o = $tmp + '.out'; $e = $tmp + '.err'
+    try {
+        $p = Start-Process -FilePath $exe -ArgumentList $argList -Wait -PassThru -WindowStyle Hidden `
+            -RedirectStandardInput $sqlFile -RedirectStandardOutput $o -RedirectStandardError $e
+        foreach ($f in @($o, $e)) {
+            if (Test-Path $f) {
+                $txt = Get-Content $f -Raw -ErrorAction SilentlyContinue
+                if ($txt -and $txt.Trim()) { Log ('  [' + $label + '] ' + ($txt.Trim() -replace "`r?`n", ' | ')) }
+            }
+        }
+        return $p.ExitCode
+    } finally {
+        Remove-Item $o, $e -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Test-Tcp([int]$port) {
@@ -26,6 +74,174 @@ function New-RandomToken([int]$len) {
     $rng.GetBytes($bytes)
     $alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
     -join ($bytes | ForEach-Object { $alphabet[$_ % 62] })
+}
+
+# 后端 DatabaseFactory.init() 用 HikariDataSource 构造即连库，MySQL 连不上进程直接崩，
+# 是唯一硬依赖（Redis / OBS / MaaS / SIS 都是软依赖，连不上只降级）。
+# 全新服务器首次部署时自动装一套本机免安装 MySQL 8.0 并建库，让「一键部署」真正一键可用。
+function Ensure-MySQL([string]$root, [string]$work) {
+    # 注意：不能因为 3306 已在监听就直接 return —— 那样会跳过「口令同步 / 建库 / 回写 kewu.env」，
+    # 上一次部署中断后 env 里仍是 change-me，后端就会 Access denied。安装步骤可跳过，凭据步骤必须每次都做。
+    $alreadyUp = Test-Tcp 3306
+    if ($alreadyUp) { Log 'MySQL 3306 already listening (skip install, still sync credentials and database)' }
+
+    $mysqlHome = Join-Path $root 'mysql'
+    $mysqld = Join-Path $mysqlHome 'bin\mysqld.exe'
+    $mysqlCli = Join-Path $mysqlHome 'bin\mysql.exe'
+    $dataDir = Join-Path $mysqlHome 'data'
+    $myIni = Join-Path $mysqlHome 'my.ini'
+    $envPath = Join-Path $root 'kewu.env'
+    $dbPass = ''
+
+    if (-not $alreadyUp) {
+        # MySQL 8.0 的 mysqld.exe 依赖 VC++ 2015-2022 运行库；精简版 Windows Server 常只带
+        # *_clr0400.dll 而不带标准 vcruntime140.dll / msvcp140.dll，缺了会直接启动失败。
+        $hasVc = (Test-Path (Join-Path $env:SystemRoot 'System32\vcruntime140.dll')) -and
+                 (Test-Path (Join-Path $env:SystemRoot 'System32\msvcp140.dll'))
+        if (-not $hasVc) {
+            Log '[DB] VC++ runtime missing. Downloading VC++ 2015-2022 redistributable...'
+            $vcExe = Join-Path $work 'vc_redist.x64.exe'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://aka.ms/vs/17/release/vc_redist.x64.exe' -OutFile $vcExe -TimeoutSec 600
+            $vcCode = Invoke-Native $vcExe @('/install', '/quiet', '/norestart') 'vc-redist'
+            # 3010 = 安装成功但需重启，视为成功。
+            if ($vcCode -ne 0 -and $vcCode -ne 3010) { Log ('  [WARN] VC++ redist returned ' + $vcCode + ', continuing anyway') }
+            else { Log '  VC++ runtime installed' }
+        }
+
+        if (-not (Test-Path $mysqld)) {
+            Log '[DB] No local MySQL found. Downloading MySQL 8.0 zip from Aliyun mirror...'
+            $zip = Join-Path $work 'mysql-8.0.28-winx64.zip'
+            Invoke-WebRequest -UseBasicParsing -Uri 'https://mirrors.aliyun.com/mysql/MySQL-8.0/mysql-8.0.28-winx64.zip' -OutFile $zip -TimeoutSec 1800
+            Log ('  downloaded ' + (Get-Item $zip).Length + ' bytes, extracting...')
+            $ext = Join-Path $work 'mysql-extract'
+            if (Test-Path $ext) { Remove-Item $ext -Recurse -Force }
+            Expand-Archive -LiteralPath $zip -DestinationPath $ext -Force
+            $inner = Get-ChildItem $ext -Directory | Select-Object -First 1
+            if (-not $inner) { throw 'MySQL zip extracted but no folder found inside.' }
+            if (Test-Path $mysqlHome) { Remove-Item $mysqlHome -Recurse -Force }
+            Move-Item $inner.FullName $mysqlHome
+            Remove-Item $zip -Force -ErrorAction SilentlyContinue
+            Log ('  MySQL unpacked to ' + $mysqlHome)
+        }
+
+        # my.ini 放在 basedir 根目录：mysqld 在 Windows 上会自动读取它。
+        # 绝不要传 --defaults-file=... —— PS5.1 对该参数的引号处理会把它拼成
+        # "my.ini --"，导致 "Failed to open required defaults file"。
+        $iniLines = @(
+            '[mysqld]',
+            ('basedir=' + $mysqlHome.Replace('\','/')),
+            ('datadir=' + $dataDir.Replace('\','/')),
+            'port=3306',
+            'bind-address=127.0.0.1',
+            'default_authentication_plugin=mysql_native_password',
+            'character-set-server=utf8mb4',
+            'collation-server=utf8mb4_unicode_ci',
+            'max_connections=200',
+            'innodb_buffer_pool_size=128M',
+            '[client]',
+            'port=3306',
+            'default-character-set=utf8mb4'
+        )
+        $iniLines | Set-Content -Path $myIni -Encoding ASCII
+
+        if (-not (Test-Path (Join-Path $dataDir 'ibdata1'))) {
+            Log '[DB] initializing MySQL data directory (this takes ~1 min)...'
+            # --initialize 要求 data 目录为空；清掉上次中断留下的 auto.cnf / *.err 等残留。
+            if (Test-Path $dataDir) { Remove-Item $dataDir -Recurse -Force }
+            New-Item -ItemType Directory -Force $dataDir | Out-Null
+            $code = Invoke-Native $mysqld @('--initialize-insecure', '--console') 'mysql-init'
+            if ($code -ne 0 -or -not (Test-Path (Join-Path $dataDir 'ibdata1'))) {
+                throw "mysqld --initialize-insecure failed (exit $code); see logs/admin-deploy.log"
+            }
+            Log '  data directory initialized (root has empty password for now)'
+        }
+
+        # 注册/启动 Windows 服务，保证重启后仍在。
+        $svc = Get-Service -Name 'KewuMySQL' -ErrorAction SilentlyContinue
+        if (-not $svc) {
+            Log '[DB] registering Windows service KewuMySQL...'
+            $c = Invoke-Native $mysqld @('--install', 'KewuMySQL') 'mysql-install'
+            if ($c -ne 0) { Log ('  [WARN] service registration returned ' + $c) }
+        }
+        $svc = Get-Service -Name 'KewuMySQL' -ErrorAction SilentlyContinue
+        if ($svc) {
+            if ($svc.Status -ne 'Running') {
+                Log '[DB] starting KewuMySQL service...'
+                $c = Invoke-Native 'net' @('start', 'KewuMySQL') 'net-start'
+                if ($c -ne 0) { Log ('  [WARN] net start returned ' + $c) }
+            }
+            Set-Service -Name 'KewuMySQL' -StartupType Automatic -ErrorAction SilentlyContinue
+        }
+        if (-not $svc) {
+            # 服务不可用（精简系统）时退化为后台进程。
+            Log '[DB] service unavailable, starting mysqld as background process...'
+            Start-Process -FilePath $mysqld -ArgumentList @('--console') -WorkingDirectory $mysqlHome -WindowStyle Hidden | Out-Null
+        }
+
+        $ready = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            if (Test-Tcp 3306) { $ready = $true; break }
+            Start-Sleep -Seconds 2
+        }
+        if (-not $ready) {
+            # 把 MySQL 自身的错误日志尾部贴进部署日志，避免盲猜。
+            $errLogs = Get-ChildItem $dataDir -Filter '*.err' -ErrorAction SilentlyContinue
+            foreach ($el in $errLogs) {
+                Log ('  [mysql-error-log] ' + ((Get-Content $el.FullName -Tail 12) -replace "`r?`n", ' | '))
+            }
+            throw 'MySQL did not start listening on 3306 within 80s. Check logs/admin-deploy.log.'
+        }
+    }
+
+    # 口令以独立文件为唯一真相源：上一次中断可能已把 MySQL 口令改掉但没回写 env，
+    # 若每次重新随机生成，就会和 MySQL 里的实际口令永久对不上。
+    $passFile = Join-Path $mysqlHome 'db-password.txt'
+    if (Test-Path $passFile) {
+        $saved = (Get-Content $passFile -Raw).Trim()
+        if ($saved -and $saved -ne 'change-me') { $dbPass = $saved }
+    }
+    if (-not $dbPass -or $dbPass -eq 'change-me') { $dbPass = New-RandomToken 20 }
+
+    # 连接凭据自愈：root 可能是「空口令」（刚 initialize）、「本次口令」（重跑）、
+    # 或「上次口令」（中断残留）。逐个试探，能连上就把口令统一成 $dbPass 并建库。
+    $credModes = @(
+        @{ tag = 'saved-pass'; args = @('-u', 'root', ('--password=' + $dbPass)) },
+        @{ tag = 'empty-pass'; args = @('-u', 'root', '--skip-password') },
+        @{ tag = 'env-pass';   args = @('-u', 'root', ('--password=change-me')) }
+    )
+    # 不做单独的 SELECT 1 探测：-e 后的 SQL 含空格会被 Start-Process 拆散，
+    # 反而报 "Unknown database" 误判为认证失败。直接执行建库 SQL，成功即视为连上。
+    $sqlFile = Join-Path $work 'init-kewu-db.sql'
+    @"
+CREATE DATABASE IF NOT EXISTS kewu CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '$dbPass';
+CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED WITH mysql_native_password BY '$dbPass';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
+"@ | Set-Content -Path $sqlFile -Encoding ASCII
+
+    $connected = $false
+    foreach ($mode in $credModes) {
+        $c2 = Invoke-MySql $mysqlCli $sqlFile $mode.args ('mysql-init-' + $mode.tag)
+        if ($c2 -eq 0) {
+            Log ('  [DB] database ready via ' + $mode.tag)
+            $connected = $true
+            break
+        }
+    }
+    if (-not $connected) {
+        throw 'Cannot authenticate to MySQL as root with either saved or empty password. See logs/admin-deploy.log.'
+    }
+
+    # 口令落盘 + 回写 kewu.env（保持其它行不变），后端 Hikari 才能连上。
+    Set-Content -Path $passFile -Value $dbPass -Encoding ASCII
+    $lines = @()
+    if (Test-Path $envPath) { $lines = @(Get-Content $envPath | Where-Object { $_ -notmatch '^\s*KEWU_DB_(USER|URL|PASSWORD)\s*=' }) }
+    $lines += 'KEWU_DB_URL=jdbc:mysql://127.0.0.1:3306/kewu?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai'
+    $lines += 'KEWU_DB_USER=root'
+    $lines += 'KEWU_DB_PASSWORD=' + $dbPass
+    $lines | Set-Content -Path $envPath -Encoding ASCII
+    Log '[DB] MySQL ready on 3306, database `kewu` created, kewu.env synced'
 }
 
 try {
@@ -44,7 +260,10 @@ try {
     $work = Join-Path $root 'admin-deploy'
     $extractRoot = Join-Path $work 'source'
     $zipPath = Join-Path $work 'kewu-backend-source.zip'
-    New-Item -ItemType Directory -Force $work, $extractRoot | Out-Null
+    $logDir = Join-Path $root 'logs'
+    New-Item -ItemType Directory -Force $work, $extractRoot, $logDir | Out-Null
+    $script:deployLog = Join-Path $logDir 'admin-deploy.log'
+    Set-Content -Path $script:deployLog -Value ('===== deploy started ' + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss') + ' =====') -Encoding UTF8
 
     # ------------------------------------------------ 0. preflight info
     Log '---------- preflight ----------'
@@ -56,8 +275,12 @@ try {
     if (Test-Path (Join-Path $root 'deploy-8080.ps1')) { Log 'found existing deploy-8080.ps1 (will reuse)' } else { Log 'deploy-8080.ps1 missing (will bootstrap from template)' }
     if (Test-Path (Join-Path $root 'kewu.env')) { Log 'found existing kewu.env (will reuse)' } else { Log 'kewu.env missing (will generate with random secrets)' }
     if (Test-Path (Join-Path $root 'kewu-8080.jar')) { Log 'found existing kewu-8080.jar (upgrade deploy)' } else { Log 'kewu-8080.jar missing (first-time deploy)' }
-    if (-not (Test-Tcp 3306)) { Log '[WARN] MySQL 3306 not listening. Please install MySQL and create database `kewu` before deploying.' }
-    if (-not (Test-Tcp 6379)) { Log '[WARN] Redis 6379 not listening. Radar/AI status features need Redis.' }
+    if (-not (Test-Tcp 3306)) {
+        Log '[WARN] MySQL 3306 not listening -> will auto-install local MySQL 8.0 and create database `kewu`.'
+    }
+    if (-not (Test-Tcp 6379)) {
+        Log '[WARN] Redis 6379 not listening (soft dependency: radar/AI status degrade gracefully, startup unaffected).'
+    }
 
     # ------------------------------------------------ 1. ensure JDK 21
     $javaHome = Join-Path $root 'jdk21'
@@ -182,11 +405,22 @@ KEWU_REDIS_PORT=6379
 "@ | Set-Content -Path (Join-Path $root 'kewu.env') -Encoding ASCII
         Log "  generated kewu.env with random JWT_SECRET / admin password"
         Log "  >>> initial admin login: admin / $adminPass  (keep it safe, also in kewu.env)"
-        Log "  >>> remember to set KEWU_DB_PASSWORD to a real MySQL credential"
     }
-    schtasks /query /tn KewuBackend8080 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        $starter = Join-Path $root 'start-8080-service.ps1'
+
+    # 后端的唯一硬依赖：MySQL。必须在 8090 冒烟测试之前就绪。
+    # 放在 kewu.env 生成之后调用，Ensure-MySQL 会把真实口令回写进去。
+    Ensure-MySQL -root $root -work $work
+
+    # 注意：脚本顶端是 $ErrorActionPreference = 'Stop'。PowerShell 5.1 会把 schtasks.exe
+    # 写往 stderr 的“系统找不到指定的文件”（任务不存在时的正常输出）提升为终止异常
+    # (RemoteException)，首次部署会在这里直接跳到 catch 报 [FAIL]，后面的 [3/4] 安全部署
+    # 根本不会执行。改用纯 cmdlet 查询；创建命令局部降级为 Continue 并视为非致命。
+    $autoTask = Get-ScheduledTask -TaskName 'KewuBackend8080' -ErrorAction SilentlyContinue
+    $starter = Join-Path $root 'start-8080-service.ps1'
+    # 上次部署中断可能留下“任务存在但启动脚本丢失”的半成品，必须一并重建。
+    $taskHealthy = $autoTask -and (Test-Path $starter)
+    if (-not $taskHealthy) {
+        if ($autoTask) { Log '  autostart task exists but starter script is missing -> recreating' }
         @'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 foreach ($f in 'kewu.env', 'maas.env') {
@@ -207,8 +441,22 @@ Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyCon
 Start-Sleep -Seconds 1
 & (Join-Path $root 'jdk21\bin\java.exe') -Xmx512m -Dfile.encoding=UTF-8 -jar $live *>> (Join-Path $root 'logs\server8080.log')
 '@ | Set-Content -Path $starter -Encoding UTF8
-        schtasks /create /tn KewuBackend8080 /tr "powershell -NoProfile -ExecutionPolicy Bypass -File `"$starter`"" /sc onstart /ru SYSTEM /rl HIGHEST /f | Out-Null
-        Log '  created scheduled task KewuBackend8080 (auto start on boot)'
+        # 开机自启只是附加能力，创建失败不能让整个部署失败（例如精简版系统没有任务计划服务）。
+        $prevPref = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            schtasks /create /tn KewuBackend8080 /tr "powershell -NoProfile -ExecutionPolicy Bypass -File `"$starter`"" /sc onstart /ru SYSTEM /rl HIGHEST /f 2>&1 | Out-Null
+            $taskCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $prevPref
+        }
+        if ($taskCode -ne 0) {
+            Log ("  [WARN] could not create autostart task (exit $taskCode); backend still deployed, start it manually after reboot")
+        } else {
+            Log '  created scheduled task KewuBackend8080 (auto start on boot)'
+        }
+    } else {
+        Log '  autostart task KewuBackend8080 already exists (will reuse)'
     }
 
     # ------------------------------------------------ 4. (online mode only) build
@@ -273,7 +521,8 @@ settingsEvaluated { settings ->
 
     # ------------------------------------------------ 5. safe deploy (8090 smoke -> swap -> verify -> rollback)
     Log '[3/4] Running safe deploy script (8090 smoke test, backup, swap, verify, rollback)...'
-    $sanitizedDeploy = Join-Path $work 'deploy-8080-safe.ps1'
+    $runTag = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+    $sanitizedDeploy = Join-Path $work ('deploy-8080-safe-' + $runTag + '.ps1')
     $deploySource = Get-Content $deployPs1 -Raw
     # 原脚本按自身位置推导 $root；复制到临时目录执行会错根目录，显式锁定为服务器后端目录。
     $escapedRoot = $root.Replace("'", "''")
@@ -282,20 +531,62 @@ settingsEvaluated { settings ->
     $deploySource = $deploySource -replace "Read-Host 'Enter to close'; exit 1", 'exit 1'
     $deploySource = $deploySource -replace "Read-Host 'Enter to close'", ''
     Set-Content -Path $sanitizedDeploy -Value $deploySource -Encoding UTF8
-    $emptyInput = Join-Path $work 'empty-input.txt'
+    # 临时文件带本次运行唯一后缀：上次部署若因 -Wait 卡住没退出，会继续占用
+    # empty-input.txt / 重定向文件，导致重跑时 Set-Content 抛「文件正在使用」而误报部署失败。
+    $emptyInput = Join-Path $work ('empty-input-' + $runTag + '.txt')
     Set-Content -Path $emptyInput -Value '' -Encoding ASCII
+    $safeLog = Join-Path $logDir 'deploy-8080-output.txt'
+    if (Test-Path $safeLog) { Remove-Item $safeLog -Force -ErrorAction SilentlyContinue }
+    $safeStdout = Join-Path $work ('safe-deploy-stdout-' + $runTag + '.txt')
+    $safeStderr = Join-Path $work ('safe-deploy-stderr-' + $runTag + '.txt')
+
+    # 不能用 -Wait：安全部署脚本会 Start-Process 拉起常驻后端 Java（独立进程树），
+    # -Wait 会一直等它退出，导致主脚本永远走不到 BACKEND DEPLOY DONE、GUI 一直转圈。
+    # 改为轮询安全部署脚本自己的日志文件里的终态标记 DONE / [FAIL]。
     $deployProcess = Start-Process -FilePath 'powershell.exe' `
         -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$sanitizedDeploy`"") `
-        -WorkingDirectory $root -Wait -PassThru -NoNewWindow -RedirectStandardInput $emptyInput
-    if ($deployProcess.ExitCode -ne 0) {
-        throw "deploy-8080.ps1 failed with exit code $($deployProcess.ExitCode)"
+        -WorkingDirectory $root -PassThru -WindowStyle Hidden `
+        -RedirectStandardInput $emptyInput -RedirectStandardOutput $safeStdout -RedirectStandardError $safeStderr
+
+    $deadline = (Get-Date).AddMinutes(12)
+    $terminal = ''
+    $lastLen = 0
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Path $safeLog) {
+            $txt = Get-Content $safeLog -Raw -ErrorAction SilentlyContinue
+            if ($txt) {
+                # 把安全部署的新增输出同步进主日志，SSH 上只读一个文件就能看全。
+                if ($txt.Length -gt $lastLen) {
+                    $newPart = $txt.Substring($lastLen)
+                    foreach ($ln in ($newPart -split "`r?`n")) {
+                        if ($ln.Trim()) { Log ('  | ' + $ln.Trim()) }
+                    }
+                    $lastLen = $txt.Length
+                }
+                if ($txt -match '(?m)^\s*\d\d:\d\d:\d\d\s+DONE\s*$') { $terminal = 'DONE'; break }
+                if ($txt -match '\[FAIL\]') { $terminal = 'FAIL'; break }
+            }
+        }
+        Start-Sleep -Seconds 2
     }
+    if ($terminal -ne 'DONE') {
+        if (Test-Path $safeStderr) {
+            $se = (Get-Content $safeStderr -Raw -ErrorAction SilentlyContinue)
+            if ($se -and $se.Trim()) { Log ('  [safe-deploy-stderr] ' + ($se.Trim() -replace "`r?`n", ' | ')) }
+        }
+        throw ("safe deploy did not reach DONE (terminal=" + ($terminal | Out-String).Trim() + "); see " + $safeLog)
+    }
+    try { $deployProcess.WaitForExit(3000) } catch { }
 
     Log '---------- deploy summary ----------'
     Log ('server IPv4: ' + ($ips -join ', '))
     Log "local health check: http://127.0.0.1:8080/api/health"
     Log 'BACKEND DEPLOY DONE'
 } catch {
-    Log ('[FAIL] ' + $_.Exception.Message)
+    $ex = $_.Exception
+    Log ('[FAIL] ' + $ex.GetType().Name + ': ' + $ex.Message)
+    try { Log ('  position: ' + ($_.InvocationInfo.PositionMessage -replace "`r?`n", ' | ')) } catch { }
+    try { Log ('  stack: ' + ($_.ScriptStackTrace -replace "`r?`n", ' | ')) } catch { }
+    if ($script:deployLog) { Log ('  full log: ' + $script:deployLog) }
     exit 1
 }

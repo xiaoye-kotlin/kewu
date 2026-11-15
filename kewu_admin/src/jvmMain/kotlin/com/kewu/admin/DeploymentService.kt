@@ -4,7 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.util.Collections
 import java.util.Date
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 class DeploymentException(message: String) : Exception(message)
 
@@ -110,16 +113,59 @@ class DeploymentService {
                 .directory(workDir)
                 .redirectErrorStream(true)
                 .start()
-            process.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
-                var line = reader.readLine()
-                while (line != null) {
-                    if (line.isNotBlank()) onLog(line)
-                    line = reader.readLine()
-                }
+
+            // PowerShell 部署进程退出后，被后台常驻拉起的后端 Java 子进程（Start-Process 已将其 stdout/stderr
+            // 重定向到文件）在某些 Windows 环境下仍可能握着 stdout 管道，导致 readLine 永远读不到 EOF、
+            // deploy() 永不返回、界面卡在「部署中」。这里不再无限等待 EOF：看到终态标记并静置一小段后，
+            // 直接强行回收 PowerShell 收集进程。常驻后端 Java 由 Start-Process 独立拉起，不在同一进程树，
+            // 不会被误杀。
+            val doneMarker = "BACKEND DEPLOY DONE"
+            val failMarker = "[FAIL]"
+            val seenDone = AtomicBoolean(false)
+            val seenFail = AtomicBoolean(false)
+            val lastLineAt = AtomicLong(System.currentTimeMillis())
+            val tail = Collections.synchronizedList(mutableListOf<String>())
+
+            val readerThread = Thread({
+                try {
+                    process.inputStream.bufferedReader(Charsets.UTF_8).forEachLine { line ->
+                        if (line.isNotBlank()) {
+                            onLog(line)
+                            lastLineAt.set(System.currentTimeMillis())
+                            tail.add(line)
+                            if (tail.size > 80) tail.removeAt(0)
+                            if (line.contains(doneMarker)) seenDone.set(true)
+                            if (line.contains(failMarker)) seenFail.set(true)
+                        }
+                    }
+                } catch (_: Exception) { /* 管道被强行关闭 */ }
+            }, "deploy-log-reader").apply { isDaemon = true; start() }
+
+            // 终态标记出现且静置 8s 仍无新输出（说明脚本已结束、管道多半被常驻 Java 占着），
+            // 或整体超过 10 分钟硬上限，则跳出等待并强行回收 PowerShell 进程。
+            val absoluteDeadline = System.currentTimeMillis() + 10L * 60_000
+            while (readerThread.isAlive && System.currentTimeMillis() < absoluteDeadline) {
+                val finished = seenDone.get() || seenFail.get()
+                val quietFor = System.currentTimeMillis() - lastLineAt.get()
+                if (finished && quietFor > 8_000) break
+                Thread.sleep(500)
             }
-            val exit = process.waitFor()
-            if (exit == 0) Result.success(Unit)
-            else Result.failure(DeploymentException("后端部署失败（退出码 $exit），请查看上方日志"))
+
+            var exit = -1
+            if (readerThread.isAlive) {
+                try { process.destroyForcibly() } catch (_: Exception) {}
+                readerThread.join(8_000)
+                try { exit = process.exitValue() } catch (_: Exception) { exit = -1 }
+            } else {
+                exit = process.waitFor()
+            }
+
+            when {
+                seenDone.get() || exit == 0 -> Result.success(Unit)
+                seenFail.get() -> Result.failure(DeploymentException(tail.lastOrNull() ?: "部署脚本报告失败，请查看上方日志"))
+                exit != 0 -> Result.failure(DeploymentException("后端部署失败（退出码 $exit），请查看上方日志"))
+                else -> Result.failure(DeploymentException("后端部署未完成，请查看上方日志"))
+            }
         } catch (e: Exception) {
             Result.failure(DeploymentException(e.message ?: "后端部署进程启动失败"))
         }
