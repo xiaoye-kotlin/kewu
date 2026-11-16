@@ -33,6 +33,7 @@ import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,6 +50,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.admin.AdminApi
 import com.kewu.admin.AdminSession
+import com.kewu.admin.DeploymentDetector
+import com.kewu.admin.DeploymentInfo
+import com.kewu.admin.DeploymentState
 import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.SnackbarDuration
 import io.github.suqi8.coui.kmp.basic.Text
@@ -80,7 +84,9 @@ private val NavItemGap = 4.dp
 @Composable
 fun AdminApp() {
     val api = remember { AdminApi() }
-    var deployPromptCompleted by remember { mutableStateOf(false) }
+    // null = 正在自检；Info = 已确认本机部署完成（直接进入登录页）；false = 未部署（显示部署向导）
+    var deployState by remember { mutableStateOf<DeploymentInfo?>(null) }
+    var checkingDeployment by remember { mutableStateOf(true) }
     var session by remember { mutableStateOf<AdminSession?>(null) }
     var section by remember { mutableStateOf(AdminSection.OVERVIEW) }
     var showDeployment by remember { mutableStateOf(false) }
@@ -89,9 +95,30 @@ fun AdminApp() {
     val backdrop = rememberAdminGlassBackdrop()
     DisposableEffect(Unit) { onDispose { api.close() } }
 
-    // 启动时先询问是否从 GitHub 一键部署后端；部署完成或明确跳过后才进入登录/管理界面。
-    if (!deployPromptCompleted) {
-        DeploymentGate(onFinished = { deployPromptCompleted = true })
+    // 启动自检：本机已部署（持久化状态命中或 8080 健康）→ 跳过部署界面直达登录。
+    LaunchedEffect(Unit) {
+        val info = DeploymentDetector.detect()
+        if (info != null) api.useDeployedPort(info.port)
+        deployState = info
+        checkingDeployment = false
+    }
+
+    if (checkingDeployment) {
+        DeploymentCheckingScreen()
+        return
+    }
+
+    // 未部署 → 先展示部署向导；部署完成（或用户主动跳过）后才进入登录/管理界面。
+    if (deployState == null) {
+        DeploymentGate(onFinished = { info ->
+            if (info != null) {
+                api.useDeployedPort(info.port)
+                deployState = info
+            } else {
+                // 用户跳过部署：标记完成但不写部署状态，仍进登录页（走云端/默认地址）。
+                deployState = DeploymentInfo("", 0, api.baseUrl, 0L)
+            }
+        })
         return
     }
 

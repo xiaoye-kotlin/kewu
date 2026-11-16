@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.kewu"
-version = "1.0.15"
+version = "1.0.16"
 
 repositories {
     mavenCentral()
@@ -45,6 +45,13 @@ kotlin {
                 implementation("androidx.navigationevent:navigationevent-compose:1.1.2")
             }
         }
+        val jvmTest by getting {
+            dependencies {
+                implementation(kotlin("test"))
+                implementation(kotlin("test-junit"))
+                implementation("junit:junit:4.13.2")
+            }
+        }
     }
 }
 
@@ -60,7 +67,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
-            packageVersion = "1.0.15"
+            packageVersion = "1.0.16"
             description = "课悟平台总控端"
             vendor = "Kewu"
         }

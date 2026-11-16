@@ -34,6 +34,18 @@ class AdminApi(
      *  需由 [resolveBaseUrl] 探测后切到 127.0.0.1。 */
     var baseUrl: String = baseUrl
         private set
+
+    /** 一键部署选择的动态端口（0 = 未指定，走默认 8080 候选）。
+     *  部署完成或自检命中后由 [useDeployedPort] 注入，登录探测时优先命中该端口。 */
+    private var deployedPort: Int = 0
+
+    /** 由部署/自检流程告知总控端后端实际监听端口，并立即把 baseUrl 切到本机地址。 */
+    fun useDeployedPort(port: Int) {
+        if (port in 1..65535) {
+            deployedPort = port
+            baseUrl = "http://127.0.0.1:$port"
+        }
+    }
     private val client = HttpClient(OkHttp) {
         expectSuccess = false
         // 强制直连：服务器上装有 CCProxy 等系统代理时，OkHttp 默认会走系统代理，
@@ -54,7 +66,11 @@ class AdminApi(
         // 2026-11-16：本机优先，云端兜底。
         // 总控端常驻服务器本机时 127.0.0.1 秒通；若一上来就拉 Gitee（服务器访问常被拦，8s 超时）
         // 会白白拖慢每次登录。故把云端拉取放到本地候选全部失败后才做。
-        val localCandidates = listOf("http://127.0.0.1:8080", "http://localhost:8080", baseUrl).distinct()
+        val portCandidates = linkedSetOf<Int>().apply {
+            if (deployedPort in 1..65535) add(deployedPort)
+            add(8080)
+        }
+        val localCandidates = (portCandidates.flatMap { listOf("http://127.0.0.1:$it", "http://localhost:$it") } + baseUrl).distinct()
         val results = mutableListOf<Pair<String, String>>()
         for (candidate in localCandidates) {
             val error = probeHealthError(candidate)

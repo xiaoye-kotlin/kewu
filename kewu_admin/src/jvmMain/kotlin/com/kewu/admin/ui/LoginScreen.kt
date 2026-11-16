@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
 import com.kewu.admin.AdminSession
+import com.kewu.admin.DeploymentState
 import io.github.suqi8.coui.kmp.basic.Button
 import io.github.suqi8.coui.kmp.basic.ButtonDefaults
 import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
@@ -46,8 +47,10 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun LoginScreen(api: AdminApi, onLogin: (AdminSession) -> Unit) {
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
+    // 一键部署 / 自检命中后，从本机 kewu.env 自动填入管理员凭证（解决随机密码看不到的问题）。
+    val initialCredentials = remember { DeploymentState().adminCredentials() }
+    var username by remember { mutableStateOf(initialCredentials?.first ?: "") }
+    var password by remember { mutableStateOf(initialCredentials?.second ?: "") }
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()

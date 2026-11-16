@@ -1,5 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$ServerRoot,
+    [int]$TargetPort = 8080,
     [Parameter(Mandatory=$true)][string]$ZipUrl,
     [switch]$OnlineBuild,
     [string]$PrebuiltJarUrl = '',
@@ -92,6 +93,25 @@ function Ensure-MySQL([string]$root, [string]$work) {
     $myIni = Join-Path $mysqlHome 'my.ini'
     $envPath = Join-Path $root 'kewu.env'
     $dbPass = ''
+
+    # 3306 已由其它部署/外部 MySQL 提供时，本目录可能没有 mysql.exe。
+    # 动态端口允许一台服务器多套部署，必须复用已安装的 mysql 客户端做凭据同步，
+    # 否则 Start-Process 会因找不到 mysql.exe 抛 InvalidOperationException 让部署失败。
+    if (-not (Test-Path $mysqlCli)) {
+        $clientCandidates = @(
+            'C:\kewu\mysql\bin\mysql.exe',
+            'C:\Users\Administrator\Desktop\Kewu\mysql\bin\mysql.exe'
+        )
+        $usersDir = Join-Path $env:SystemDrive 'Users'
+        if (Test-Path $usersDir) {
+            Get-ChildItem $usersDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+                $clientCandidates += (Join-Path $_.FullName 'Desktop\Kewu\mysql\bin\mysql.exe')
+                $clientCandidates += (Join-Path $_.FullName '桌面\Kewu\mysql\bin\mysql.exe')
+            }
+        }
+        $foundCli = $clientCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+        if ($foundCli) { $mysqlCli = $foundCli; Log ('  [DB] reusing mysql client: ' + $mysqlCli) }
+    }
 
     if (-not $alreadyUp) {
         # MySQL 8.0 的 mysqld.exe 依赖 VC++ 2015-2022 运行库；精简版 Windows Server 常只带
@@ -256,7 +276,8 @@ try {
         New-Item -ItemType Directory -Force $ServerRoot | Out-Null
     }
     $root = (Resolve-Path $ServerRoot).Path
-    Log "Server root: $root"
+    $taskName = 'KewuBackend' + $TargetPort
+    Log "Server root: $root   Target port: $TargetPort   Autostart task: $taskName"
     $work = Join-Path $root 'admin-deploy'
     $extractRoot = Join-Path $work 'source'
     $zipPath = Join-Path $work 'kewu-backend-source.zip'
@@ -376,24 +397,24 @@ try {
 
     # ------------------------------------------------ 3. bootstrap server files on first run
     $deployPs1 = Join-Path $root 'deploy-8080.ps1'
-    if (-not (Test-Path $deployPs1)) {
-        $template = ''
-        if ($sourceDir) {
-            $t = Join-Path $sourceDir 'deploy\deploy-8080.ps1'
-            if (Test-Path $t) { $template = $t }
-        }
-        if (-not $template -and $DeployTemplate -and (Test-Path $DeployTemplate)) { $template = $DeployTemplate }
-        if ($template) {
-            Copy-Item $template $deployPs1 -Force
-            Log "  bootstrapped deploy-8080.ps1 from template"
-        } else {
-            throw 'deploy-8080.ps1 missing and no template available.'
-        }
+    # 每次都用内置模板覆盖：老服务器上残留的 deploy-8080.ps1 不认识 -TargetPort 参数，
+    # 复用会导致「找不到参数 TargetPort」而部署失败。内置模板始终与当前总控端版本配套。
+    $template = ''
+    if ($DeployTemplate -and (Test-Path $DeployTemplate)) { $template = $DeployTemplate }
+    if ($template) {
+        Copy-Item $template $deployPs1 -Force
+        Log "  deploy-8080.ps1 refreshed from embedded template (dynamic TargetPort support)"
+    } elseif (Test-Path $deployPs1) {
+        Log '  [WARN] embedded template missing, reusing existing deploy-8080.ps1 (may not support -TargetPort)'
+    } else {
+        throw 'deploy-8080.ps1 missing and no template available.'
     }
-    if (-not (Test-Path (Join-Path $root 'kewu.env'))) {
+    $envFile = Join-Path $root 'kewu.env'
+    if (-not (Test-Path $envFile)) {
         $jwt = New-RandomToken 24
         $adminPass = New-RandomToken 10
         @"
+PORT=$TargetPort
 JWT_SECRET=$jwt
 KEWU_DB_URL=jdbc:mysql://127.0.0.1:3306/kewu?useUnicode=true&characterEncoding=utf8&useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai
 KEWU_DB_USER=root
@@ -403,11 +424,18 @@ ADMIN_PASSWORD=$adminPass
 KEWU_REDIS_HOST=127.0.0.1
 KEWU_REDIS_PORT=6379
 "@ | Set-Content -Path (Join-Path $root 'kewu.env') -Encoding ASCII
-        Log "  generated kewu.env with random JWT_SECRET / admin password"
+        Log "  generated kewu.env with random JWT_SECRET / admin password / PORT=$TargetPort"
         Log "  >>> initial admin login: admin / $adminPass  (keep it safe, also in kewu.env)"
+    } else {
+        # 已有 env 也要把 PORT 同步为本次选择端口（去掉旧的 PORT 行再追加），
+        # 否则开机自启脚本按 env 里的旧端口启动，和本次部署端口不一致。
+        $envLines = @(Get-Content $envFile | Where-Object { $_ -notmatch '^\s*PORT\s*=' })
+        $envLines += 'PORT=' + $TargetPort
+        $envLines | Set-Content -Path $envFile -Encoding ASCII
+        Log "  kewu.env PORT synced to $TargetPort"
     }
 
-    # 后端的唯一硬依赖：MySQL。必须在 8090 冒烟测试之前就绪。
+    # 后端的唯一硬依赖：MySQL。必须在冒烟测试之前就绪。
     # 放在 kewu.env 生成之后调用，Ensure-MySQL 会把真实口令回写进去。
     Ensure-MySQL -root $root -work $work
 
@@ -415,13 +443,13 @@ KEWU_REDIS_PORT=6379
     # 写往 stderr 的“系统找不到指定的文件”（任务不存在时的正常输出）提升为终止异常
     # (RemoteException)，首次部署会在这里直接跳到 catch 报 [FAIL]，后面的 [3/4] 安全部署
     # 根本不会执行。改用纯 cmdlet 查询；创建命令局部降级为 Continue 并视为非致命。
-    $autoTask = Get-ScheduledTask -TaskName 'KewuBackend8080' -ErrorAction SilentlyContinue
-    $starter = Join-Path $root 'start-8080-service.ps1'
+    $autoTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    $starter = Join-Path $root ('start-' + $TargetPort + '-service.ps1')
     # 上次部署中断可能留下“任务存在但启动脚本丢失”的半成品，必须一并重建。
     $taskHealthy = $autoTask -and (Test-Path $starter)
     if (-not $taskHealthy) {
         if ($autoTask) { Log '  autostart task exists but starter script is missing -> recreating' }
-        @'
+        $starterText = @'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 foreach ($f in 'kewu.env', 'maas.env') {
     $path = Join-Path $root $f
@@ -435,17 +463,39 @@ foreach ($f in 'kewu.env', 'maas.env') {
 New-Item -ItemType Directory -Force (Join-Path $root 'logs') | Out-Null
 $live = Join-Path $root 'kewu-8080.jar'
 if (-not (Test-Path $live)) { exit 0 }
+$livePattern = [regex]::Escape($live)
 Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine -match 'kewu-8080\.jar' } |
+    Where-Object { $_.CommandLine -and $_.CommandLine -match $livePattern } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Seconds 1
-& (Join-Path $root 'jdk21\bin\java.exe') -Xmx512m -Dfile.encoding=UTF-8 -jar $live *>> (Join-Path $root 'logs\server8080.log')
-'@ | Set-Content -Path $starter -Encoding UTF8
+& (Join-Path $root 'jdk21\bin\java.exe') -Xmx512m -Dfile.encoding=UTF-8 -jar $live *>> (Join-Path $root 'logs\server-TARGET_PORT.log')
+'@
+        # 端口通过 kewu.env 的 PORT= 注入进程环境（上面 LoadEnv 已读取），
+        # 这里只把日志文件名里的占位符换成本次端口，避免写死 8080。
+        $starterText = $starterText.Replace('TARGET_PORT', "$TargetPort")
+        $starterText | Set-Content -Path $starter -Encoding UTF8
+        # 清理「本部署目录」老端口遗留的自启任务（端口改了不能让旧任务再把后端拉起来占旧端口）。
+        # 关键：只删动作里引用了当前 $root 的任务，绝不能按 KewuBackend* 通配删除——
+        # 同一台服务器上其它部署（例如线上 8080）的同名前缀任务必须保留，否则会误停线上自启。
+        $rootRegex = [regex]::Escape($root)
+        $prevPref2 = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            Get-ScheduledTask -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.TaskName -like 'KewuBackend*' -and $_.TaskName -ne $taskName -and
+                    (($_.Actions | ForEach-Object { $_.Execute + ' ' + $_.Arguments }) -join ' ') -match $rootRegex
+                } |
+                ForEach-Object {
+                    Log ('  removing stale autostart task for this root: ' + $_.TaskName)
+                    Unregister-ScheduledTask -TaskName $_.TaskName -Confirm:$false -ErrorAction SilentlyContinue
+                }
+        } finally { $ErrorActionPreference = $prevPref2 }
         # 开机自启只是附加能力，创建失败不能让整个部署失败（例如精简版系统没有任务计划服务）。
         $prevPref = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'
         try {
-            schtasks /create /tn KewuBackend8080 /tr "powershell -NoProfile -ExecutionPolicy Bypass -File `"$starter`"" /sc onstart /ru SYSTEM /rl HIGHEST /f 2>&1 | Out-Null
+            schtasks /create /tn $taskName /tr "powershell -NoProfile -ExecutionPolicy Bypass -File `"$starter`"" /sc onstart /ru SYSTEM /rl HIGHEST /f 2>&1 | Out-Null
             $taskCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $prevPref
@@ -453,10 +503,10 @@ Start-Sleep -Seconds 1
         if ($taskCode -ne 0) {
             Log ("  [WARN] could not create autostart task (exit $taskCode); backend still deployed, start it manually after reboot")
         } else {
-            Log '  created scheduled task KewuBackend8080 (auto start on boot)'
+            Log ('  created scheduled task ' + $taskName + ' (auto start on boot)')
         }
     } else {
-        Log '  autostart task KewuBackend8080 already exists (will reuse)'
+        Log ('  autostart task ' + $taskName + ' already exists (will reuse)')
     }
 
     # ------------------------------------------------ 4. (online mode only) build
@@ -519,8 +569,8 @@ settingsEvaluated { settings ->
         Log "  copied to $newJar"
     }
 
-    # ------------------------------------------------ 5. safe deploy (8090 smoke -> swap -> verify -> rollback)
-    Log '[3/4] Running safe deploy script (8090 smoke test, backup, swap, verify, rollback)...'
+    # ------------------------------------------------ 5. safe deploy (dynamic smoke -> swap -> verify -> rollback)
+    Log ('[3/4] Running safe deploy script (dynamic smoke test, backup, swap, verify on port ' + $TargetPort + ')...')
     $runTag = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
     $sanitizedDeploy = Join-Path $work ('deploy-8080-safe-' + $runTag + '.ps1')
     $deploySource = Get-Content $deployPs1 -Raw
@@ -544,7 +594,7 @@ settingsEvaluated { settings ->
     # -Wait 会一直等它退出，导致主脚本永远走不到 BACKEND DEPLOY DONE、GUI 一直转圈。
     # 改为轮询安全部署脚本自己的日志文件里的终态标记 DONE / [FAIL]。
     $deployProcess = Start-Process -FilePath 'powershell.exe' `
-        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$sanitizedDeploy`"") `
+        -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$sanitizedDeploy`"", '-TargetPort', "$TargetPort") `
         -WorkingDirectory $root -PassThru -WindowStyle Hidden `
         -RedirectStandardInput $emptyInput -RedirectStandardOutput $safeStdout -RedirectStandardError $safeStderr
 
@@ -580,7 +630,7 @@ settingsEvaluated { settings ->
 
     Log '---------- deploy summary ----------'
     Log ('server IPv4: ' + ($ips -join ', '))
-    Log "local health check: http://127.0.0.1:8080/api/health"
+    Log ('local health check: http://127.0.0.1:' + $TargetPort + '/api/health')
     Log 'BACKEND DEPLOY DONE'
 } catch {
     $ex = $_.Exception

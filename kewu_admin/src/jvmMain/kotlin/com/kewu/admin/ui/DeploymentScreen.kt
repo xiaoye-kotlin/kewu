@@ -22,6 +22,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.SkipNext
 import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import io.github.suqi8.coui.kmp.basic.Text
@@ -40,7 +41,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kewu.admin.DeploymentInfo
 import com.kewu.admin.DeploymentService
+import com.kewu.admin.DeploymentState
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
 import kotlinx.coroutines.delay
@@ -50,25 +53,38 @@ import java.awt.datatransfer.StringSelection
 import java.io.File
 import javax.swing.JFileChooser
 
-/** 应用启动时的部署入口：用户确认后才进入管理界面。 */
+/** 启动自检中的过渡页：检测本机是否已完成部署，避免闪一下部署向导。 */
 @Composable
-fun DeploymentGate(onFinished: () -> Unit) {
-    val cs = COUITheme.colorScheme
+fun DeploymentCheckingScreen() {
+    val backdrop = rememberAdminGlassBackdrop()
+    Box(Modifier.fillMaxSize()) {
+        AdminBackdropLayer(backdrop, strength = 1.25f)
+        Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
+            InfiniteProgressIndicator(color = KewuBlue, size = 34.dp, strokeWidth = 3.dp)
+            Spacer(Modifier.height(18.dp))
+            Text("正在检测本机部署状态…", color = COUITheme.colorScheme.onSurface, fontSize = 15.sp)
+        }
+    }
+}
+
+/** 应用启动时的部署入口：未检测到本机部署才出现；部署完成进入登录页。 */
+@Composable
+fun DeploymentGate(onFinished: (DeploymentInfo?) -> Unit) {
     val backdrop = rememberAdminGlassBackdrop()
     Box(Modifier.fillMaxSize()) {
         AdminBackdropLayer(backdrop, strength = 1.25f)
         val p = rememberEnterProgress(0, baseDelayMs = 60L)
         AdminGlassCard(
             backdrop = backdrop,
-            modifier = Modifier.width(880.dp).heightIn(max = 760.dp).align(Alignment.Center).glassEnter(p, 40f),
+            modifier = Modifier.width(880.dp).heightIn(max = 800.dp).align(Alignment.Center).glassEnter(p, 40f),
             shape = RoundedCornerShape(30.dp),
             blurRadius = glassCondenseBlur(p, 28f),
             tintAlpha = 0.44f * p.coerceIn(0f, 1f),
         ) {
             DeploymentContent(
                 compact = false,
-                onSkip = onFinished,
-                onDeploymentFinished = onFinished,
+                onSkip = { onFinished(null) },
+                onDeploymentFinished = { info -> onFinished(info) },
             )
         }
     }
@@ -86,7 +102,7 @@ fun DeploymentDialog(onClose: () -> Unit) {
                 DeploymentContent(
                     compact = true,
                     onSkip = onClose,
-                    onDeploymentFinished = onClose,
+                    onDeploymentFinished = { onClose() },
                     onBusyChange = { canClose = !it },
                 )
             }
@@ -99,12 +115,16 @@ fun DeploymentDialog(onClose: () -> Unit) {
 private fun DeploymentContent(
     compact: Boolean,
     onSkip: () -> Unit,
-    onDeploymentFinished: () -> Unit,
+    onDeploymentFinished: (DeploymentInfo) -> Unit,
     onBusyChange: (Boolean) -> Unit = {},
 ) {
     val service = remember { DeploymentService() }
+    val stateStore = remember { DeploymentState() }
     var detectedRoot by remember { mutableStateOf<String?>(null) }
     var serverRoot by remember { mutableStateOf("") }
+    var availablePorts by remember { mutableStateOf(listOf<Int>()) }
+    var selectedPort by remember { mutableStateOf(8080) }
+    var customPort by remember { mutableStateOf("") }
     var zipUrl by remember { mutableStateOf(service.defaultBackendZipUrl) }
     var jarUrl by remember { mutableStateOf(service.defaultPrebuiltJarUrl) }
     var onlineBuild by remember { mutableStateOf(false) }
@@ -112,17 +132,27 @@ private fun DeploymentContent(
     var success by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var copied by remember { mutableStateOf(false) }
+    var credentials by remember { mutableStateOf<Pair<String, String>?>(null) }
     val logs = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(Unit) {
         detectedRoot = service.detectServerRoot()
         serverRoot = detectedRoot ?: ""
+        val ports = DeploymentState.findAvailablePorts(6)
+        availablePorts = ports
+        if (ports.isNotEmpty()) selectedPort = ports.first()
+        credentials = stateStore.adminCredentials()
     }
 
     fun startDeployment() {
         if (serverRoot.isBlank()) {
             error = "请填写服务器后端目录"
+            return
+        }
+        val port = customPort.toIntOrNull() ?: selectedPort
+        if (port !in 1..65535) {
+            error = "端口号必须在 1-65535 之间"
             return
         }
         scope.launch {
@@ -131,16 +161,19 @@ private fun DeploymentContent(
             success = false
             error = null
             logs.clear()
-            logs.add(if (onlineBuild) "开始从 GitHub 拉取源码并在服务器构建部署……" else "开始从 GitHub Release 下载预构建后端包并部署……")
-            val result = service.deploy(serverRoot.trim(), jarUrl.trim(), zipUrl.trim(), onlineBuild) { logs.add(it) }
+            logs.add("开始部署到 $serverRoot ，端口 $port ……")
+            val result = service.deploy(serverRoot.trim(), port, jarUrl.trim(), zipUrl.trim(), onlineBuild) { logs.add(it) }
             deploying = false
             result.onSuccess {
-                logs.add("部署完成，稍后进入管理界面。")
+                val root = File(serverRoot.trim()).absoluteFile
+                stateStore.save(root, port)
+                credentials = DeploymentState.readEnvCredentials(File(root, "kewu.env"))
+                val info = DeploymentInfo(root.absolutePath, port, "http://127.0.0.1:$port", System.currentTimeMillis())
+                logs.add("部署完成，端口 $port，正在进入登录界面。")
+                credentials?.let { (u, p) -> logs.add("管理员账号：$u / $p （已自动填入登录页，请妥善保管）") }
                 success = true
                 onBusyChange(false)
-                if (compact) onDeploymentFinished() else {
-                    scope.launch { delay(900); onDeploymentFinished() }
-                }
+                scope.launch { delay(1000); onDeploymentFinished(info) }
             }.onFailure {
                 error = it.message ?: "部署失败"
                 logs.add("部署未完成，可查看日志修正后重试，或跳过进入管理界面。")
@@ -207,6 +240,32 @@ private fun DeploymentContent(
                 compact = true,
             )
         }
+        Spacer(Modifier.height(12.dp))
+        Text("部署端口（动态检测可用端口，不选则默认 8080）", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            if (availablePorts.isEmpty()) {
+                Text("正在检测可用端口…", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+            } else {
+                availablePorts.forEach { p ->
+                    FilterChip(
+                        selected = customPort.isBlank() && selectedPort == p,
+                        onClick = { selectedPort = p; customPort = "" },
+                        label = { Text("$p") },
+                        enabled = !deploying,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(
+            value = customPort,
+            onValueChange = { customPort = it.filter { ch -> ch.isDigit() }.take(5) },
+            modifier = Modifier.fillMaxWidth(),
+            label = "自定义端口（可选，1-65535）",
+            singleLine = true,
+            enabled = !deploying,
+        )
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             FilterChip(
@@ -283,6 +342,17 @@ private fun DeploymentContent(
         }
         error?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 10.dp))
+        }
+        credentials?.let { (u, p) ->
+            Spacer(Modifier.height(10.dp))
+            Panel(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(12.dp)) {
+                    Text("本机管理员凭证（来自 kewu.env）", fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = KewuGreenDeep)
+                    Spacer(Modifier.height(4.dp))
+                    Text("账号：$u    密码：$p", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                    Text("登录页会自动填入；请妥善保管并按需修改服务器 kewu.env。", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         Spacer(Modifier.height(14.dp))
         Panel(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(min = 170.dp, max = if (compact) 320.dp else 420.dp)) {

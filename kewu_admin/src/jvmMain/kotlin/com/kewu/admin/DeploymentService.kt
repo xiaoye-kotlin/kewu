@@ -55,12 +55,24 @@ class DeploymentService {
             }
         }
 
+        // 收集常见部署根：服务目录 + 各用户桌面下的 Kewu（本项目实测服务器就装在 Administrator 桌面）。
+        val desktopRoots = mutableListOf<String>()
+        val usersDir = File(System.getenv("SystemDrive") ?: "C:", "Users")
+        usersDir.listFiles { f -> f.isDirectory }?.forEach { user ->
+            desktopRoots += File(user, "Desktop/Kewu").absolutePath
+            desktopRoots += File(user, "桌面/Kewu").absolutePath
+        }
+        // 当前用户桌面也扫一遍（Windows 单机部署最常见的选择）。
+        val userHome = File(System.getProperty("user.home"))
+        desktopRoots += File(userHome, "Desktop/Kewu").absolutePath
+        desktopRoots += File(userHome, "Kewu").absolutePath
+
         val candidates = listOf(
-            "C:/kewu-server", "D:/kewu-server",
+            "C:/kewu-server", "D:/kewu-server", "C:/kewu", "D:/kewu",
             "C:/wwwroot/kewu-server", "D:/wwwroot/kewu-server",
             "C:/web/kewu-server", "D:/web/kewu-server",
             "C:/inetpub/wwwroot/kewu-server", "D:/inetpub/wwwroot/kewu-server",
-        )
+        ) + desktopRoots
         return candidates.firstOrNull { looksLikeServerRoot(File(it)) }
     }
 
@@ -69,11 +81,15 @@ class DeploymentService {
 
     suspend fun deploy(
         serverRootPath: String,
+        port: Int = 8080,
         prebuiltJarUrl: String = defaultPrebuiltJarUrl,
         backendZipUrl: String = defaultBackendZipUrl,
         onlineBuild: Boolean = false,
         onLog: (String) -> Unit,
     ): Result<Unit> = withContext(Dispatchers.IO) {
+        if (port !in 1..65535) {
+            return@withContext Result.failure(DeploymentException("端口号必须在 1-65535 之间：$port"))
+        }
         val serverRoot = File(serverRootPath).absoluteFile
         // 目录可以不存在（全新服务器首次搭建）：不存在则创建，不再要求预先放好 deploy-8080.ps1 / kewu-8080.jar。
         if (!serverRoot.exists() && !serverRoot.mkdirs()) {
@@ -101,6 +117,7 @@ class DeploymentService {
         val command = mutableListOf(
             "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script.absolutePath,
             "-ServerRoot", serverRoot.absolutePath,
+            "-TargetPort", port.toString(),
             "-ZipUrl", backendZipUrl,
             "-PrebuiltJarUrl", prebuiltJarUrl,
             "-PrebuiltZipUrl", defaultPrebuiltZipUrl,

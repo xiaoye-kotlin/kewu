@@ -1,27 +1,36 @@
-# Kewu: deploy a new build of the single backend on port 8080 (v2).
+# Kewu: deploy a new build of the single backend on a chosen port (v3).
 # Pure ASCII on purpose. Run as Administrator (normally invoked by kewu_admin).
-# v2: wall-clock health wait, disable autostart task during swap, start backend directly,
-#     auto-recover MySQL, freeze stale backend/watchdog processes before overwriting the jar.
+# v3: dynamic TargetPort (no hard-coded 8080), wall-clock health wait, disable autostart task
+#     during swap, start backend directly, auto-recover MySQL, freeze stale processes.
+param([int]$TargetPort = 8080)
 $ErrorActionPreference = 'Continue'
 $ProgressPreference = 'SilentlyContinue'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $root
 $logDir = Join-Path $root 'logs'
 if (-not (Test-Path $logDir)) { New-Item -ItemType Directory $logDir | Out-Null }
+$taskName = 'KewuBackend' + $TargetPort
 $out = Join-Path $logDir 'deploy-8080-output.txt'
 $newJar = Join-Path $root 'kewu-8080-new.jar'
 $liveJar = Join-Path $root 'kewu-8080.jar'
 $java = Join-Path $root 'jdk21\bin\java.exe'
+# 本目录没有内置 JDK 时回退到 JAVA_HOME（多套部署共享同一 JDK 的场景）。
+if (-not (Test-Path $java) -and $env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME 'bin\java.exe'))) {
+    $java = Join-Path $env:JAVA_HOME 'bin\java.exe'
+    Write-Host ("using JAVA_HOME java: " + $java)
+}
 # 冒烟端口不能写死 8090：服务器上常有其它业务占着该端口（例如 python server.py），
 # 旧版 FreezeBackend 会 KillPort 8090 误杀别人的服务。这里从 18090 起找一个空闲端口。
 $smokePort = 18090
 while ((Get-NetTCPConnection -State Listen -LocalPort $smokePort -ErrorAction SilentlyContinue | Select-Object -First 1) -and $smokePort -lt 18110) {
     $smokePort++
 }
-Write-Host ("smoke port: " + $smokePort + " (auto-picked, avoids killing unrelated services on 8090)")
+# 冒烟端口绝不能和正式端口相同（否则冒烟进程会被当作线上进程误杀）。
+if ($smokePort -eq $TargetPort) { $smokePort++ }
+Write-Host ("smoke port: " + $smokePort + "   target port: " + $TargetPort + " (auto-picked, avoids killing unrelated services)")
 Set-Content -Path $out -Value '' -Encoding utf8
 # Recover from a previous interrupted run that may have left the task disabled.
-schtasks /change /tn KewuBackend8080 /enable 2>$null | Out-Null
+schtasks /change /tn $taskName /enable 2>$null | Out-Null
 
 function Log([string]$m) {
     $line = (Get-Date -Format 'HH:mm:ss') + '  ' + $m
@@ -66,11 +75,15 @@ function KillPort([int]$port) {
 # Stop the scheduled task and every process that could auto-restart the backend while
 # the jar is being overwritten (overwrite-during-read causes NoClassDefFoundError).
 function FreezeBackend {
-    schtasks /change /tn KewuBackend8080 /disable 2>$null | Out-Null
+    schtasks /change /tn $taskName /disable 2>$null | Out-Null
+    # 只冻结「本部署目录」的进程：动态端口允许一台服务器并存多套 kewu 部署，
+    # 绝不能按 'kewu-8080' 关键字误杀别的部署/线上进程。用绝对 jar 路径和启动脚本路径精确匹配。
+    $jarPattern = [regex]::Escape($liveJar)
+    $starterPattern = [regex]::Escape((Join-Path $root ('start-' + $TargetPort + '-service.ps1')))
     $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $_.CommandLine -and (
-            ($_.Name -eq 'java.exe' -and $_.CommandLine -match 'kewu-8080') -or
-            ($_.Name -in @('cmd.exe','wscript.exe','powershell.exe') -and $_.CommandLine -match 'start_bg_8080|start-8080-service')
+            ($_.Name -eq 'java.exe' -and $_.CommandLine -match $jarPattern) -or
+            ($_.Name -in @('cmd.exe','wscript.exe','powershell.exe') -and $_.CommandLine -match $starterPattern)
         )
     }
     foreach ($p in $procs) {
@@ -79,7 +92,7 @@ function FreezeBackend {
     }
     Start-Sleep -Seconds 2
     KillPort $smokePort
-    KillPort 8080
+    KillPort $TargetPort
     Start-Sleep -Seconds 2
 }
 
@@ -182,37 +195,37 @@ try {
     Log '  smoke test passed'
 
     # ---------------- 2. swap + direct start + verify
-    Log '[2/3] swapping 8080 to the new jar'
+    Log ('[2/3] swapping port ' + $TargetPort + ' to the new jar')
     FreezeBackend
     $bak = Join-Path $root ('kewu-8080.jar.bak-' + (Get-Date -Format 'yyyyMMdd-HHmm'))
     if (Test-Path $liveJar) { Copy-Item $liveJar $bak -Force }
     Copy-Item $newJar $liveJar -Force
     Log '  jar swapped'
-    $p8080 = StartBackend 8080
-    $ok8080 = WaitHealth 8080 900
-    if (-not $ok8080) {
-        Log '[FAIL] 8080 not healthy with the new jar -> restoring previous jar'
-        Stop-Process -Id $p8080.Id -Force -ErrorAction SilentlyContinue
+    $pLive = StartBackend $TargetPort
+    $okLive = WaitHealth $TargetPort 900
+    if (-not $okLive) {
+        Log ('[FAIL] ' + $TargetPort + ' not healthy with the new jar -> restoring previous jar')
+        Stop-Process -Id $pLive.Id -Force -ErrorAction SilentlyContinue
         FreezeBackend
         if (Test-Path $bak) { Copy-Item $bak $liveJar -Force }
-        $pBack = StartBackend 8080
-        $back = WaitHealth 8080 900
+        $pBack = StartBackend $TargetPort
+        $back = WaitHealth $TargetPort 900
         Log ('  previous jar restored, healthy=' + $back)
         exit 1
     }
-    Log '  new jar healthy on 8080'
+    Log ('  new jar healthy on ' + $TargetPort)
 
     # ---------------- 3. verify
-    Log '[3/3] verify on 8080'
+    Log ('[3/3] verify on ' + $TargetPort)
     foreach ($c in @('/api/health', '/health', '/api/courses')) {
-        $p = Probe ("http://127.0.0.1:8080" + $c)
-        Log ("  8080$c -> " + $p.code + '  ' + ($p.body -replace "`r?`n", ' '))
+        $p = Probe ("http://127.0.0.1:" + $TargetPort + $c)
+        Log ("  " + $TargetPort + $c + " -> " + $p.code + '  ' + ($p.body -replace "`r?`n", ' '))
     }
     Log 'DONE'
     exit 0
 } finally {
     if ($taskDisabled) {
-        schtasks /change /tn KewuBackend8080 /enable 2>$null | Out-Null
-        Log '  autostart task KewuBackend8080 re-enabled'
+        schtasks /change /tn $taskName /enable 2>$null | Out-Null
+        Log ('  autostart task ' + $taskName + ' re-enabled')
     }
 }
