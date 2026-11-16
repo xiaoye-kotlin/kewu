@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.AdminSession
 import com.kewu.admin.DeploymentDetector
 import com.kewu.admin.DeploymentInfo
@@ -124,7 +125,12 @@ fun AdminApp() {
 
     val currentSession = session
     if (currentSession == null) {
-        LoginScreen(api = api, onLogin = { session = it; section = AdminSection.OVERVIEW })
+        LoginScreen(api = api, onLogin = { loggedIn ->
+            // 登录成功后立即在后台并行预加载所有界面首屏数据（含系统信息/服务器状态）。
+            AdminPrefetch.begin(api)
+            session = loggedIn
+            section = AdminSection.OVERVIEW
+        })
         return
     }
 
@@ -163,7 +169,7 @@ fun AdminApp() {
             section = section,
             session = currentSession,
             onSelect = { section = it },
-            onLogout = { api.logout(); session = null },
+            onLogout = { api.logout(); AdminPrefetch.clearAll(); session = null },
         )
 
         if (showDeployment) {

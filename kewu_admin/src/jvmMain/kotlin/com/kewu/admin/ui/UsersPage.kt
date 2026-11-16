@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.PageResult
 import com.kewu.admin.jsonBody
 import com.kewu.admin.long
@@ -38,8 +39,8 @@ import kotlinx.serialization.json.JsonObject
 
 @Composable
 fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
-    var result by remember { mutableStateOf(PageResult(emptyList(), 0, 1, 20)) }
-    var loading by remember { mutableStateOf(true) }
+    var result by remember { mutableStateOf(AdminPrefetch.users.peek() ?: PageResult(emptyList(), 0, 1, 20)) }
+    var loading by remember { mutableStateOf(AdminPrefetch.users.peek() == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableStateOf(1) }
     var keyword by remember { mutableStateOf("") }
@@ -61,6 +62,7 @@ fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
                 "/api/admin/users",
                 mapOf("page" to page.toString(), "size" to "20", "keyword" to keyword, "role" to role, "status" to status),
             )
+            if (page == 1 && role.isEmpty() && status.isEmpty() && keyword.isEmpty()) AdminPrefetch.users.set(result)
         } catch (e: Exception) {
             error = e.message ?: "用户列表加载失败"
         } finally {
@@ -84,7 +86,15 @@ fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
         }
     }
 
-    LaunchedEffect(page, role, status) { reload() }
+    LaunchedEffect(page, role, status) {
+        // 默认第一页且预加载缓存新鲜时直接用缓存；筛选/翻页变化后才真正发请求。
+        AdminPrefetch.awaitReady()
+        if (page == 1 && role.isEmpty() && status.isEmpty() && keyword.isEmpty()) {
+            val cached = AdminPrefetch.users.fresh()
+            if (cached != null) { result = cached; loading = false; return@LaunchedEffect }
+        }
+        reload()
+    }
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("用户管理", "查询账号档案，分配角色，禁用账号或重置密码") {

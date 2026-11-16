@@ -21,6 +21,7 @@ import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.PhoneAndroid
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Storage
+import androidx.compose.material.icons.outlined.VpnKey
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -35,37 +36,52 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.formatBytes
 import com.kewu.admin.formatCount
 import com.kewu.admin.long
 import com.kewu.admin.str
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
 
 @Composable
 fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
-    var overview by remember { mutableStateOf<JsonObject?>(null) }
-    var health by remember { mutableStateOf<JsonObject?>(null) }
-    var obsRecordingCount by remember { mutableStateOf(0) }
+    // 首屏优先用登录后的全局预加载缓存，避免进页面才发请求干等（系统信息/服务器状态尤其慢）。
+    var overview by remember { mutableStateOf<JsonObject?>(AdminPrefetch.overview.peek()) }
+    var health by remember { mutableStateOf<JsonObject?>(AdminPrefetch.health.peek()) }
+    var obsRecordingCount by remember { mutableStateOf(AdminPrefetch.obsRecordings.peek()?.size ?: 0) }
     var obsError by remember { mutableStateOf<String?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(AdminPrefetch.overview.peek() == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var refreshedAt by remember { mutableStateOf("—") }
+    var showChangePassword by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun refresh() {
         loading = true
         error = null
         try {
-            overview = api.overview()
-            health = api.health()
-            runCatching { api.obsRecordings().size }.onSuccess {
-                obsRecordingCount = it
+            // overview / health 并发拉取，取代原来的串行，缩短单轮刷新耗时。
+            val (ov, ht) = kotlinx.coroutines.coroutineScope {
+                val a = async { api.overview() }
+                val b = async { api.health() }
+                a.await() to b.await()
+            }
+            overview = ov
+            health = ht
+            AdminPrefetch.overview.set(ov)
+            AdminPrefetch.health.set(ht)
+            runCatching { api.obsRecordings() }.onSuccess { obsItems ->
+                obsRecordingCount = obsItems.size
                 obsError = null
+                AdminPrefetch.obsRecordings.set(obsItems)
             }.onFailure {
                 obsRecordingCount = 0
                 obsError = it.message
@@ -79,9 +95,20 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
     }
 
     LaunchedEffect(Unit) {
-        while (true) {
+        // 等后台第一批预加载就绪（最多 15s），期间界面已可用缓存值渲染。
+        AdminPrefetch.awaitReady()
+        AdminPrefetch.overview.fresh()?.let { overview = it }
+        AdminPrefetch.health.fresh()?.let { health = it }
+        AdminPrefetch.obsRecordings.fresh()?.let { obsRecordingCount = it.size }
+        if (overview != null) {
+            loading = false
+            refreshedAt = LocalTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+        } else {
             refresh()
+        }
+        while (true) {
             delay(30_000)
+            refresh()
         }
     }
 
@@ -91,6 +118,11 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
                 Icon(Icons.Outlined.CloudUpload, null)
                 Spacer(Modifier.width(6.dp))
                 Text("一键部署")
+            }
+            OutlinedButton(onClick = { showChangePassword = true }) {
+                Icon(Icons.Outlined.VpnKey, null)
+                Spacer(Modifier.width(6.dp))
+                Text("修改密码")
             }
             Text("上次刷新 $refreshedAt", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterVertically))
             Button(onClick = { scope.launch { refresh() } }, enabled = !loading) {
@@ -174,6 +206,67 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
             Text("OBS 录音数读取失败：$it", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
         }
     }
+
+    if (showChangePassword) {
+        ChangePasswordDialog(
+            api = api,
+            onClose = { showChangePassword = false },
+            onChanged = {
+                // 后端已把新密码回写服务器 kewu.env；退出登录后 LoginScreen 会重新读取，
+                // 总控端跑在服务器本机时凭证自动同步，无需在客户端额外持久化。
+                showChangePassword = false
+            },
+        )
+    }
+}
+
+@Composable
+private fun ChangePasswordDialog(api: AdminApi, onClose: () -> Unit, onChanged: (String) -> Unit) {
+    var oldPwd by remember { mutableStateOf("") }
+    var newPwd by remember { mutableStateOf("") }
+    var confirmPwd by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var working by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    fun submit() {
+        error = null
+        when {
+            oldPwd.isBlank() || newPwd.isBlank() -> { error = "请填写旧密码和新密码"; return }
+            newPwd.length < 6 -> { error = "新密码至少 6 位"; return }
+            newPwd != confirmPwd -> { error = "两次输入的新密码不一致"; return }
+        }
+        scope.launch {
+            working = true
+            try {
+                api.changePassword(oldPwd, newPwd)
+                onChanged(newPwd)
+            } catch (e: Exception) {
+                error = e.message ?: "修改失败"
+            } finally {
+                working = false
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!working) onClose() },
+        title = { Text("修改总控端登录密码", fontWeight = FontWeight.SemiBold) },
+        text = {
+            Column {
+                Text("修改后服务器 kewu.env 会同步更新，下次登录自动填入新密码。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(14.dp))
+                OutlinedTextField(oldPwd, { oldPwd = it }, label = "当前密码", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(newPwd, { newPwd = it }, label = "新密码（至少 6 位）", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(confirmPwd, { confirmPwd = it }, label = "确认新密码", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, modifier = Modifier.padding(top = 10.dp)) }
+            }
+        },
+        confirmButton = { Button(onClick = ::submit, enabled = !working) { Text(if (working) "修改中…" else "确认修改") } },
+        dismissButton = { OutlinedButton(onClick = onClose, enabled = !working) { Text("取消") } },
+    )
 }
 
 @Composable

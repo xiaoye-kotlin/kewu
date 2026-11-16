@@ -4,6 +4,7 @@ import com.kewu.models.ApiResponse
 import com.kewu.infra.SecretStore
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.kewu.modules.admin.models.AdminChangePasswordRequest
 import com.kewu.modules.admin.models.AdminClassStudentRequest
 import com.kewu.modules.admin.models.AdminCreateUserRequest
 import com.kewu.modules.admin.models.AdminResetPasswordRequest
@@ -43,6 +44,29 @@ private suspend fun ApplicationCall.checkAdmin(service: AdminService): Boolean {
 // 总控端路由组：挂载在 /api/admin 下。所有写操作经 checkAdmin 双保险鉴权。
 fun Routing.adminRoutes(service: AdminService) {
     route("/api/admin") {
+
+        // ---------- 总控端自助改密（2026-11-17）：改当前管理员密码并同步 kewu.env ----------
+        post("/change-password") {
+            if (call.checkAdmin(service)) {
+                val userId = service.currentAdminUserId(call)
+                if (userId == null) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "改密需要管理员 Bearer Token（不支持 X-Admin-Key）"))
+                } else {
+                    val req = runCatching { call.receive<AdminChangePasswordRequest>() }.getOrNull()
+                    if (req == null || req.newPassword.length < 6) {
+                        call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "新密码至少 6 位"))
+                    } else {
+                        runCatching { service.changeOwnPassword(userId, req.oldPassword, req.newPassword) }.fold(
+                            onSuccess = { ok ->
+                                if (ok) call.respond(ApiResponse(0, "密码已修改", null))
+                                else call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "旧密码不正确"))
+                            },
+                            onFailure = { call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, it.message ?: "修改失败")) }
+                        )
+                    }
+                }
+            }
+        }
 
         // ---------- 云端服务配置（2026-11-03）：SIS / OBS / AI 等密钥只存服务器，总控端在这里改 ----------
         get("/config") {

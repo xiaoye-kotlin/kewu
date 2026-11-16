@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.array
 import com.kewu.admin.formatPercent
 import com.kewu.admin.long
@@ -47,8 +48,8 @@ import javax.swing.JFileChooser
 
 @Composable
 fun AttendancePage(api: AdminApi, notify: (String) -> Unit) {
-    var sessions by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var sessions by remember { mutableStateOf<List<JsonObject>>(AdminPrefetch.attendance.peek() ?: emptyList()) }
+    var loading by remember { mutableStateOf(AdminPrefetch.attendance.peek() == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var courseId by remember { mutableStateOf("") }
     var from by remember { mutableStateOf("") }
@@ -61,6 +62,7 @@ fun AttendancePage(api: AdminApi, notify: (String) -> Unit) {
         error = null
         try {
             sessions = api.list("/api/admin/attendance", mapOf("courseId" to courseId, "from" to from, "to" to to))
+            if (courseId.isEmpty() && from.isEmpty() && to.isEmpty()) AdminPrefetch.attendance.set(sessions)
         } catch (e: Exception) {
             error = e.message ?: "签到记录加载失败"
         } finally {
@@ -86,7 +88,16 @@ fun AttendancePage(api: AdminApi, notify: (String) -> Unit) {
             }
         }
     }
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(Unit) {
+        AdminPrefetch.awaitReady()
+        val cached = AdminPrefetch.attendance.fresh()
+        if (cached != null && courseId.isEmpty() && from.isEmpty() && to.isEmpty()) {
+            sessions = cached
+            loading = false
+        } else {
+            reload()
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("签到管理", "查看签到率、到课明细与风险分，导出 CSV 报表") {

@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.long
 import com.kewu.admin.statusLabel
 import com.kewu.admin.str
@@ -37,11 +38,11 @@ import kotlinx.serialization.json.put
 
 @Composable
 fun AssignmentsPage(api: AdminApi, notify: (String) -> Unit) {
-    var assignments by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    var assignments by remember { mutableStateOf<List<JsonObject>>(AdminPrefetch.assignments.peek() ?: emptyList()) }
     var submissions by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
-    var selected by remember { mutableStateOf<JsonObject?>(null) }
+    var selected by remember { mutableStateOf<JsonObject?>(AdminPrefetch.assignments.peek()?.firstOrNull()) }
     var detail by remember { mutableStateOf<JsonObject?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(AdminPrefetch.assignments.peek() == null) }
     var submissionLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var courseId by remember { mutableStateOf("") }
@@ -55,6 +56,7 @@ fun AssignmentsPage(api: AdminApi, notify: (String) -> Unit) {
         error = null
         try {
             assignments = api.list("/api/admin/assignments", mapOf("courseId" to courseId, "keyword" to keyword))
+            if (courseId.isEmpty() && keyword.isEmpty()) AdminPrefetch.assignments.set(assignments)
             selected = assignments.firstOrNull { it.str("id") == selected?.str("id") } ?: assignments.firstOrNull()
         } catch (e: Exception) {
             error = e.message ?: "作业加载失败"
@@ -74,7 +76,17 @@ fun AssignmentsPage(api: AdminApi, notify: (String) -> Unit) {
             submissionLoading = false
         }
     }
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(Unit) {
+        AdminPrefetch.awaitReady()
+        val cached = AdminPrefetch.assignments.fresh()
+        if (cached != null && courseId.isEmpty() && keyword.isEmpty()) {
+            assignments = cached
+            if (selected == null) selected = cached.firstOrNull()
+            loading = false
+        } else {
+            reload()
+        }
+    }
     LaunchedEffect(selected?.str("id", "")) { if (selected != null) loadSubmissions() }
 
     Column(Modifier.fillMaxSize()) {

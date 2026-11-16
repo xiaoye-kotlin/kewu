@@ -50,6 +50,10 @@ data class AdminUpdateUserRequest(
 @Serializable
 data class AdminResetPasswordRequest(val newPassword: String)
 
+/** 总控端自助修改当前管理员密码（2026-11-17）：需带旧密码校验，避免误改。 */
+@Serializable
+data class AdminChangePasswordRequest(val oldPassword: String, val newPassword: String)
+
 // 分页通用壳
 @Serializable
 data class PagedData<T>(

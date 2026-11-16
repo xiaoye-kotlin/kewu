@@ -58,6 +58,7 @@ import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
 import org.jetbrains.exposed.sql.update
+import java.io.File
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.UUID
@@ -161,6 +162,51 @@ class AdminService(
             }
             true
         }
+    }
+
+    /**
+     * 总控端自助改密：校验当前用户旧密码后写入新密码，并把新密码回写服务器 kewu.env，
+     * 保证总控端下次启动自动填入的凭证与数据库一致。返回 false 表示旧密码不对/用户不存在。
+     */
+    fun changeOwnPassword(userId: String, oldPassword: String, newPassword: String): Boolean {
+        if (newPassword.length < 6) throw IllegalArgumentException("新密码至少 6 位")
+        if (newPassword == oldPassword) throw IllegalArgumentException("新密码不能与旧密码相同")
+        val account = transaction {
+            val row = Users.selectAll().where { Users.id eq userId }.firstOrNull() ?: return@transaction null
+            val hash = row[Users.passwordHash]
+            if (!BCrypt.verifyer().verify(oldPassword.toCharArray(), hash).verified) return@transaction null
+            Users.update({ Users.id eq userId }) {
+                it[passwordHash] = BCrypt.withDefaults().hashToString(12, newPassword.toCharArray())
+            }
+            row[Users.username]
+        } ?: return false
+        // 同步 kewu.env（登录页自动填入用的就是它）；失败不影响数据库已改成功。
+        runCatching {
+            val root = System.getenv("KEWU_SERVER_ROOT")?.takeIf { it.isNotBlank() }
+                ?: listOf("C:/kewu", "C:/Users/Administrator/Desktop/Kewu", "C:/kewu-server").firstOrNull { File(it, "kewu.env").isFile }
+            if (root != null) {
+                val envFile = File(root, "kewu.env")
+                val lines = envFile.readLines().map { line ->
+                    if (line.trim().startsWith("ADMIN_ACCOUNT=")) "ADMIN_ACCOUNT=$account"
+                    else if (line.trim().startsWith("ADMIN_PASSWORD=")) "ADMIN_PASSWORD=$newPassword"
+                    else line
+                }
+                envFile.writeText(lines.joinToString("\n") + "\n")
+            }
+        }
+        return true
+    }
+
+    /** 从 Bearer Token 解析当前管理员用户 id；用 X-Admin-Key 鉴权时返回空串（改密需 token，强制要求）。 */
+    fun currentAdminUserId(call: io.ktor.server.application.ApplicationCall): String? {
+        val auth = call.request.header(io.ktor.http.HttpHeaders.Authorization)
+        if (auth != null && auth.startsWith("Bearer ", true)) {
+            val token = auth.substring(7).trim()
+            val userId = JwtConfig.verifyToken(token) ?: return null
+            val user = userRepository.findUserById(userId) ?: return null
+            if (user.role == UserRole.ADMIN) return userId
+        }
+        return null
     }
 
     fun setStatus(id: String, status: String): Boolean = transaction {

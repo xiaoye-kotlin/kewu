@@ -53,6 +53,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.ConfigItem
 import com.kewu.admin.ConfigTestResult
 import com.kewu.admin.configGroupLabel
@@ -76,8 +77,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun ConfigPage(api: AdminApi, notify: (String) -> Unit, onDeploy: () -> Unit) {
     val cs = COUITheme.colorScheme
-    var items by remember { mutableStateOf<List<ConfigItem>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var items by remember { mutableStateOf<List<ConfigItem>>(AdminPrefetch.config.peek() ?: emptyList()) }
+    var loading by remember { mutableStateOf(AdminPrefetch.config.peek() == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var saving by remember { mutableStateOf(false) }
     var needRestart by remember { mutableStateOf(false) }
@@ -100,6 +101,7 @@ fun ConfigPage(api: AdminApi, notify: (String) -> Unit, onDeploy: () -> Unit) {
         error = null
         try {
             items = api.configItems()
+            AdminPrefetch.config.set(items)
         } catch (e: Exception) {
             error = e.message ?: "配置加载失败"
         } finally {
@@ -164,7 +166,16 @@ fun ConfigPage(api: AdminApi, notify: (String) -> Unit, onDeploy: () -> Unit) {
         }
     }
 
-    LaunchedEffect(Unit) { reload() }
+    LaunchedEffect(Unit) {
+        AdminPrefetch.awaitReady()
+        val cached = AdminPrefetch.config.fresh()
+        if (cached != null) {
+            items = cached
+            loading = false
+        } else {
+            reload()
+        }
+    }
 
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {

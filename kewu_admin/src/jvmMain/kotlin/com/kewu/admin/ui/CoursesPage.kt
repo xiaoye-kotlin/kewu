@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.jsonBody
 import com.kewu.admin.long
 import com.kewu.admin.str
@@ -39,10 +40,10 @@ import kotlinx.serialization.json.JsonObject
 
 @Composable
 fun CoursesPage(api: AdminApi, notify: (String) -> Unit) {
-    var courses by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
+    var courses by remember { mutableStateOf<List<JsonObject>>(AdminPrefetch.courses.peek() ?: emptyList()) }
     var classes by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
-    var selected by remember { mutableStateOf<JsonObject?>(null) }
-    var loading by remember { mutableStateOf(true) }
+    var selected by remember { mutableStateOf<JsonObject?>(AdminPrefetch.courses.peek()?.firstOrNull()) }
+    var loading by remember { mutableStateOf(AdminPrefetch.courses.peek() == null) }
     var classLoading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var editingCourse by remember { mutableStateOf<JsonObject?>(null) }
@@ -59,6 +60,7 @@ fun CoursesPage(api: AdminApi, notify: (String) -> Unit) {
         error = null
         try {
             courses = api.list("/api/admin/courses")
+            AdminPrefetch.courses.set(courses)
             selected = courses.firstOrNull { it.str("id") == selected?.str("id") } ?: courses.firstOrNull()
         } catch (e: Exception) {
             error = e.message ?: "课程加载失败"
@@ -90,7 +92,17 @@ fun CoursesPage(api: AdminApi, notify: (String) -> Unit) {
             }
         }
     }
-    LaunchedEffect(Unit) { reloadCourses() }
+    LaunchedEffect(Unit) {
+        AdminPrefetch.awaitReady()
+        val cached = AdminPrefetch.courses.fresh()
+        if (cached != null) {
+            courses = cached
+            if (selected == null) selected = cached.firstOrNull()
+            loading = false
+        } else {
+            reloadCourses()
+        }
+    }
     LaunchedEffect(selected?.str("id", "")) { if (selected != null) reloadClasses() }
 
     Column(Modifier.fillMaxSize()) {

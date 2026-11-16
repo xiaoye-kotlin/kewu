@@ -24,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.PageResult
 import com.kewu.admin.double
 import com.kewu.admin.formatBytes
@@ -38,9 +39,9 @@ import java.net.URI
 
 @Composable
 fun RecordingsPage(api: AdminApi, notify: (String) -> Unit) {
-    var result by remember { mutableStateOf(PageResult(emptyList(), 0, 1, 1000)) }
+    var result by remember { mutableStateOf(AdminPrefetch.recordings.peek() ?: PageResult(emptyList(), 0, 1, 1000)) }
     var merged by remember { mutableStateOf<List<JsonObject>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
+    var loading by remember { mutableStateOf(AdminPrefetch.recordings.peek() == null) }
     var error by remember { mutableStateOf<String?>(null) }
     var obsError by remember { mutableStateOf<String?>(null) }
     var page by remember { mutableStateOf(1) }
@@ -74,6 +75,8 @@ fun RecordingsPage(api: AdminApi, notify: (String) -> Unit) {
             obsError = it.message ?: "OBS 录音列表读取失败"
             emptyList()
         }
+        if (obsResult.isSuccess) AdminPrefetch.obsRecordings.set(obsItems)
+        if (keyword.isEmpty() && classId.isEmpty() && role.isEmpty()) AdminPrefetch.recordings.set(result)
         merged = mergeRecordings(dbItems, obsItems)
         if (dbFailed != null && obsItems.isNotEmpty()) {
             // 数据库异常但 OBS 可读时仍展示 OBS 对象，同时在页面给出警告。
@@ -81,7 +84,20 @@ fun RecordingsPage(api: AdminApi, notify: (String) -> Unit) {
         }
         loading = false
     }
-    LaunchedEffect(role) { page = 1; reload() }
+    LaunchedEffect(role) {
+        AdminPrefetch.awaitReady()
+        // 首屏且筛选为空：两套缓存都有则直接合并展示，省去一次 DB 分页 + OBS 全量。
+        val cachedDb = AdminPrefetch.recordings.fresh()
+        val cachedObs = AdminPrefetch.obsRecordings.fresh()
+        if (role.isEmpty() && keyword.isEmpty() && classId.isEmpty() && cachedDb != null && cachedObs != null) {
+            result = cachedDb
+            merged = mergeRecordings(cachedDb.items, cachedObs)
+            loading = false
+        } else {
+            page = 1
+            reload()
+        }
+    }
 
     val visible = merged.filter { recording ->
         val searchText = keyword.trim().lowercase()

@@ -208,6 +208,18 @@ class AdminApi(
 
     // ───── 密钥与服务配置（全部密钥只存在云端服务器，总控端只能看到打码值） ─────
 
+    /** 修改当前管理员密码（旧密码校验由后端完成）；成功后本地凭证缓存需刷新。 */
+    suspend fun changePassword(oldPassword: String, newPassword: String) {
+        request(
+            path = "/api/admin/change-password",
+            method = HttpMethod.Post,
+            body = buildJsonObject {
+                put("oldPassword", oldPassword)
+                put("newPassword", newPassword)
+            },
+        )
+    }
+
     suspend fun configItems(): List<ConfigItem> = parseConfigItems(getData("/api/admin/config"))
 
     /** 只提交改动过的键；值为 "" 表示删除云端覆盖值（回落到服务器环境变量 / 默认值）。返回更新后的完整列表。 */

@@ -41,13 +41,16 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.ServerMonitor
 import com.kewu.admin.ServerRuntimeSnapshot
 import com.kewu.admin.formatBytes
 import com.kewu.admin.long
 import com.kewu.admin.str
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import java.time.Instant
 import java.time.LocalDateTime
@@ -57,23 +60,28 @@ import java.time.format.DateTimeFormatter
 /** 服务器本机实时状态：系统性能、磁盘、后端进程、Ktor / Redis / OBS 与运行时长。 */
 @Composable
 fun ServerPage(api: AdminApi) {
-    var monitor by remember { mutableStateOf<ServerRuntimeSnapshot?>(null) }
-    var health by remember { mutableStateOf<JsonObject?>(null) }
+    // 首屏直接用登录后预加载的系统信息/健康缓存，避免进页面时阻塞等待。
+    var monitor by remember { mutableStateOf<ServerRuntimeSnapshot?>(AdminPrefetch.serverSnapshot.peek()) }
+    var health by remember { mutableStateOf<JsonObject?>(AdminPrefetch.health.peek()) }
     var monitorError by remember { mutableStateOf<String?>(null) }
     var healthError by remember { mutableStateOf<String?>(null) }
     var updatedAt by remember { mutableStateOf("—") }
     val scope = rememberCoroutineScope()
 
     suspend fun refresh() {
-        runCatching { ServerMonitor.snapshot() }.onSuccess {
+        // snapshot 内含阻塞式 PowerShell(waitFor 最长 5s)，必须切到 IO 线程，绝不卡 UI。
+        val snap = withContext(Dispatchers.IO) { runCatching { ServerMonitor.snapshot() } }
+        snap.onSuccess {
             monitor = it
             monitorError = null
+            AdminPrefetch.serverSnapshot.set(it)
         }.onFailure {
             monitorError = it.message ?: "本机状态读取失败"
         }
         runCatching { api.health() }.onSuccess {
             health = it
             healthError = null
+            AdminPrefetch.health.set(it)
         }.onFailure {
             healthError = it.message ?: "后端健康检查失败"
         }
@@ -81,9 +89,17 @@ fun ServerPage(api: AdminApi) {
     }
 
     LaunchedEffect(Unit) {
-        while (true) {
+        AdminPrefetch.awaitReady()
+        AdminPrefetch.serverSnapshot.fresh()?.let { monitor = it }
+        AdminPrefetch.health.fresh()?.let { health = it }
+        if (monitor != null || health != null) {
+            updatedAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+        } else {
             refresh()
+        }
+        while (true) {
             delay(3_000)
+            refresh()
         }
     }
 
