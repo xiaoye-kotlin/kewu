@@ -156,12 +156,17 @@ class FocusService(
 1. 疲劳指数=100*(1-e^(-0.012*专注时间*任务难度))；
 2. 推荐休息=5*(专注时间/25)^1.15*(任务难度+0.05*中断次数)。
 分析以下数据：$data。推荐下次专注时长（15-45分钟）。
-严格返回纯 JSON 格式：{"recommended_minutes": 30, "rest_minutes": 8, "fatigue_index": 65, "advice": "..."}
+严格返回纯 JSON 格式：
+{"recommended_minutes": 30, "rest_minutes": 8, "fatigue_index": 65, "advice": "...", "visual_config": {"bg_style": "DARK_BLUE_SOLID", "blur_radius": 15, "darkness_overlay": 20}}
 
 要求：
 - 数据里 *_formula 字段是后端按上面公式精确算好的值，请以它们和自评疲劳度、中断次数为主要依据；
 - recommended_minutes 取 15-45 的整数，rest_minutes 取 3-30 的整数，fatigue_index 取 0-100 的整数；
 - advice 用一句简短中文（30 字以内），说明为什么这样安排；
+- visual_config 必须返回，用于生成适配当前状态的专注背景：
+  · bg_style 只能三选一：DARK_BLUE_SOLID（深灰蓝纯色，疲劳偏低/需稳定时）、BLURRED_NATURE（模糊自然图，疲劳偏高/需放松时）、DARK_GRADIENT（深蓝到黑渐变，中性）；
+  · blur_radius 取 0-20 的整数（仅 BLURRED_NATURE 生效，其余样式填 15 即可）；
+  · darkness_overlay 取 10-30 的整数（越大越暗，疲劳高时适当加深）；
 - 只输出 JSON 本身，绝对不要 Markdown 代码围栏，也不要任何解释文字。
 """.trimIndent()
     }
@@ -182,10 +187,31 @@ class FocusService(
                 fatigueIndex = fatigue.coerceIn(0, 100),
                 advice = advice.take(200).ifBlank { FocusSuggestion.DEFAULT.advice },
                 source = "ai",
+                // visual_config 缺失 → 整块给默认值；字段级再做白名单 + coerceIn 修正
+                visualConfig = parseVisualConfig(obj),
             )
         } catch (t: Throwable) {
             FocusSuggestion.fallback()
         }
+    }
+
+    /**
+     * 解析 AI 返回的 visual_config：
+     * 1) 缺失或不是对象 → 直接给默认值（DARK_BLUE_SOLID / 15 / 20），绝不让整条推荐失败；
+     * 2) bg_style 不在白名单 → 回落默认纯色（防止 AI 编造样式让前端渲染崩）；
+     * 3) blur_radius 强制 coerceIn(0,20)、darkness_overlay 强制 coerceIn(10,30)；
+     * 4) 单个字段缺失/非法 → 该字段单独回落默认，其余字段照常用。
+     */
+    private fun parseVisualConfig(root: JsonObject): FocusVisualConfig {
+        val vc = root["visual_config"] as? JsonObject ?: return FocusVisualConfig.DEFAULT
+        val d = FocusVisualConfig.DEFAULT
+        val rawStyle = (vc["bg_style"] as? JsonPrimitive)?.content?.trim()?.uppercase()
+        val style = if (rawStyle in FocusVisualConfig.ALLOWED_STYLES) rawStyle!! else d.bgStyle
+        val blur = (vc.readInt("blur_radius") ?: d.blurRadius)
+            .coerceIn(FocusVisualConfig.BLUR_MIN, FocusVisualConfig.BLUR_MAX)
+        val darkness = (vc.readInt("darkness_overlay") ?: d.darknessOverlay)
+            .coerceIn(FocusVisualConfig.DARKNESS_MIN, FocusVisualConfig.DARKNESS_MAX)
+        return FocusVisualConfig(style, blur, darkness)
     }
 
     private fun JsonObject.readInt(key: String): Int? = (this[key] as? JsonPrimitive)?.intOrNull

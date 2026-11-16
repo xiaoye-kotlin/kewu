@@ -51,14 +51,12 @@ class AdminApi(
     /** 登录前探活：优先本机 127.0.0.1（服务器本机运行时公网 IP 回环不通），其次当前 baseUrl。
      *  每个候选的结果（含失败原因）都会写入本地诊断日志；全部不可达时返回原地址。 */
     suspend fun resolveBaseUrl(): String {
-        // 2026-11-16：云端 server_url 作为额外候选（优先级最低，仅当本机与已配地址都不通时兜底）。
-        // 总控端常驻服务器本机，127.0.0.1 仍优先；拉云端失败返回 null，不影响原有探测。
-        val cloud = ServerConfig.fetch()
-        val candidates = listOfNotNull(
-            "http://127.0.0.1:8080", "http://localhost:8080", baseUrl, cloud
-        ).distinct()
+        // 2026-11-16：本机优先，云端兜底。
+        // 总控端常驻服务器本机时 127.0.0.1 秒通；若一上来就拉 Gitee（服务器访问常被拦，8s 超时）
+        // 会白白拖慢每次登录。故把云端拉取放到本地候选全部失败后才做。
+        val localCandidates = listOf("http://127.0.0.1:8080", "http://localhost:8080", baseUrl).distinct()
         val results = mutableListOf<Pair<String, String>>()
-        for (candidate in candidates) {
+        for (candidate in localCandidates) {
             val error = probeHealthError(candidate)
             if (error == null) {
                 baseUrl = candidate
@@ -67,6 +65,18 @@ class AdminApi(
                 return candidate
             }
             results += candidate to "FAIL: $error"
+        }
+        // 本地都不通（总控端跑在别的机器上）→ 最后才拉云端 server_url 兜底
+        val cloud = ServerConfig.fetch()
+        if (cloud != null && !localCandidates.contains(cloud)) {
+            val error = probeHealthError(cloud)
+            if (error == null) {
+                baseUrl = cloud
+                results += cloud to "OK (cloud)"
+                AdminDiagnostics.record("PROBE", results.joinToString("\n") { (c, r) -> "  $c -> $r" } + "\n  selected: $cloud (cloud)")
+                return cloud
+            }
+            results += cloud to "FAIL (cloud): $error"
         }
         AdminDiagnostics.record("PROBE", results.joinToString("\n") { (c, r) -> "  $c -> $r" } + "\n  selected: none (keep $baseUrl)")
         return baseUrl

@@ -46,12 +46,40 @@ enum class FocusStatus(val value: String) {
 }
 
 // 推荐结果。三个数值是后端强校验后的安全值；source 只用于联调时区分是 AI 给的还是兜底
+/**
+ * AI 动态专注背景的视觉配置（嵌套在 ai-suggestion 的 visual_config 里）。
+ * 三态背景由前端渲染：深灰蓝纯色 / 模糊自然图 / 深蓝到黑渐变。
+ * 范围常量在这里定死，后端解析和前端渲染共用同一套语义（前端另做一次 coerce 双保险）。
+ */
+data class FocusVisualConfig(
+    val bgStyle: String,
+    val blurRadius: Int,
+    val darknessOverlay: Int,
+) {
+    companion object {
+        const val STYLE_DARK_BLUE_SOLID = "DARK_BLUE_SOLID"
+        const val STYLE_BLURRED_NATURE = "BLURRED_NATURE"
+        const val STYLE_DARK_GRADIENT = "DARK_GRADIENT"
+
+        val ALLOWED_STYLES = setOf(STYLE_DARK_BLUE_SOLID, STYLE_BLURRED_NATURE, STYLE_DARK_GRADIENT)
+
+        const val BLUR_MIN = 0
+        const val BLUR_MAX = 20
+        const val DARKNESS_MIN = 10
+        const val DARKNESS_MAX = 30
+
+        // AI 缺失 / 解析失败时的兜底：深灰蓝纯色（纯色不加 blur，最低端机也零性能开销）
+        val DEFAULT = FocusVisualConfig(STYLE_DARK_BLUE_SOLID, 15, 20)
+    }
+}
+
 data class FocusSuggestion(
     val recommendedMinutes: Int,
     val restMinutes: Int,
     val fatigueIndex: Int,
     val advice: String,
     val source: String,
+    val visualConfig: FocusVisualConfig = FocusVisualConfig.DEFAULT,
 ) {
     companion object {
         val DEFAULT = FocusSuggestion(

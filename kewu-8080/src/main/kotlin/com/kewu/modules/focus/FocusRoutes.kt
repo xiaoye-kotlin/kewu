@@ -143,6 +143,12 @@ fun Routing.focusRoutes(service: FocusService) {
                     put("fatigue_index", s.fatigueIndex)
                     put("advice", s.advice)
                     put("source", s.source)
+                    // AI 动态专注背景视觉配置（后端已强校验：样式白名单 + 数值 coerceIn）
+                    put("visual_config", buildJsonObject {
+                        put("bg_style", s.visualConfig.bgStyle)
+                        put("blur_radius", s.visualConfig.blurRadius)
+                        put("darkness_overlay", s.visualConfig.darknessOverlay)
+                    })
                 }
             )
         }

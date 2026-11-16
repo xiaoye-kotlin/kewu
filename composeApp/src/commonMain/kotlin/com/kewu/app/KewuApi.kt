@@ -2270,7 +2270,130 @@ object KewuApi {
         }
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
+
+    // ── 专注番茄钟 /api/focus/*（2026-11-16）──────────────────────────────
+    // 前端只传「动作」，所有时间戳都由后端 System.currentTimeMillis() 生成；统一 {code,message,data} 壳。
+
+    /** 开始专注。成功返回 null；失败返回后端 message。 */
+    suspend fun focusStart(plannedMinutes: Int, taskId: String? = null): String? = try {
+        val body = mutableMapOf<String, Any?>("plannedMinutes" to plannedMinutes)
+        if (!taskId.isNullOrBlank()) body["taskId"] = taskId
+        postJson("$BASE_URL/api/focus/start", body, auth = true).asDataOrThrow()
+        null
+    } catch (e: CancellationException) { throw e }
+    catch (e: ApiException) { e.message }
+    catch (_: Exception) { "网络异常，请稍后重试" }
+
+    /** 上报一次分心，返回服务器上的累计次数；无进行中专注时返回 null。 */
+    suspend fun focusDistraction(): Int? = try {
+        val o = postJson("$BASE_URL/api/focus/distraction", emptyMap<String, Any?>(), auth = true).asDataOrThrow() as? JsonObject
+        o?.get("distractionCount")?.int() ?: 0
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 完成专注：带任务难度/疲劳自评（1-5）。失败返回 null。幂等重复点由后端静默忽略。 */
+    suspend fun focusFinish(taskDifficulty: Int, fatigueLevel: Int): FocusFinishInfo? = try {
+        val body = mapOf<String, Any?>("taskDifficulty" to taskDifficulty, "fatigueLevel" to fatigueLevel)
+        val o = postJson("$BASE_URL/api/focus/finish", body, auth = true).asDataOrThrow() as? JsonObject ?: return null
+        FocusFinishInfo(
+            recordId = o["recordId"].str(),
+            actualMinutes = o["actualMinutes"].int(),
+            status = o["status"].str(),
+            restSeconds = o["restSeconds"].str().toLongOrNull() ?: 0L,
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** 取消专注：后端落 CANCELLED、actual=0，绝不写休息。 */
+    suspend fun focusCancel(): Boolean = try {
+        postJson("$BASE_URL/api/focus/cancel", emptyMap<String, Any?>(), auth = true).asDataOrThrow()
+        true
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { false }
+
+    /** 跳过 5 分钟休息（重复点也成功）。 */
+    suspend fun focusSkipRest(): Boolean = try {
+        postJson("$BASE_URL/api/focus/skip-rest", emptyMap<String, Any?>(), auth = true).asDataOrThrow()
+        true
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { false }
+
+    /** 当前状态：专注中带已过秒数，休息中带剩余秒数（都以后端为准）。 */
+    suspend fun focusStatus(): FocusStatusInfo? = try {
+        val o = getJson("$BASE_URL/api/focus/status", auth = true).asDataOrThrow() as? JsonObject ?: return null
+        FocusStatusInfo(
+            focusing = o["focusing"]?.str()?.toBoolean() ?: false,
+            elapsedSeconds = o["elapsedSeconds"]?.str()?.toLongOrNull() ?: 0L,
+            plannedMinutes = o["plannedMinutes"]?.int() ?: 0,
+            taskId = o["taskId"]?.strOrNull(),
+            distractionCount = o["distractionCount"]?.int() ?: 0,
+            resting = o["resting"]?.str()?.toBoolean() ?: false,
+            restRemainingSeconds = o["restRemainingSeconds"]?.str()?.toLongOrNull() ?: 0L,
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    /** AI 认知习惯推荐：冷启动 / 超时会回落默认 25+5，source 标注来源。 */
+    suspend fun focusSuggestion(): FocusSuggestionInfo? = try {
+        val o = getJson("$BASE_URL/api/focus/ai-suggestion", auth = true).asDataOrThrow() as? JsonObject ?: return null
+        // visual_config 后端已强校验；前端再兜一层（老版本后端没有这个字段时也能正常渲染）
+        val vc = o["visual_config"] as? JsonObject
+        val rawStyle = vc?.get("bg_style")?.str()?.trim()?.uppercase().orEmpty()
+        val visual = FocusVisualConfigInfo(
+            bgStyle = if (rawStyle in FOCUS_BG_STYLES) rawStyle else "DARK_BLUE_SOLID",
+            blurRadius = (vc?.get("blur_radius")?.int() ?: 15).coerceIn(0, 20),
+            darknessOverlay = (vc?.get("darkness_overlay")?.int() ?: 20).coerceIn(10, 30),
+        )
+        FocusSuggestionInfo(
+            recommendedMinutes = o["recommended_minutes"]?.int() ?: 25,
+            restMinutes = o["rest_minutes"]?.int() ?: 5,
+            fatigueIndex = o["fatigue_index"]?.int() ?: 0,
+            advice = o["advice"].str(),
+            source = o["source"].str(),
+            visualConfig = visual,
+        )
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
 }
+
+/** 专注番茄钟：完成接口返回的一次记录摘要。 */
+data class FocusFinishInfo(
+    val recordId: String,
+    val actualMinutes: Int,
+    val status: String,
+    val restSeconds: Long,
+)
+
+/** 专注番茄钟：/status 的当前状态（时间字段全部来自后端）。 */
+data class FocusStatusInfo(
+    val focusing: Boolean,
+    val elapsedSeconds: Long,
+    val plannedMinutes: Int,
+    val taskId: String?,
+    val distractionCount: Int,
+    val resting: Boolean,
+    val restRemainingSeconds: Long,
+)
+
+/** 专注番茄钟：AI 推荐结果。 */
+/** 专注番茄钟：AI 动态背景视觉配置（对应后端 visual_config）。 */
+data class FocusVisualConfigInfo(
+    val bgStyle: String,
+    val blurRadius: Int,
+    val darknessOverlay: Int,
+)
+
+/** 与后端 FocusVisualConfig.ALLOWED_STYLES 一致；非白名单样式前端一律回落纯色。 */
+val FOCUS_BG_STYLES = setOf("DARK_BLUE_SOLID", "BLURRED_NATURE", "DARK_GRADIENT")
+
+data class FocusSuggestionInfo(
+    val recommendedMinutes: Int,
+    val restMinutes: Int,
+    val fatigueIndex: Int,
+    val advice: String,
+    val source: String,
+    val visualConfig: FocusVisualConfigInfo = FocusVisualConfigInfo("DARK_BLUE_SOLID", 15, 20),
+)
 
 /** 一节课的纪要生成状态（首页进度卡用）。 */
 data class ClassNoteProgress(

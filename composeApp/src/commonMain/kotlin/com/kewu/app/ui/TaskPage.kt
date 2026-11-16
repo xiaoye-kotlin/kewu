@@ -98,7 +98,8 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var assignmentId by remember { mutableStateOf<String?>(null) }
-    LockTabSwipe(assignmentId != null) // 作答中一次斜滑切走 tab 会丢答案
+    var focusOpen by remember { mutableStateOf(false) }
+    LockTabSwipe(assignmentId != null || focusOpen) // 作答/专注中一次斜滑切走 tab 会丢状态
 
     var loadFailed by remember { mutableStateOf(false) }
 
@@ -170,46 +171,67 @@ fun TaskPage(onNavHide: (Boolean) -> Unit) {
                 .layerBackdrop(pageBackdrop)
                 .background(cs.surface),
         )
-        // ★ 下钻转场：Telegram 式推入 / 返回（KewuSlideHost Push）。作答页不开右滑返回（一滑丢答案）。
-        // ★ 2026-11-02：KewuSlideHost 内部用 `to == null` 表示「没有目标页」，目标态本身不能是 null ——
-        //   旧版直接传 String?，返回（置 null）时 to 仍为 null → 动画直接 return，页面卡在作业详情：
-        //   提交成功后 onBack 无效、左上角返回 / 系统返回键都退不出去。改用非空 key（"" = 列表）。
-        KewuSlideHost(
-            targetState = assignmentId ?: "",
+        // ★ 番茄钟下钻：与作业详情同一套 Telegram 式横滑推入/返回。玻璃 backdrop 由本层持有，
+        //   番茄钟页只复用 pageBackdrop，不再另开 layerBackdrop（一个 backdrop 只能一个捕获层）。
+        AnimatedContent(
+            targetState = focusOpen,
             modifier = Modifier.fillMaxSize(),
-            isForward = { _, to -> to.isNotEmpty() },
-        ) { key ->
-            val drillId = key.ifEmpty { null }
-            if (drillId == null) {
-                TaskListContent(
-                    tasks = tasks,
-                    doneIds = doneIds,
-                    loading = loading,
-                    loadFailed = loadFailed,
-                    onRetry = { loading = true; loadFailed = false; scope.launch { load() } },
-                    refreshing = refreshing,
-                    onRefresh = {
-                        // 下拉刷新：保留现有列表、不回 loading 态（否则汇总数字又会「…→N 项」跳一次）
-                        refreshing = true
-                        scope.launch {
-                            load()
-                            refreshing = false
-                        }
-                    },
-                    scrollState = scrollState,
+            transitionSpec = {
+                slideInHorizontally(initialOffsetX = { it }) togetherWith
+                    slideOutHorizontally(targetOffsetX = { -it / 4 })
+            },
+        ) { showFocus ->
+            if (showFocus) {
+                BackHandler { focusOpen = false }
+                FocusTimerPage(
                     pageBackdrop = pageBackdrop,
-                    onOpenTask = { assignmentId = it },
+                    onBack = { focusOpen = false },
+                    onNavHide = onNavHide,
                 )
             } else {
-                BackHandler { assignmentId = null }
-                AssignmentDetailScreen(
-                    assignmentId = drillId,
-                    onBack = { assignmentId = null },
-                    onSubmitted = { id ->
-                        AssignmentRepo.markSubmitted(id)
-                        scope.launch { AssignmentRepo.refresh() }
-                    },
-                )
+                // ★ 下钻转场：Telegram 式推入 / 返回（KewuSlideHost Push）。作答页不开右滑返回（一滑丢答案）。
+                // ★ 2026-11-02：KewuSlideHost 内部用 `to == null` 表示「没有目标页」，目标态本身不能是 null ——
+                //   旧版直接传 String?，返回（置 null）时 to 仍为 null → 动画直接 return，页面卡在作业详情：
+                //   提交成功后 onBack 无效、左上角返回 / 系统返回键都退不出去。改用非空 key（"" = 列表）。
+                KewuSlideHost(
+                    targetState = assignmentId ?: "",
+                    modifier = Modifier.fillMaxSize(),
+                    isForward = { _, to -> to.isNotEmpty() },
+                ) { key ->
+                    val drillId = key.ifEmpty { null }
+                    if (drillId == null) {
+                        TaskListContent(
+                            tasks = tasks,
+                            doneIds = doneIds,
+                            loading = loading,
+                            loadFailed = loadFailed,
+                            onRetry = { loading = true; loadFailed = false; scope.launch { load() } },
+                            refreshing = refreshing,
+                            onRefresh = {
+                                // 下拉刷新：保留现有列表、不回 loading 态（否则汇总数字又会「…→N 项」跳一次）
+                                refreshing = true
+                                scope.launch {
+                                    load()
+                                    refreshing = false
+                                }
+                            },
+                            scrollState = scrollState,
+                            pageBackdrop = pageBackdrop,
+                            onOpenTask = { assignmentId = it },
+                            onOpenFocus = { focusOpen = true },
+                        )
+                    } else {
+                        BackHandler { assignmentId = null }
+                        AssignmentDetailScreen(
+                            assignmentId = drillId,
+                            onBack = { assignmentId = null },
+                            onSubmitted = { id ->
+                                AssignmentRepo.markSubmitted(id)
+                                scope.launch { AssignmentRepo.refresh() }
+                            },
+                        )
+                    }
+                }
             }
         }
     }
@@ -227,6 +249,7 @@ private fun TaskListContent(
     scrollState: androidx.compose.foundation.ScrollState,
     pageBackdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop,
     onOpenTask: (String) -> Unit,
+    onOpenFocus: () -> Unit,
 ) {
     val cs = COUITheme.colorScheme
     val pending = tasks.filter { it.id !in doneIds }
@@ -312,6 +335,31 @@ private fun TaskListContent(
                         strokeWidth = 4.5.dp,
                         size = 46.dp,
                     )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // ★ 专注番茄钟入口（2026-11-16）：课悟液态玻璃卡，与汇总卡同一套玻璃语言。
+            //  点击整卡下钻到 FocusTimerPage，时间/状态全部由后端 /api/focus/* 管理。
+            val focusP = rememberEnterProgress(2, baseDelayMs = 220L)
+            KewuGlassCard(
+                backdrop = pageBackdrop,
+                shape = RoundedCornerShape(16.dp),
+                blurRadius = glassCondenseBlur(focusP, 18f),
+                tintAlpha = 0.26f * focusP,
+                onClick = onOpenFocus,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp).glassEnter(focusP, 40f),
+            ) {
+                Row(
+                    Modifier.padding(16.dp).alpha(focusP),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("专注番茄钟", color = cs.onSurface, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                        Spacer(Modifier.height(3.dp))
+                        Text("科学计时 · AI 分析你的专注节奏", color = cs.onSurfaceSecondary, fontSize = 12.sp, maxLines = 1)
+                    }
+                    Text("›", color = KewuGreen, fontSize = 26.sp)
                 }
             }
             Spacer(Modifier.height(12.dp))
