@@ -22,12 +22,13 @@ class PrefetchCacheTest {
     }
 
     @Test
-    fun `slot fresh respects max age`() {
+    fun `slot cached value never expires during session`() {
         val slot = AdminPrefetch.Slot<Int>()
         slot.set(42)
-        // 设置一个极小的时间窗：at 是 now，fresh(0) 应立即认为过期（now - at >= 0）。
-        assertNull(slot.fresh(0), "0ms 时效窗口应视为过期")
-        assertTrue(slot.fresh(1000) == 42)
+        // 会话内缓存不按时间过期：即使传 0 时效也返回缓存（切 tab 不重载的关键）。
+        assertTrue(slot.get() == 42)
+        assertTrue(slot.fresh(0) == 42, "会话缓存不应因时效被清空")
+        assertTrue(slot.peek() == 42)
     }
 
     @Test

@@ -211,9 +211,9 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
         ChangePasswordDialog(
             api = api,
             onClose = { showChangePassword = false },
-            onChanged = {
-                // 后端已把新密码回写服务器 kewu.env；退出登录后 LoginScreen 会重新读取，
-                // 总控端跑在服务器本机时凭证自动同步，无需在客户端额外持久化。
+            onChanged = { newPassword ->
+                // 后端已把新密码回写服务器 kewu.env；同步本地记住的凭证，避免自动登录仍用旧密码。
+                com.kewu.admin.LoginCredentials.updatePassword(newPassword)
                 showChangePassword = false
             },
         )

@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.InetSocketAddress
+import java.net.Proxy
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.URL
@@ -121,33 +122,54 @@ class DeploymentState(private val stateDir: File = File(System.getProperty("user
 object DeploymentDetector {
     suspend fun detect(state: DeploymentState = DeploymentState()): DeploymentInfo? = withContext(Dispatchers.IO) {
         val cached = state.load()
+        val detectedRoot = cached?.serverRoot?.takeIf { File(it).isDirectory }
+            ?: DeploymentService().detectServerRoot()
+
         val ports = linkedSetOf<Int>()
         cached?.port?.let { ports += it }
-        cached?.serverRoot?.let { root ->
-            val envPort = readPortFromEnv(File(root, "kewu.env"))
-            if (envPort != null) ports += envPort
+        detectedRoot?.let { root ->
+            readPortFromEnv(File(root, "kewu.env"))?.let { ports += it }
         }
         ports += 8080
 
         for (port in ports) {
             if (probeHealth(port)) {
-                val root = cached?.serverRoot?.takeIf { File(it).isDirectory }
-                    ?: DeploymentService().detectServerRoot()
-                if (!root.isNullOrBlank()) state.save(File(root), port)
+                if (!detectedRoot.isNullOrBlank()) state.save(File(detectedRoot), port)
                 return@withContext DeploymentInfo(
-                    serverRoot = root ?: "",
+                    serverRoot = detectedRoot ?: "",
                     port = port,
                     baseUrl = "http://127.0.0.1:$port",
                     deployedAt = cached?.deployedAt ?: System.currentTimeMillis(),
                 )
             }
         }
+
+        // 兜底：后端冷启动 health 暂不可用，但本机确实有部署痕迹（端口在监听 + 部署目录含后端 jar），
+        // 也视为已部署，绝不能把用户又赶回部署界面（重新部署入口在概览页常驻，不影响升级）。
+        if (!detectedRoot.isNullOrBlank() && File(detectedRoot, "kewu-8080.jar").isFile) {
+            for (port in ports) {
+                if (DeploymentState.isPortOpen(port)) {
+                    state.save(File(detectedRoot), port)
+                    return@withContext DeploymentInfo(
+                        serverRoot = detectedRoot,
+                        port = port,
+                        baseUrl = "http://127.0.0.1:$port",
+                        deployedAt = cached?.deployedAt ?: System.currentTimeMillis(),
+                    )
+                }
+            }
+        }
         null
     }
 
-    /** 健康检查（短超时，避免冷启动时界面卡很久）。 */
+    /**
+     * 健康检查（短超时，避免冷启动时界面卡很久）。
+     * 关键：必须 Proxy.NO_PROXY —— 服务器常装 CCProxy 等系统代理，openConnection() 默认走系统代理，
+     * 连 127.0.0.1 也会被代理劫持而超时，导致「本机已部署」自检误判为未部署、错误地显示部署界面
+     * （2026-11-17 实测：自检失败卡部署页，而 AdminApi 因强制 NO_PROXY 的登录探测却成功，差 55s）。
+     */
     fun probeHealth(port: Int, timeoutMs: Int = 1500): Boolean = runCatching {
-        val conn = URL("http://127.0.0.1:$port/api/health").openConnection() as HttpURLConnection
+        val conn = URL("http://127.0.0.1:$port/api/health").openConnection(Proxy.NO_PROXY) as HttpURLConnection
         conn.connectTimeout = timeoutMs
         conn.readTimeout = timeoutMs
         conn.requestMethod = "GET"

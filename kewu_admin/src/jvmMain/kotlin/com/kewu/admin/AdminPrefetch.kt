@@ -12,20 +12,20 @@ import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * 登录后全局数据预加载缓存（2026-11-17，1.0.17）。
+ * 登录后「全界面一次性预加载」缓存（2026-11-17，1.0.18）。
  *
- * 目标：打开总控端、登录成功后立刻在后台**并行**拉取所有界面首屏数据，
- * 用户切到任意 tab 时直接读缓存即时展示，不再每次进页面才发请求等待。
- * 尤其系统信息 / 服务器状态这类耗时的采样提前完成，避免进页面干等。
+ * 用户诉求：登录成功进入首页即把**所有界面**首屏数据全部拉好（不局限于某一个），
+ * 之后切换任意 tab 只读缓存、绝不重新发请求；只有手动「刷新」才更新。
  *
- * 用法：
- * - AdminApp 登录成功后调用 [begin]（内部并发拉取，[awaitReady] 可等待第一批完成）。
- * - 各页面进入时先读这里的值；缓存新鲜（[FRESH_MS] 内）则跳过本页首屏请求，
- *   之后仍保留各页面自己的定时刷新与手动刷新。
+ * 设计：
+ * - [begin] 在登录成功后调用一次：一个 coroutineScope 内 **10 个 async 并发**
+ *   拉 overview/health/config/users/recordings/obs/courses/assignments/attendance/系统快照，
+ *   全部完成后再并发拉默认选中项的二级数据（首个课程的班级、首个作业详情+提交）。
+ * - 缓存**会话内长期有效**（不按时间过期）；[get] 直接返回值。
+ * - 页面进入时状态从 [peek] 初始化，LaunchedEffect 先 [awaitReady] 再读 [get]，
+ *   有值就跳过首屏请求；切 tab 因 key(shown) 重建也走同一路径，只读缓存。
  */
 object AdminPrefetch {
-    const val FRESH_MS: Long = 60_000L
-
     class Slot<T> {
         @Volatile var value: T? = null
             private set
@@ -33,10 +33,12 @@ object AdminPrefetch {
             private set
 
         fun set(v: T) { value = v; at = System.currentTimeMillis() }
-        /** 缓存命中且未过期。 */
-        fun fresh(maxAgeMs: Long = FRESH_MS): T? = value?.takeIf { System.currentTimeMillis() - at < maxAgeMs }
-        /** 不判断时效，用于首屏先展示旧值。 */
+        /** 会话内缓存：有值即返回，不按时间过期。 */
+        fun get(): T? = value
+        /** 同上；保留旧命名兼容。 */
         fun peek(): T? = value
+        /** 兼容：不再按时间过滤（切 tab 不重载）。 */
+        fun fresh(maxAgeMs: Long = Long.MAX_VALUE): T? = value
         fun clear() { value = null; at = 0L }
     }
 
@@ -51,34 +53,40 @@ object AdminPrefetch {
     val attendance = Slot<List<JsonObject>>()
     val serverSnapshot = Slot<ServerRuntimeSnapshot>()
 
+    // 默认选中项的二级数据，key = 父级 id
+    @Volatile private var classesByCourse: Map<String, List<JsonObject>> = emptyMap()
+    @Volatile private var assignmentSubmissions: Map<String, Pair<JsonObject, List<JsonObject>>> = emptyMap()
+
+    fun classesFor(courseId: String): List<JsonObject>? = classesByCourse[courseId]
+    fun submissionsFor(assignmentId: String): Pair<JsonObject, List<JsonObject>>? = assignmentSubmissions[assignmentId]
+
     private var ready = CompletableDeferred<Unit>()
     private val started = AtomicBoolean(false)
 
-    /** 登录成功调用；重复调用安全。第一批数据（除 OBS 全量外）就绪后 [awaitReady] 返回。 */
+    /** 登录成功调用；重复调用安全。所有首屏数据 + 默认二级数据就绪后 [awaitReady] 返回。 */
     fun begin(api: AdminApi) {
         if (!started.compareAndSet(false, true)) return
         ready = CompletableDeferred<Unit>()
-        GlobalScope.launch(Dispatchers.IO) {
-            prefetch(api)
-        }
+        GlobalScope.launch(Dispatchers.IO) { prefetch(api) }
     }
 
-    /** 页面首屏用：最多等 [timeoutMs]，让并发预加载先填好缓存，避免和页面各自请求重复/竞态。 */
-    suspend fun awaitReady(timeoutMs: Long = 15_000) {
+    /** 页面首屏用：等待预加载完成；已就绪时立即返回。超时只作兜底，不影响缓存读取。 */
+    suspend fun awaitReady(timeoutMs: Long = 60_000) {
+        if (ready.isCompleted) return
         withTimeoutOrNull(timeoutMs) { ready.await() }
     }
 
     fun isReady(): Boolean = ready.isCompleted
 
-    /** 退出登录/切换账号时清空。 */
     fun clearAll() {
         overview.clear(); health.clear(); config.clear(); users.clear(); recordings.clear()
         obsRecordings.clear(); courses.clear(); assignments.clear(); attendance.clear(); serverSnapshot.clear()
+        classesByCourse = emptyMap(); assignmentSubmissions = emptyMap()
         started.set(false)
     }
 
     private suspend fun prefetch(api: AdminApi) = withContext(Dispatchers.IO) {
-        // 第一批：无参数、各页面首屏必需、相对轻量的请求，全部并发。
+        // 第一批：所有界面首屏数据 + OBS 全量，一次性全部并发（用户要"所有界面"）。
         coroutineScope {
             val jobs = listOf(
                 async { runCatching { api.overview() }.getOrNull()?.let { overview.set(it) } },
@@ -86,6 +94,7 @@ object AdminPrefetch {
                 async { runCatching { api.configItems() }.getOrNull()?.let { config.set(it) } },
                 async { runCatching { api.page("/api/admin/users", mapOf("page" to "1", "size" to "20")) }.getOrNull()?.let { users.set(it) } },
                 async { runCatching { api.page("/api/admin/recordings", mapOf("page" to "1", "size" to "1000")) }.getOrNull()?.let { recordings.set(it) } },
+                async { runCatching { api.obsRecordings() }.getOrNull()?.let { obsRecordings.set(it) } },
                 async { runCatching { api.list("/api/admin/courses") }.getOrNull()?.let { courses.set(it) } },
                 async { runCatching { api.list("/api/admin/assignments") }.getOrNull()?.let { assignments.set(it) } },
                 async { runCatching { api.list("/api/admin/attendance") }.getOrNull()?.let { attendance.set(it) } },
@@ -93,9 +102,22 @@ object AdminPrefetch {
             )
             jobs.forEach { it.await() }
         }
-        ready.complete(Unit)
 
-        // 第二批：OBS 全量分页列举（跨公网、最重），后台慢慢拉，不阻塞首屏就绪。
-        runCatching { api.obsRecordings() }.getOrNull()?.let { obsRecordings.set(it) }
+        // 第二批：默认选中项（列表第一条）的二级数据，让"进入课程/作业页"也无需再加载。
+        coroutineScope {
+            val courseJobs = courses.get()?.firstOrNull()?.str("id", "")?.takeIf { it.isNotBlank() }?.let { cid ->
+                async { runCatching { api.list("/api/admin/courses/$cid/classes") }.getOrNull()?.let { classesByCourse = classesByCourse + (cid to it) } }
+            }
+            val assignmentJobs = assignments.get()?.firstOrNull()?.str("id", "")?.takeIf { it.isNotBlank() }?.let { aid ->
+                async {
+                    val detail = runCatching { api.detail("/api/admin/assignments/$aid") }.getOrNull()
+                    val subs = runCatching { api.list("/api/admin/assignments/$aid/submissions") }.getOrNull()
+                    if (detail != null && subs != null) assignmentSubmissions = assignmentSubmissions + (aid to (detail to subs))
+                }
+            }
+            listOfNotNull(courseJobs, assignmentJobs).forEach { it.await() }
+        }
+
+        ready.complete(Unit)
     }
 }

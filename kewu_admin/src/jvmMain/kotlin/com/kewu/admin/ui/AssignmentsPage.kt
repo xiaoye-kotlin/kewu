@@ -87,7 +87,20 @@ fun AssignmentsPage(api: AdminApi, notify: (String) -> Unit) {
             reload()
         }
     }
-    LaunchedEffect(selected?.str("id", "")) { if (selected != null) loadSubmissions() }
+    LaunchedEffect(selected?.str("id", "")) {
+        val aid = selected?.str("id", "")
+        if (aid.isNullOrBlank()) return@LaunchedEffect
+        AdminPrefetch.awaitReady()
+        // 默认选中作业的详情+提交已在登录预加载里拉好，切回来读缓存不发请求。
+        val cached = AdminPrefetch.submissionsFor(aid)
+        if (cached != null) {
+            detail = cached.first
+            submissions = cached.second
+            submissionLoading = false
+        } else {
+            loadSubmissions()
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("作业与批阅", "跨课程查看作业与提交，必要时人工覆盖批阅结果") {

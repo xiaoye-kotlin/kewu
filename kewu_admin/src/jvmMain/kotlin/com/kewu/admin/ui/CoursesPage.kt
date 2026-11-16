@@ -103,7 +103,19 @@ fun CoursesPage(api: AdminApi, notify: (String) -> Unit) {
             reloadCourses()
         }
     }
-    LaunchedEffect(selected?.str("id", "")) { if (selected != null) reloadClasses() }
+    LaunchedEffect(selected?.str("id", "")) {
+        val cid = selected?.str("id", "")
+        if (cid.isNullOrBlank()) return@LaunchedEffect
+        AdminPrefetch.awaitReady()
+        // 默认选中课程的班级已在登录预加载里拉好，切回来直接读缓存，不再发请求。
+        val cached = AdminPrefetch.classesFor(cid)
+        if (cached != null) {
+            classes = cached
+            classLoading = false
+        } else {
+            reloadClasses()
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("课程与班级", "管理课程资料、班级邀请码和班级学生名单") {
