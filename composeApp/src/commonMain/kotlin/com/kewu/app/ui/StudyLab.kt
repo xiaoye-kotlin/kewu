@@ -67,8 +67,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.AiClient
 import com.kewu.app.BackHandler
+import com.kewu.app.AiNav
 import com.kewu.app.ClassRecordingInfo
+import com.kewu.app.formatPlayTime
 import com.kewu.app.HapticKind
+import com.kewu.app.shareText
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
@@ -1164,9 +1167,31 @@ internal fun FeynmanScreen(
 
 // ───────────────────────── 教师：AI 课堂复盘 ─────────────────────────
 
+/**
+ * §88：把每位学生的专注结论拼成「落实到具体名字 + 证据 + 片段时间」的文本喂给 AI 复盘，
+ * 让复盘能说出「张三在 10:05 走神」而不是泛泛的「3 人开小差」。
+ * 时间用该学生录音的 createdAt（HH:mm）作为相对参考，片段区间直接给出秒数。
+ */
+internal fun buildFocusLine(students: List<com.kewu.app.SessionRecordingInfo>): String {
+    if (students.isEmpty()) return ""
+    fun timeOf(createdAt: String): String =
+        createdAt.takeLast(8).takeIf { it.length >= 5 && it[2] == ':' } ?: ""
+    return students.joinToString("；") { r ->
+        val name = r.name ?: r.username ?: "某同学"
+        val verdict = r.focusVerdict ?: "暂未分析"
+        val at = timeOf(r.createdAt).let { if (it.isNotBlank()) "（录音 $it）" else "" }
+        val clip = if (r.focusStartSec != null && r.focusEndSec != null && r.focusEndSec!! > r.focusStartSec!!)
+            " 片段 ${formatPlayTime(r.focusStartSec!! * 1000L)}–${formatPlayTime(r.focusEndSec!! * 1000L)}" else ""
+        val evidence = r.focusEvidence?.takeIf { it.isNotBlank() }?.let { "，依据：${it.take(30)}" } ?: ""
+        "$name $at $verdict$clip$evidence"
+    }
+}
+
 private suspend fun generateReview(courseName: String, s: ClassRecordingInfo, focusLine: String): String? {
     val system = "你是一位资深的高校教学督导，帮老师复盘刚上完的这节《${courseName.ifBlank { "课程" }}》。根据课堂转写和纪要，" +
         "给出专业、具体、可执行的反馈（避免空话套话，要引用课堂里的具体内容）。" +
+        "★ 若给了【学生课堂专注】名单，务必在 interaction / improve / risks 里点名到具体学生（例如「张三 10:05 走神、李四疑似聊天，建议课后单独提醒」），" +
+        "不得用「有同学走神」这类含糊表述；名单里没有的学生不要编造。" +
         "overall 为本节课综合评分 0–100；comment 一句话总评（≤40 字）；" +
         "dims 为 5 个维度评分及一句理由：目标清晰、重点突出、节奏把控、师生互动、例题示范；" +
         "flow 为课堂脉络（按时间顺序 4–7 段，stage 如「导入」「讲授」「例题」「练习」「小结」，content ≤30 字）；" +
@@ -1194,6 +1219,7 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
     var raw by remember { mutableStateOf(StudyLabStore.review(s.sessionId)) }
     var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
+    var publishing by remember { mutableStateOf(false) }
     val o = remember(raw) { aiJsonObject(raw)?.takeIf { it.num("overall") != null } }
 
     fun load() {
@@ -1210,6 +1236,71 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
         }
     }
     LaunchedEffect(Unit) { if (o == null && s.transcript.isNotBlank()) load() }
+
+    /** §88 导出复盘报告：把结构化复盘拼成纯文本，走系统分享面板（Android ACTION_SEND）。 */
+    fun exportReport() {
+        val obj = o ?: return
+        val text = buildString {
+            append("《${courseName.ifBlank { "课堂" }}》AI 课堂复盘报告\n")
+            append("日期：${s.date}\n")
+            append("综合评分：${obj.num("overall") ?: 0} 分\n")
+            append("总评：${obj.txt("comment")}\n\n")
+            obj.list("dims").takeIf { it.isNotEmpty() }?.let { dims ->
+                append("【五维评估】\n")
+                dims.forEach { d -> append("· ${d.txt("name")}：${d.num("score") ?: 0} 分 —— ${d.txt("note")}\n") }
+                append("\n")
+            }
+            obj.list("flow").takeIf { it.isNotEmpty() }?.let { flow ->
+                append("【课堂脉络】\n")
+                flow.forEach { f -> append("· ${f.txt("stage")}：${f.txt("content")}\n") }
+                append("\n")
+            }
+            if (obj.txt("interaction").isNotBlank()) append("【师生互动】\n${obj.txt("interaction")}\n\n")
+            obj.texts("highlights").takeIf { it.isNotEmpty() }?.let { append("【亮点】\n"); it.forEach { h -> append("· $h\n") }; append("\n") }
+            obj.texts("improve").takeIf { it.isNotEmpty() }?.let { append("【改进建议】\n"); it.forEach { v -> append("· $v\n") }; append("\n") }
+            obj.list("risks").takeIf { it.isNotEmpty() }?.let { risks ->
+                append("【学生易错预警】\n")
+                risks.forEach { rk -> append("· ${rk.txt("point")}：${rk.txt("why")}\n") }
+                append("\n")
+            }
+            if (obj.txt("next").isNotBlank()) append("【下节课衔接】\n${obj.txt("next")}\n")
+            if (focusLine.isNotBlank()) append("\n【学生课堂专注明细】\n$focusLine\n")
+            append("\n—— 由课悟 AI 生成")
+        }
+        shareText(text)
+    }
+
+    /** §88 一键发布本节课作业：AI 依据本节重点与作业草稿生成题目 → 填进程级草稿 → 跳作业页的发布表单。 */
+    fun publishHomework() {
+        if (publishing) return
+        publishing = true
+        scope.launch {
+            val hw = o?.texts("homework").orEmpty()
+            val nextLine = o?.txt("next").orEmpty()
+            val spec = buildString {
+                append("课程《${courseName.ifBlank { "本节课" }}》。")
+                if (hw.isNotEmpty()) append("重点作业方向：${hw.joinToString("；")}。")
+                if (nextLine.isNotBlank()) append("需巩固：$nextLine。")
+                append("生成 5 道覆盖本节重点的课后练习题（含选择/填空/简答），总分 100。")
+            }
+            val questions = runCatching { AiClient.generateQuestions(spec) }.getOrNull()
+            if (questions.isNullOrEmpty()) {
+                snackbar.toast("出题失败，请检查网络后重试")
+                publishing = false
+                return@launch
+            }
+            PublishDraft.courseId.value = s.courseId
+            PublishDraft.title.value = "${courseName.ifBlank { "课堂" }} · ${s.date} 课后作业"
+            PublishDraft.desc.value = "由 AI 课堂复盘自动生成，依据本节重点与学生专注情况。"
+            PublishDraft.questions.value = questions
+            PublishDraft.totalScore.value = questions.sumOf { it.score }.takeIf { it > 0 }?.toString() ?: "100"
+            publishing = false
+            haptic(HapticKind.Light)
+            snackbar.toast("已生成 ${questions.size} 道题，请在发布页确认")
+            AiNav.goTeacherTab(2) // 作业 tab
+            onBack()
+        }
+    }
 
     StudyLabPage("AI 课堂复盘", onBack, subtitle = "${courseName.ifBlank { "课堂" }} · ${s.date}") { backdrop ->
         when {
@@ -1283,6 +1374,15 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
                         scope.launch { snackbar.toast("已复制，可粘贴到发布作业") }
                     }, Modifier.fillMaxWidth())
                 }
+                // §88：导出报告 + 一键发布作业 + 重新复盘
+                Spacer(Modifier.height(4.dp))
+                KewuSecondaryButton("导出复盘报告", { haptic(HapticKind.Light); exportReport() }, Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                KewuSecondaryButton(
+                    if (publishing) "正在出题…" else "一键发布本节课作业",
+                    { publishHomework() }, Modifier.fillMaxWidth(), enabled = !publishing,
+                )
+                Spacer(Modifier.height(8.dp))
                 KewuSecondaryButton("重新复盘", { load() }, Modifier.fillMaxWidth())
             }
         }

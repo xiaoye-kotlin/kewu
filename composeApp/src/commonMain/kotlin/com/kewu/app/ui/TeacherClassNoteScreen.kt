@@ -231,7 +231,9 @@ fun TeacherClassNoteScreen(courseId: String, date: String, onBack: () -> Unit) {
                             compareBy<SessionRecordingInfo> { it.role.equals("teacher", true) }
                                 .thenBy { order.indexOf(it.focusVerdict).let { i -> if (i < 0) 3 else i } },
                         )
-                        sorted.forEachIndexed { i, r -> StudentRecordingCard(r, i) }
+                        sorted.forEachIndexed { i, r ->
+                            StudentRecordingCard(r, i, backdrop = pageBackdrop, courseId = courseId)
+                        }
                         Spacer(Modifier.height(4.dp))
                     }
                 }
@@ -318,8 +320,7 @@ fun TeacherClassNoteScreen(courseId: String, date: String, onBack: () -> Unit) {
         // AI 课堂复盘全屏层
         SlideOverlay(rec.takeIf { showReview }) { sess ->
             val students = recs.orEmpty().filter { !it.role.equals("teacher", true) && it.focusVerdict != null }
-            val focusLine = if (students.isEmpty()) "" else
-                students.groupingBy { it.focusVerdict!! }.eachCount().entries.joinToString("，") { "${it.key} ${it.value} 人" }
+            val focusLine = buildFocusLine(students)
             TeachingReviewScreen(sess, courseName, focusLine) { showReview = false }
         }
     }

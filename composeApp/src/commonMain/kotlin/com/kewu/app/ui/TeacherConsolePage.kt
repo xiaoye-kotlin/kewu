@@ -314,6 +314,8 @@ fun TeacherConsolePage(
                     course = d.course,
                     onBack = { drill = ConsoleDrill.NONE },
                     onOpenSession = { drill = ConsoleDrill.DETAIL(it) },
+                    // §88 签到记录关联纪要：按该场签到日期直达对应课堂纪要
+                    onOpenNote = { date -> drill = ConsoleDrill.CLASS_NOTE(d.course.id, date) },
                 )
                 ConsoleDrill.TODAY -> TodayCheckInScreen(
                     courses = courses,
@@ -1314,7 +1316,17 @@ private fun CourseSessionsScreen(
     course: CourseInfo,
     onBack: () -> Unit,
     onOpenSession: (String) -> Unit,
+    onOpenNote: (String) -> Unit,
 ) {
+    fun noteDate(createdAt: String): String {
+        val digits = createdAt.filter { it.isDigit() }
+        // 兼容 "yyyy-MM-dd HH:mm:ss"（前 8 位即日期）与毫秒时间戳
+        return when {
+            createdAt.length >= 10 && createdAt[4] == '-' && createdAt[7] == '-' -> createdAt.take(10)
+            digits.length >= 8 && createdAt.contains('-') -> digits.take(8).let { "${it.take(4)}-${it.substring(4, 6)}-${it.takeLast(2)}" }
+            else -> ""
+        }
+    }
     val cs = COUITheme.colorScheme
     var sessions by remember { mutableStateOf<List<AttendanceSession>?>(null) }
     LaunchedEffect(course.id) { sessions = KewuApi.getAttendances(course.id) }
@@ -1347,6 +1359,24 @@ private fun CourseSessionsScreen(
                             if (s.state == "closed") cs.secondaryContainer else KewuGreen.copy(alpha = 0.16f),
                             if (s.state == "closed") cs.onSurfaceSecondary else KewuGreen,
                         )
+                    }
+                    // §88：显眼的「查看课堂纪要」入口，按签到日期直达对应纪要页
+                    val date = noteDate(s.createdAt)
+                    if (date.isNotBlank()) {
+                        Spacer(Modifier.height(10.dp))
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = cs.primary.copy(alpha = 0.12f),
+                            contentColor = cs.primary,
+                            onClick = { haptic(HapticKind.Light); onOpenNote(date) },
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Text("查看课堂纪要", color = cs.primary, fontSize = 12.5.sp, fontWeight = FontWeight.Medium)
+                            }
+                        }
                     }
                 }
             }

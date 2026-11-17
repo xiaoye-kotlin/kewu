@@ -1726,8 +1726,9 @@ internal fun ClassNoteProgressSection(
                         (p.status == "DONE" && p.sessionId in ClassNoteWatch.seenRunning && p.sessionId !in ClassNoteWatch.dismissed))
                 }.sortedBy { it.sessionId }
             }
-            // 有生成中的节次每 5 秒刷新（§84：下课后要能实时看到拼接/转写/融合进度）；都没有就放慢到 60 秒
-            val wait = if (items.any { it.status !in NOTE_FINAL }) 5_000L else 60_000L
+            // 有生成中的节次每 5 秒刷新（§84）；空闲也保持 20 秒轮询（§86 学生端首页自动刷新：
+            // 下课后无需手动下拉/切页，最迟 20 秒内自动出现「课堂纪要生成中/已生成」）
+            val wait = if (items.any { it.status !in NOTE_FINAL }) 5_000L else 20_000L
             var waited = 0L
             while (waited < wait) {
                 kotlinx.coroutines.delay(1_000)

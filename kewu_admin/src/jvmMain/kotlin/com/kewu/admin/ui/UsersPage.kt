@@ -64,19 +64,23 @@ fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
     var working by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    suspend fun reload() {
-        loading = true
-        error = null
+    suspend fun reload(silent: Boolean = false) {
+        // §87：定时刷新走 silent 分支——不置 loading（避免整表闪骨架）、不清空 selection
+        if (!silent) loading = true
+        if (!silent) error = null
         try {
-            result = api.page(
+            val fresh = api.page(
                 "/api/admin/users",
                 mapOf("page" to page.toString(), "size" to "20", "keyword" to keyword, "role" to role, "status" to status),
             )
-            if (page == 1 && role.isEmpty() && status.isEmpty() && keyword.isEmpty()) AdminPrefetch.users.set(result)
+            result = fresh
+            if (page == 1 && role.isEmpty() && status.isEmpty() && keyword.isEmpty()) AdminPrefetch.users.set(fresh)
+            // 选中的行按 id 换成新对象：弹窗里的在线状态/昵称不会停在旧数据，选中状态也不丢
+            editing = editing?.let { old -> fresh.items.firstOrNull { it.str("id") == old.str("id") } ?: old }
         } catch (e: Exception) {
-            error = e.message ?: "用户列表加载失败"
+            if (!silent) error = e.message ?: "用户列表加载失败"
         } finally {
-            loading = false
+            if (!silent) loading = false
         }
     }
 
@@ -105,6 +109,9 @@ fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
         }
         reload()
     }
+
+    // §87：在线状态每 10 秒静默刷新一次（不闪 loading、不重置选中行 / 滚动位置）
+    PollEffect(10_000, key = Triple(page, role, status)) { reload(silent = true) }
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("用户管理", "查询账号档案，分配角色，禁用账号或重置密码") {

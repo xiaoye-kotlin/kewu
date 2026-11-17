@@ -370,6 +370,9 @@ object RecordingTranscripts : Table("recording_transcripts") {
     val focusVerdict = varchar("focus_verdict", 16).nullable() // 认真 / 疑似开小差 / 疑似聊天
     val focusEvidence = varchar("focus_evidence", 512).nullable()
     val focusConfidence = integer("focus_confidence").nullable()
+    /** §88：AI 判定的「开小差」片段区间（秒），教师端只 seek 播放这一段；整段/无区间为 null。 */
+    val focusStartSec = integer("focus_start_sec").nullable()
+    val focusEndSec = integer("focus_end_sec").nullable()
     val updatedAt = varchar("updated_at", 32)
     override val primaryKey = PrimaryKey(recordingId)
 }

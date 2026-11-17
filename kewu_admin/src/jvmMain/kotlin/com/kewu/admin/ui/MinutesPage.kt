@@ -55,13 +55,16 @@ fun MinutesPage(api: AdminApi, notify: (String) -> Unit) {
     var status by remember { mutableStateOf("") }
     var page by remember { mutableStateOf(1) }
     var detail by remember { mutableStateOf<kotlinx.serialization.json.JsonObject?>(null) }
+    /** §87：待确认删除的纪要（null = 无）。 */
+    var deleting by remember { mutableStateOf<kotlinx.serialization.json.JsonObject?>(null) }
+    var working by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    suspend fun reload() {
-        loading = true
-        error = null
+    suspend fun reload(silent: Boolean = false) {
+        if (!silent) loading = true
+        if (!silent) error = null
         try {
-            result = api.page(
+            val fresh = api.page(
                 "/api/admin/minutes",
                 mapOf(
                     "page" to page.toString(),
@@ -70,11 +73,14 @@ fun MinutesPage(api: AdminApi, notify: (String) -> Unit) {
                     "status" to status.ifBlank { null },
                 ),
             )
-            if (keyword.isBlank() && status.isBlank() && page == 1) AdminPrefetch.minutes.set(result)
+            result = fresh
+            if (keyword.isBlank() && status.isBlank() && page == 1) AdminPrefetch.minutes.set(fresh)
+            // 详情弹窗开着时按 sessionId 换成新对象，生成中的进度会跟着走
+            detail = detail?.let { old -> fresh.items.firstOrNull { it.str("sessionId") == old.str("sessionId") } ?: old }
         } catch (e: Exception) {
-            error = e.message ?: "课堂纪要加载失败"
+            if (!silent) error = e.message ?: "课堂纪要加载失败"
         } finally {
-            loading = false
+            if (!silent) loading = false
         }
     }
 
@@ -89,6 +95,9 @@ fun MinutesPage(api: AdminApi, notify: (String) -> Unit) {
         }
     }
     LaunchedEffect(status) { page = 1; reload() }
+
+    // §87：生成中的纪要坚持每 15 秒静默刷新，进度条与状态会自己走；空闲时也不停止，及时发现新纪要
+    PollEffect(15_000, key = Triple(page, status, keyword)) { reload(silent = true) }
 
     val generating = result.items.count { it.str("displayStatus", "PENDING") == "GENERATING" }
     val done = result.items.count { it.str("displayStatus", "PENDING") == "DONE" }
@@ -119,7 +128,7 @@ fun MinutesPage(api: AdminApi, notify: (String) -> Unit) {
             result.items.isEmpty() -> EmptyBlock("还没有课堂纪要。上完课后系统会自动转写并生成纪要。")
             else -> Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 result.items.forEach { item ->
-                    MinuteRow(item, onClick = { detail = item })
+                    MinuteRow(item, onClick = { detail = item }, onDelete = { deleting = item })
                 }
             }
         }
@@ -129,10 +138,43 @@ fun MinutesPage(api: AdminApi, notify: (String) -> Unit) {
     detail?.let { item ->
         MinuteDetailDialog(item, onClose = { detail = null })
     }
+
+    // §87 纪要删除：二次确认，删除后立即静默刷新列表（不动筛选与分页）
+    deleting?.let { target ->
+        val name = target.str("courseName").ifBlank { target.str("sessionId") }
+        ConfirmDialog(
+            "删除课堂纪要",
+            "确定删除「$name」的课堂纪要吗？删除后该节次的纪要内容与生成进度都不可恢复（原始录音文件保留）。",
+            "确认删除",
+            true,
+            onConfirm = {
+                if (working) return@ConfirmDialog
+                working = true
+                scope.launch {
+                    try {
+                        api.remove("/api/admin/minutes/${target.str("sessionId")}")
+                        notify("课堂纪要已删除")
+                        deleting = null
+                        detail = null
+                        reload(silent = true)
+                    } catch (e: Exception) {
+                        notify(e.message ?: "删除失败")
+                    } finally {
+                        working = false
+                    }
+                }
+            },
+            onDismiss = { if (!working) deleting = null },
+        )
+    }
 }
 
 @Composable
-private fun MinuteRow(item: kotlinx.serialization.json.JsonObject, onClick: () -> Unit) {
+private fun MinuteRow(
+    item: kotlinx.serialization.json.JsonObject,
+    onClick: () -> Unit,
+    onDelete: () -> Unit,
+) {
     val cs = COUITheme.colorScheme
     val display = item.str("displayStatus", "PENDING")
     val (label, tone) = when (display) {
@@ -179,6 +221,9 @@ private fun MinuteRow(item: kotlinx.serialization.json.JsonObject, onClick: () -
                 } else {
                     StatusPill(label, tone)
                 }
+                // §87 纪要管理：逐条删除（二次确认后调 DELETE /api/admin/minutes/{sessionId}）
+                Spacer(Modifier.width(8.dp))
+                DeleteMinuteButton(onDelete)
             }
             val stage = item.str("stage")
             if (stage.isNotBlank() || progress != null) {
@@ -214,6 +259,25 @@ private fun MinuteRow(item: kotlinx.serialization.json.JsonObject, onClick: () -
                 Text(asrError, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, maxLines = 2)
             }
         }
+    }
+}
+
+/** 纪要行内的「删除」按钮：小尺寸 coui 文本按钮，点按不做整卡跳转。 */
+@Composable
+private fun DeleteMinuteButton(onClick: () -> Unit) {
+    val cs = COUITheme.colorScheme
+    Surface(
+        color = AdminRed.copy(alpha = 0.10f),
+        contentColor = AdminRed,
+        shape = RoundedCornerShape(50),
+        onClick = onClick,
+    ) {
+        Text(
+            "删除",
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        )
     }
 }
 

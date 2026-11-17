@@ -418,6 +418,20 @@ fun Routing.adminRoutes(service: AdminService) {
             }
         }
 
+        // 删除课堂纪要（§87）：总控端纪要管理用，删的是纪要记录本身，不动原始录音
+        delete("/minutes/{sessionId}") {
+            if (call.checkAdmin(service)) {
+                val sid = call.parameters["sessionId"] ?: ""
+                if (sid.isBlank()) {
+                    call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "缺少 sessionId"))
+                } else if (service.deleteMinute(sid)) {
+                    call.respond(ApiResponse(0, "纪要已删除", null))
+                } else {
+                    call.respond(HttpStatusCode.NotFound, ApiResponse<Unit>(404, "纪要不存在或删除失败"))
+                }
+            }
+        }
+
         get("/recordings/{id}/download") {
             if (call.checkAdmin(service)) {
                 val id = call.parameters["id"] ?: ""

@@ -120,6 +120,8 @@ fun Route.recordingRoutes() {
                     segIndex = segIndex ?: 0, url = url,
                     sampleRate = sampleRate ?: 16000, durationSec = durationSec ?: 0.0,
                     role = role, at = endedAtMs ?: System.currentTimeMillis(),
+                    // §87：带上上传者账号，拼整轨时写回学生归属（否则听课状态显示「未知同学」）
+                    username = username.ifBlank { null },
                 )
                 val recorded = services.redis.addSegment(
                     sessionId, segGroup, Json.encodeToString(com.kewu.recserver.SegmentService.SegmentMeta.serializer(), segMeta)

@@ -75,10 +75,12 @@ class MaasAiService : AiService {
      */
     suspend fun focusAnalysis(courseName: String, lecture: String, studentText: String): String = chat(
         system = "你是课堂专注度分析助手。给你两段文字：①本节「$courseName」课的内容概要；②某位学生手机在座位上录到的语音转写" +
-            "（里面既有远处老师讲课，也有学生本人和周围同学的说话）。判断这位学生上课时有没有讲与课程无关的话、和同学闲聊、开小差。" +
-            "只输出一行 JSON，不要其他文字：{\"verdict\":\"认真\"或\"疑似开小差\"或\"疑似聊天\",\"evidence\":\"不超过30字的依据，可引用原话\",\"confidence\":0到100的整数}。" +
+            "（每行开头是 `[起秒-止秒]` 时间标记，后面是这一句的转写文字；里面既有远处老师讲课，也有学生本人和周围同学的说话）。" +
+            "判断这位学生上课时有没有讲与课程无关的话、和同学闲聊、开小差。" +
+            "只输出一行 JSON，不要其他文字：{\"verdict\":\"认真\"或\"疑似开小差\"或\"疑似聊天\",\"evidence\":\"不超过30字的依据，可引用原话\",\"confidence\":0到100的整数,\"startSec\":0,\"endSec\":0}。" +
+            "startSec/endSec 是「该学生本人说闲话/开小差那几句」对应的起止秒数（取行使 verdict 成立的关键句时间，取整秒；没有明显区间或判「认真」时都填 0）。" +
             "转写里绝大部分是课程内容时判「认真」；不要因为识别错字误判。",
-        user = "【课程内容概要】\n${lecture.take(3000)}\n\n【学生录音转写】\n${studentText.take(9000)}",
+        user = "【课程内容概要】\n${lecture.take(3000)}\n\n【学生录音转写（含时间标记）】\n${studentText.take(9000)}",
         maxTokens = 512
     )
 

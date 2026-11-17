@@ -439,3 +439,25 @@ fun DetailRow(label: String, value: String) {
         Text(value, color = cs.onSurface, fontSize = 14.sp, modifier = Modifier.weight(1f), fontWeight = FontWeight.Medium)
     }
 }
+
+/**
+ * 定时静默刷新（2026-11-17 §87）。
+ *
+ * 总控端各面板（用户在线状态 / 运行概览 / 录音 / 课堂纪要）需要"自己会动"，
+ * 但又不能每次刷新都闪 loading、重置表格滚动或丢掉当前选中的行。
+ * 所以这里只负责**按间隔触发一次数据拉取**，由调用方在回调里做"静默更新"：
+ * 不置 loading、不清空列表、按 id 把选中项换成新对象。
+ *
+ * [key] 变化时重新计时（例如切换筛选条件后重置计时器）。
+ */
+@androidx.compose.runtime.Composable
+fun PollEffect(intervalMs: Long, key: Any? = Unit, block: suspend () -> Unit) {
+    val latest by androidx.compose.runtime.rememberUpdatedState(block)
+    androidx.compose.runtime.LaunchedEffect(intervalMs, key) {
+        while (true) {
+            kotlinx.coroutines.delay(intervalMs)
+            // 单次失败不影响后续轮询（网络抖动时界面保持上一次数据）
+            runCatching { latest() }
+        }
+    }
+}

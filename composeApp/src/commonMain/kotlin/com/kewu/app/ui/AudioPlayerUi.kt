@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
@@ -47,6 +48,8 @@ import kotlinx.coroutines.delay
  * @param key 播放会话标识（如 `rec:<localId>`），用来判断「正在播的是不是我」
  * @param source http 链接或本机文件路径；null = 无法播放（显示 [unavailableText]）
  * @param durationHintSec 未开始播放时显示的总时长（录音记录 / 附件自带）
+ * @param clipStartSec 片段起点秒（§88）；与 [clipEndSec] 一起给出时只播这一段，UI 标注「片段」
+ * @param clipEndSec 片段终点秒（§88）；null 表示整轨播放（默认）
  */
 @Composable
 fun AudioPlayerBar(
@@ -56,52 +59,81 @@ fun AudioPlayerBar(
     modifier: Modifier = Modifier,
     unavailableText: String = "无法播放",
     stopOnDispose: Boolean = true,
+    clipStartSec: Int? = null,
+    clipEndSec: Int? = null,
 ) {
     val cs = COUITheme.colorScheme
     val st by AudioPlayback.state.collectAsState()
     val active = st.key == key
     DisposableEffect(key, stopOnDispose) { onDispose { if (stopOnDispose) AudioPlayback.stopIf(key) } }
 
-    val totalMs = if (active && st.durationMs > 0) st.durationMs else durationHintSec * 1000L
+    // §88 片段模式：区间（毫秒）。仅在播放器尚未接管本 key 时用调用方给的区间，
+    // 一旦开播用播放器状态里的实际区间（含 seek 夹紧）。
+    val clipS = if (active && st.isClip) st.clipStartMs else (clipStartSec ?: 0) * 1000L
+    val clipE = if (active && st.isClip) st.clipEndMs else clipEndSec?.times(1000)?.toLong()
+    val isClip = clipE != null && clipE > clipS
+    val mediaTotalMs = if (active && st.durationMs > 0) st.durationMs else durationHintSec * 1000L
+    // 进度条按「片段长度」显示；整轨时段的起止为 0..媒体总长
+    val rangeStart = if (isClip) clipS else 0L
+    val rangeEnd = if (isClip) clipE!! else mediaTotalMs
+    val totalMs = (rangeEnd - rangeStart).coerceAtLeast(0)
     // 拖动中先只改本地值，松手再 seek（避免每帧都让播放器跳转）。
     // 2026-11-02：没播时也能拖（拖完从该处开始播）；松手回调不可靠时，停手 300ms 自动提交
     var dragging by remember { mutableStateOf<Float?>(null) }
-    val fraction = dragging ?: if (active && totalMs > 0) (st.positionMs.toFloat() / totalMs).coerceIn(0f, 1f) else 0f
+    val posInRange = if (active) st.positionMs - rangeStart else 0L
+    val fraction = dragging ?: if (totalMs > 0) (posInRange.toFloat() / totalMs).coerceIn(0f, 1f) else 0f
     fun commit() {
         val f = dragging ?: return
         dragging = null
-        if (source != null && totalMs > 0) AudioPlayback.seekOrStart(key, source, (f * totalMs).toLong())
+        if (source != null && totalMs > 0) {
+            val absMs = rangeStart + (f * totalMs).toLong()
+            if (isClip) AudioPlayback.seekOrStartClip(key, source, absMs, clipS, clipE)
+            else AudioPlayback.seekOrStart(key, source, absMs)
+        }
     }
     LaunchedEffect(dragging) {
         if (dragging != null) { delay(300); commit() }
     }
 
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        PlayPauseButton(
-            playing = active && st.phase == AudioPlayback.Phase.PLAYING,
-            loading = active && st.phase == AudioPlayback.Phase.LOADING,
-            enabled = source != null,
-            size = 40.dp,
-        ) { source?.let { AudioPlayback.toggle(key, it) } }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Slider(
-                value = fraction,
-                onValueChange = { dragging = it },
-                onValueChangeFinished = { commit() },
-                enabled = source != null && totalMs > 0,
-                modifier = Modifier.fillMaxWidth(),
+    Column(modifier.fillMaxWidth()) {
+        if (isClip) {
+            Text(
+                "仅片段 ${formatPlayTime(clipS)}–${formatPlayTime(clipE!!)}",
+                color = cs.primary, fontSize = 11.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
             )
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                val err = if (active && st.phase == AudioPlayback.Phase.ERROR) st.error else null
-                val left = when {
-                    source == null -> unavailableText
-                    err != null -> err
-                    active && st.phase == AudioPlayback.Phase.LOADING -> "正在加载…"
-                    else -> formatPlayTime(if (dragging != null) (fraction * totalMs).toLong() else if (active) st.positionMs else 0)
+            Spacer(Modifier.height(2.dp))
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            PlayPauseButton(
+                playing = active && st.phase == AudioPlayback.Phase.PLAYING,
+                loading = active && st.phase == AudioPlayback.Phase.LOADING,
+                enabled = source != null,
+                size = 40.dp,
+            ) {
+                source?.let {
+                    if (isClip) AudioPlayback.toggleClip(key, it, clipS, clipE) else AudioPlayback.toggle(key, it)
                 }
-                Text(left, color = if (err != null) cs.error else cs.onSurfaceSecondary, fontSize = 11.5.sp, maxLines = 1)
-                if (totalMs > 0) Text(formatPlayTime(totalMs), color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1)
+            }
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Slider(
+                    value = fraction,
+                    onValueChange = { dragging = it },
+                    onValueChangeFinished = { commit() },
+                    enabled = source != null && totalMs > 0,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    val err = if (active && st.phase == AudioPlayback.Phase.ERROR) st.error else null
+                    val left = when {
+                        source == null -> unavailableText
+                        err != null -> err
+                        active && st.phase == AudioPlayback.Phase.LOADING -> "正在加载…"
+                        else -> formatPlayTime(if (dragging != null) (fraction * totalMs).toLong() else if (active) posInRange.coerceAtLeast(0) else 0)
+                    }
+                    Text(left, color = if (err != null) cs.error else cs.onSurfaceSecondary, fontSize = 11.5.sp, maxLines = 1)
+                    if (totalMs > 0) Text(formatPlayTime(totalMs), color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1)
+                }
             }
         }
     }

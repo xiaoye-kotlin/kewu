@@ -259,22 +259,28 @@ fun AttendanceDetailScreen(
                             answerInput = answerInput, onAnswerChange = { answerInput = it },
                             onCheckInWithCode = { doCheckIn(true) },
                             onCheckInPlain = { doCheckIn(false) },
+                            closed = !s.state.equals("OPEN", true),
                         )
                         Spacer(Modifier.height(14.dp))
                     }
 
                     if (isTeacher) {
                         // 教师端：二维码展示（学生端不显示）
+                        // §86：签到已结束时二维码不再刷新展示，改为一行状态提示（避免「已结束还能扫码」的错位）
                         HubSectionLabel("二维码签到")
-                        DynamicCodeCard(
-                            backdrop = pageBackdrop, code = code, remaining = remaining,
-                            onRefresh = {
-                                scope.launch {
-                                    code = KewuApi.getAttendanceCode(attendanceId)?.also { remaining = it.remainingSeconds }
-                                    refreshSynced()
-                                }
-                            },
-                        )
+                        if (s.state.equals("OPEN", true)) {
+                            DynamicCodeCard(
+                                backdrop = pageBackdrop, code = code, remaining = remaining,
+                                onRefresh = {
+                                    scope.launch {
+                                        code = KewuApi.getAttendanceCode(attendanceId)?.also { remaining = it.remainingSeconds }
+                                        refreshSynced()
+                                    }
+                                },
+                            )
+                        } else {
+                            EmptyHintRow("本次签到已结束，二维码已失效")
+                        }
                         Spacer(Modifier.height(14.dp))
 
                         // 统计
@@ -297,14 +303,18 @@ fun AttendanceDetailScreen(
                         RecordsCard(backdrop = pageBackdrop, records = records, myId = studentId)
                         Spacer(Modifier.height(14.dp))
 
-                        // 老师：结束签到
-                        TeacherCloseCard(backdrop = pageBackdrop, publisher = s.publisher) {
-                            scope.launch {
-                                KewuApi.closeAttendance(attendanceId)
-                                reload()
+                        // 老师：结束签到（§86：只在签到仍在进行时出现；已 CLOSED 就不再显示，避免重复点）
+                        if (s.state.equals("OPEN", true)) {
+                            TeacherCloseCard(backdrop = pageBackdrop, publisher = s.publisher) {
+                                scope.launch {
+                                    KewuApi.closeAttendance(attendanceId)
+                                    reload()
+                                }
                             }
+                            Spacer(Modifier.height(24.dp))
+                        } else {
+                            Spacer(Modifier.height(8.dp))
                         }
-                        Spacer(Modifier.height(24.dp))
                     }
                 } ?: EmptyHintRow("未找到该签到")
             }
@@ -365,6 +375,8 @@ private fun MyCheckInCard(
     onAnswerChange: (String) -> Unit,
     onCheckInWithCode: () -> Unit,
     onCheckInPlain: () -> Unit,
+    /** §86：签到已结束（CLOSED）时不再展示签到动作，只显示结果说明。 */
+    closed: Boolean = false,
 ) {
     val cs = COUITheme.colorScheme
     AttCard(backdrop) {
@@ -380,7 +392,11 @@ private fun MyCheckInCard(
                 Text("风险分 ${record.riskScore}：${record.riskReasons.joinToString("；")}", color = cs.error, fontSize = 12.sp)
             }
         } else {
-            Text("尚未签到", color = cs.onSurfaceSecondary, fontSize = 14.sp)
+            Text(if (closed) "签到已结束，本次未参与" else "尚未签到",
+                color = cs.onSurfaceSecondary, fontSize = 14.sp)
+            if (closed) {
+                // 已结束：不再给签到按钮，避免点了必然失败
+            } else {
             Spacer(Modifier.height(10.dp))
             TextField(
                 value = codeInput, onValueChange = onCodeChange,
@@ -409,6 +425,7 @@ private fun MyCheckInCard(
             checkMsg?.let {
                 Spacer(Modifier.height(8.dp))
                 Text(it, color = if (it.contains("成功")) KewuGreen else cs.error, fontSize = 13.sp)
+            }
             }
         }
     }

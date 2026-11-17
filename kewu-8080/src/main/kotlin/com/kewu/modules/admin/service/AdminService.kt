@@ -366,6 +366,27 @@ class AdminService(
         true
     }
 
+    /**
+     * 删除课堂纪要（§87 总控端纪要管理）：整行删除 class_recordings 里这一节次的记录，
+     * 同时清掉 Redis 里的 AI 生成状态，避免列表刷新后又冒出来。
+     * 只删纪要（摘要/转写/进度），不动原始录音 files。
+     */
+    fun deleteMinute(sessionId: String): Boolean {
+        val existed = transaction {
+            ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.firstOrNull() != null
+        }
+        if (!existed) return false
+        runCatching {
+            transaction { ClassRecordings.deleteWhere { ClassRecordings.sessionId eq sessionId } }
+        }.onFailure { return false }
+        // 清 Redis 实时状态（失败不影响删除结果）
+        runCatching {
+            val redis = com.kewu.db.AiStatusRedis()
+            redis.setStatus(sessionId, """{"status":"PENDING"}""", 1)
+        }
+        return true
+    }
+
     // ---------- OBS 连通性探测（系统健康用） ----------
     private val obsClient by lazy {
         val c = ObsConfiguration().apply { endPoint = obsConfig.endpoint }

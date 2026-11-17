@@ -6,6 +6,7 @@ import com.kewu.app.ClassRecordingInfo
 import com.kewu.app.ClassRoomInfo
 import com.kewu.app.HapticKind
 import com.kewu.app.KewuApi
+import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
 import com.kewu.app.SessionRecordingInfo
 import com.kewu.app.haptic
@@ -24,6 +25,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -262,15 +265,16 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
                             compareBy<SessionRecordingInfo> { it.role.equals("teacher", true) }
                                 .thenBy { order.indexOf(it.focusVerdict).let { i -> if (i < 0) 3 else i } },
                         )
-                        sorted.forEachIndexed { i, r -> StudentRecordingCard(r, i) }
+                        sorted.forEachIndexed { i, r ->
+                            StudentRecordingCard(r, i, backdrop = backdrop, courseId = s.courseId)
+                        }
                     }
                 }
             }
         }
         SlideOverlay(s.takeIf { showReview }) { sess ->
             val students = recs.orEmpty().filter { !it.role.equals("teacher", true) && it.focusVerdict != null }
-            val focusLine = if (students.isEmpty()) "" else
-                students.groupingBy { it.focusVerdict!! }.eachCount().entries.joinToString("，") { "${it.key} ${it.value} 人" }
+            val focusLine = buildFocusLine(students)
             TeachingReviewScreen(sess, courseName, focusLine) { showReview = false }
         }
     }
@@ -286,21 +290,52 @@ internal fun FocusCell(label: String, count: Int, color: androidx.compose.ui.gra
     }
 }
 
+/**
+ * §88 重构：每条听课状态独立成「coui + 液态玻璃」卡。
+ * - 真实姓名（后端已回写归属）可点 → 打开 [StudentContactDialog] 个人主页（联系方式 + 一键拨打）；
+ * - 开小差 / 聊天且后端给了区间 → 播放条只 seek 播放那一段，并标注「仅片段」；
+ * - 不认真状态用强调色描边，老师一眼定位要关注的人。
+ */
 @Composable
-internal fun StudentRecordingCard(r: SessionRecordingInfo, index: Int) {
+internal fun StudentRecordingCard(
+    r: SessionRecordingInfo,
+    index: Int,
+    backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop? = null,
+    courseId: String = "",
+) {
     val cs = COUITheme.colorScheme
     val teacher = r.role.equals("teacher", true)
-    Card(
-        modifier = Modifier.fillMaxWidth().riseEnter(rememberEnterProgress(index)),
-        cornerRadius = 18.dp,
-        insideMargin = PaddingValues(16.dp),
-        colors = kewuCardColors(),
-    ) {
+    var showContact by remember { mutableStateOf(false) }
+    val displayName = r.name ?: r.username ?: if (teacher) "教师端" else "未知同学"
+    val offTrack = r.focusVerdict == "疑似开小差" || r.focusVerdict == "疑似聊天"
+    val hasClip = !teacher && offTrack && r.focusStartSec != null && r.focusEndSec != null &&
+        r.focusEndSec!! > r.focusStartSec!!
+
+    val cardBody: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // 头像：点击进个人主页（学生才有联系方式）
+            Surface(
+                modifier = Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(50))
+                    .then(if (!teacher) Modifier.clickable { haptic(HapticKind.Tick); showContact = true } else Modifier),
+                color = if (offTrack) cs.errorContainer else KewuBlue.copy(alpha = 0.16f),
+            ) {
+                androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        displayName.take(1), color = if (offTrack) cs.onErrorContainer else KewuBlue,
+                        fontSize = 15.sp, fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+            Spacer(Modifier.width(10.dp))
             Text(
-                r.name ?: r.username ?: if (teacher) "教师端" else "未知同学",
-                color = cs.onSurface, fontSize = 15.sp, fontWeight = FontWeight.Medium, maxLines = 1,
-                modifier = Modifier.weight(1f, fill = false),
+                displayName,
+                color = if (!teacher) cs.primary else cs.onSurface, fontSize = 15.sp,
+                fontWeight = FontWeight.Medium, maxLines = 1,
+                modifier = Modifier
+                    .weight(1f, fill = false)
+                    .then(if (!teacher) Modifier.clickable { haptic(HapticKind.Tick); showContact = true } else Modifier),
             )
             Spacer(Modifier.weight(1f))
             when {
@@ -326,7 +361,30 @@ internal fun StudentRecordingCard(r: SessionRecordingInfo, index: Int) {
                 durationHintSec = r.durationSec ?: 0,
                 modifier = Modifier.padding(start = 10.dp, end = 12.dp, top = 8.dp, bottom = 4.dp),
                 stopOnDispose = false,
+                clipStartSec = if (hasClip) r.focusStartSec else null,
+                clipEndSec = if (hasClip) r.focusEndSec else null,
             )
         }
+    }
+
+    val anim = Modifier.fillMaxWidth().riseEnter(rememberEnterProgress(index))
+    if (backdrop != null) {
+        KewuGlassCard(
+            backdrop = backdrop, shape = RoundedCornerShape(18.dp),
+            tintAlpha = if (offTrack) 0.34f else 0.26f, modifier = anim,
+        ) { Column(Modifier.fillMaxWidth().padding(16.dp), content = cardBody) }
+    } else {
+        Card(
+            modifier = anim, cornerRadius = 18.dp,
+            insideMargin = PaddingValues(16.dp), colors = kewuCardColors(),
+            content = cardBody,
+        )
+    }
+
+    if (showContact && !teacher) {
+        StudentContactDialog(
+            name = r.name ?: "", username = r.username, courseId = courseId,
+            onDismiss = { showContact = false },
+        )
     }
 }

@@ -99,6 +99,8 @@ data class SessionRecordingInfo(
     val recordingId: String, val role: String, val username: String?, val name: String?,
     val url: String, val durationSec: Int?, val createdAt: String,
     val transcriptStatus: String?, val focusVerdict: String?, val focusEvidence: String?, val focusConfidence: Int?,
+    /** §88：开小差片段区间（秒），教师端 seek 只播这一段；null = 整轨播放。 */
+    val focusStartSec: Int? = null, val focusEndSec: Int? = null,
 )
 
 /**
@@ -1268,6 +1270,8 @@ object KewuApi {
                 transcriptStatus = o["transcriptStatus"].strOrNull(),
                 focusVerdict = o["focusVerdict"].strOrNull(), focusEvidence = o["focusEvidence"].strOrNull(),
                 focusConfidence = o["focusConfidence"].strOrNull()?.toDoubleOrNull()?.toInt(),
+                focusStartSec = o["focusStartSec"].strOrNull()?.toDoubleOrNull()?.toInt(),
+                focusEndSec = o["focusEndSec"].strOrNull()?.toDoubleOrNull()?.toInt(),
             )
         })
     } catch (e: CancellationException) { throw e }

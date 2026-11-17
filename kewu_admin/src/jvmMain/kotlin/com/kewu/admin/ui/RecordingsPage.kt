@@ -53,9 +53,9 @@ fun RecordingsPage(api: AdminApi, notify: (String) -> Unit) {
     var working by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    suspend fun reload() {
-        loading = true
-        error = null
+    suspend fun reload(silent: Boolean = false) {
+        if (!silent) loading = true
+        if (!silent) error = null
         obsError = null
         var dbItems = result.items
         var dbFailed: String? = null
@@ -82,8 +82,10 @@ fun RecordingsPage(api: AdminApi, notify: (String) -> Unit) {
             // 数据库异常但 OBS 可读时仍展示 OBS 对象，同时在页面给出警告。
             error = null
         }
-        loading = false
+        if (!silent) loading = false
     }
+    // §87：录音列表每 20 秒静默刷新（OBS 侧随时会有新上传，不必手动点刷新）
+    PollEffect(20_000, key = role) { reload(silent = true) }
     LaunchedEffect(role) {
         AdminPrefetch.awaitReady()
         // 首屏且筛选为空：两套缓存都有则直接合并展示，省去一次 DB 分页 + OBS 全量。

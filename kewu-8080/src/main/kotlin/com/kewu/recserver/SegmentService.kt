@@ -2,6 +2,7 @@ package com.kewu.recserver
 
 import com.kewu.db.Classes
 import com.kewu.db.Recordings
+import com.kewu.db.Users
 import com.kewu.recserver.model.RecordingMeta
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -37,6 +38,9 @@ class SegmentService(private val services: RecServices) {
         val durationSec: Double = 0.0,
         val role: String = "student",
         val at: Long = 0L,
+        /** §87：上传者账号 / 显示名 —— 拼成整轨时要写回录音归属，否则教师端听课状态会显示「未知同学」。 */
+        val username: String? = null,
+        val displayName: String? = null,
     )
 
     data class MergeResult(val groups: Int, val merged: Int, val segments: Int)
@@ -73,6 +77,22 @@ class SegmentService(private val services: RecServices) {
             val durationSec = metas.sumOf { it.durationSec }
             val role = metas.first().role
             val classId = sessionId.substringBeforeLast('-')
+            // §87：段里带了上传者账号 → 拼回的整轨要保留归属，否则教师端「听课状态」显示未知同学
+            val owner = metas.firstOrNull { !it.username.isNullOrBlank() }
+            val ownerId = owner?.username?.let { uname ->
+                runCatching {
+                    transaction { Users.selectAll().where { Users.username eq uname }.firstOrNull()?.get(Users.id) }
+                }.getOrNull()
+            }
+            val ownerName = owner?.displayName?.takeIf { it.isNotBlank() }
+                ?: owner?.username?.let { uname ->
+                    runCatching {
+                        transaction {
+                            Users.selectAll().where { Users.username eq uname }.firstOrNull()
+                                ?.let { it[Users.nickname] ?: it[Users.username] }
+                        }
+                    }.getOrNull()
+                }
 
             val recordingId = "merged-" + UUID.randomUUID()
             val url = services.storage.save(
@@ -94,8 +114,8 @@ class SegmentService(private val services: RecServices) {
                         it[Recordings.classId] = classId
                         it[Recordings.sessionId] = sessionId
                         it[Recordings.courseId] = courseId
-                        it[Recordings.studentId] = null
-                        it[Recordings.studentName] = null
+                        it[Recordings.studentId] = ownerId
+                        it[Recordings.studentName] = ownerName
                         it[Recordings.role] = role
                         it[Recordings.deviceId] = group.take(64)
                         it[Recordings.url] = url

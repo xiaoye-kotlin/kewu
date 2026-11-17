@@ -68,9 +68,11 @@ class SisTranscriptionService(@Suppress("unused") private val initial: SisConfig
             val o = seg as? JsonObject ?: return@mapNotNull null
             val text = ((o["result"] as? JsonObject)?.get("text") as? JsonPrimitive)?.content?.trim().orEmpty()
             if (text.isEmpty()) return@mapNotNull null
+            // §87：逐段也做专有名词纠错（拼接前，保证时间轴不受影响）
+            val fixed = Glossary.fix(text)
             val st = (o["start_time"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong() ?: 0L
             val et = (o["end_time"] as? JsonPrimitive)?.content?.toDoubleOrNull()?.toLong() ?: st
-            Segment(st, et, text)
+            Segment(st, et, fixed)
         }
     }
 
@@ -299,7 +301,7 @@ class SisTranscriptionService(@Suppress("unused") private val initial: SisConfig
                 val result = seg["result"]
                 if (result is JsonObject) (result["text"] as? JsonPrimitive)?.content else null
             } else null
-        }.joinToString("\n")
+        }.joinToString("\n").let { Glossary.fix(it) }
     }
 
     private fun nowUtc(): String =

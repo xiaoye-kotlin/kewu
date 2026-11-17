@@ -985,8 +985,8 @@ private fun TaBubble(
     onLongPress: (() -> Unit)? = null,
     /** 文字选择模式：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
     selectFor: ChatTextSelectState? = null,
-    /** 旧版控制「省略头像」的参数，共用气泡已统一不带头像，保留仅为兼容既有调用点。 */
-    @Suppress("UNUSED_PARAMETER") showAvatar: Boolean = true,
+    /** 旧版控制「省略头像」的参数（§86 起重新生效：与学生端 weui 规则一致，连续 AI 消息省略头像）。 */
+    showAvatar: Boolean = true,
 ) {
     val text = msg.blocks.joinToString("\n") { b ->
         when (b) {
@@ -1022,14 +1022,24 @@ private fun TaBubble(
             selectFor = selectFor,
         )
     } else {
-        ChatAiBubble(
-            msg = AiChatMsg(text = text, isUser = false, id = msg.id, ts = msg.ts),
-            backdrop = backdrop,
-            reportBounds = reportBounds,
-            onBounds = onBounds,
-            onLongPress = press,
-            selectFor = selectFor,
-        )
+        // §86：与学生端 ChatMessageItem 完全一致 —— AI 气泡左侧「小悟头像」(40dp 圆角方 + 绿色底 + 中心柔光)，
+        // 连续 AI 消息省略头像时用同宽 40dp 占位保持气泡左缘对齐。
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            if (showAvatar) {
+                ChatAiAvatar()
+                Spacer(Modifier.width(8.dp))
+            } else {
+                Spacer(Modifier.width(40.dp))
+            }
+            ChatAiBubble(
+                msg = AiChatMsg(text = text, isUser = false, id = msg.id, ts = msg.ts),
+                backdrop = backdrop,
+                reportBounds = reportBounds,
+                onBounds = onBounds,
+                onLongPress = press,
+                selectFor = selectFor,
+            )
+        }
     }
 }
 

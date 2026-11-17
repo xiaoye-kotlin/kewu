@@ -83,7 +83,9 @@ class ClassEndService(private val services: RecServices) {
                         transcriptStatus = t?.get(RecordingTranscripts.status),
                         focusVerdict = t?.get(RecordingTranscripts.focusVerdict),
                         focusEvidence = t?.get(RecordingTranscripts.focusEvidence),
-                        focusConfidence = t?.get(RecordingTranscripts.focusConfidence)
+                        focusConfidence = t?.get(RecordingTranscripts.focusConfidence),
+                        focusStartSec = t?.get(RecordingTranscripts.focusStartSec),
+                        focusEndSec = t?.get(RecordingTranscripts.focusEndSec),
                     )
                 }
             // recordings 表缺的（老数据只在转写表里）补上
@@ -94,7 +96,9 @@ class ClassEndService(private val services: RecServices) {
                     username = t[RecordingTranscripts.username], name = t[RecordingTranscripts.displayName],
                     url = t[RecordingTranscripts.url], transcriptStatus = t[RecordingTranscripts.status],
                     focusVerdict = t[RecordingTranscripts.focusVerdict], focusEvidence = t[RecordingTranscripts.focusEvidence],
-                    focusConfidence = t[RecordingTranscripts.focusConfidence]
+                    focusConfidence = t[RecordingTranscripts.focusConfidence],
+                    focusStartSec = t[RecordingTranscripts.focusStartSec],
+                    focusEndSec = t[RecordingTranscripts.focusEndSec],
                 )
             }
         }
@@ -491,8 +495,9 @@ class ClassEndService(private val services: RecServices) {
 
     private suspend fun analyzeFocus(courseName: String, lecture: String, t: Track) {
         val maas = services.ai as? com.kewu.recserver.services.ai.MaasAiService ?: return
-        val text = t.segments.joinToString("\n") { it.text }
-        if (text.length < 20) return
+        // §88：带时间标记喂给 AI，让它能指出「开小差那几句」的秒数区间（教师端 seek 片段播放用）。
+        val text = t.segments.joinToString("\n") { "[${it.startMs / 1000}-${it.endMs / 1000}] ${it.text}" }
+        if (t.segments.sumOf { it.text.length } < 20) return
         val raw = maas.focusAnalysis(courseName, lecture, text)
         val obj = runCatching {
             val start = raw.indexOf('{'); val end = raw.lastIndexOf('}')
@@ -501,11 +506,20 @@ class ClassEndService(private val services: RecServices) {
         val verdict = obj["verdict"]?.jsonPrimitive?.content?.takeIf { it in setOf("认真", "疑似开小差", "疑似聊天") } ?: return
         val evidence = obj["evidence"]?.jsonPrimitive?.content.orEmpty().take(200)
         val confidence = obj["confidence"]?.jsonPrimitive?.content?.toDoubleOrNull()?.toInt()?.coerceIn(0, 100)
+        // §88：开小差/聊天才保留区间；认真或 AI 未给（0）则为 null。终点需大于起点且不超过录音时长。
+        val maxSec = (t.meta.durationSec ?: 0.0).toInt()
+        var ss = obj["startSec"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+        var es = obj["endSec"]?.jsonPrimitive?.content?.toIntOrNull() ?: 0
+        if (verdict == "认真" || es <= ss) { ss = 0; es = 0 }
+        if (es > 0 && maxSec > 0) es = minOf(es, maxSec)
+        if (es > 0 && es - ss < 3) es = ss + 3 // 至少 3 秒，避免片段过短听不清
         transaction {
             RecordingTranscripts.update({ RecordingTranscripts.recordingId eq t.meta.recordingId }) {
                 it[focusVerdict] = verdict
                 it[focusEvidence] = evidence
                 it[focusConfidence] = confidence
+                it[focusStartSec] = ss.takeIf { v -> v > 0 }
+                it[focusEndSec] = es.takeIf { v -> v > 0 }
             }
         }
     }
@@ -548,7 +562,10 @@ class ClassEndService(private val services: RecServices) {
         val transcriptStatus: String? = null,
         val focusVerdict: String? = null,
         val focusEvidence: String? = null,
-        val focusConfidence: Int? = null
+        val focusConfidence: Int? = null,
+        /** §88：开小差片段区间（秒）；教师端只 seek 播放这一段。 */
+        val focusStartSec: Int? = null,
+        val focusEndSec: Int? = null,
     )
 
 }
