@@ -194,7 +194,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         mutableStateOf(ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds()))
     }
     var hasMoreHistory by remember {
-        mutableStateOf(chatStore.any { it.ts < visibleCutoff })
+        mutableStateOf(chatStore.any { it.ts > 0 && it.ts < visibleCutoff })
     }
     val messages = remember { mutableListOf<TaMsg>() }
     var msgVersion by remember { mutableStateOf(0) }
@@ -223,7 +223,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         }
         // 按 id 合并写入（不覆盖更早几天的记录 / 页面不在时 AssistantHub 追加的回复）
         ChatHistory.upsert(ChatHistory.KEY_TEACHER, entries)
-        hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
+        // §85：用最新存档重算，快照 chatStore 不随 upsert 更新
+        hasMoreHistory = ChatHistory.loadAll(ChatHistory.KEY_TEACHER).any { it.ts > 0 && it.ts < visibleCutoff }
     }
 
     /**
@@ -264,8 +265,15 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
     // 顶部下拉加载更早一天
     fun loadOlderDay() {
-        val older = chatStore.filter { it.ts < visibleCutoff }
-        if (older.isEmpty()) return
+        // ★ 2026-11-17 §85：用**最新存档**判断，别用进入页面时的 chatStore 快照
+        val all = ChatHistory.loadAll(ChatHistory.KEY_TEACHER)
+        // ts<=0 是早期无时间戳的老记录：不能算「更早对话」，否则下拉永远加载不出东西、提示也关不掉
+        val older = all.filter { it.ts > 0 && it.ts < visibleCutoff }
+        if (older.isEmpty()) {
+            // 已经没有更早的对话了：立刻把提示关掉，避免顶部一直挂着「下拉查看更早对话」
+            hasMoreHistory = false
+            return
+        }
         val nextCutoff = ChatHistory.dayStart(visibleCutoff - 1)
         val newly = older.filter { it.ts >= nextCutoff }.map { e ->
             restored(e)
@@ -273,6 +281,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         visibleCutoff = nextCutoff
         messages.addAll(0, newly)
         msgVersion++
+        // 加载完按「还剩多少更早的」重算：最后一天取完就隐藏提示（§85）
+        hasMoreHistory = all.any { it.ts > 0 && it.ts < nextCutoff }
     }
 
     LaunchedEffect(Unit) {
@@ -754,7 +764,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 modifier = Modifier.fillMaxWidth().weight(1f).nestedScroll(pullConnection),
                 contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 12.dp),
             ) {
-                item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
+                // §85：没有更早的对话就完全不渲染这条提示（不再占位一行）
+                if (hasMoreHistory) item(key = "history-tip") { PullHistoryHint(true, pullAcc / pullLoadPx) }
                 // P8：日期/时间由每条消息上方的 chatTimeLabel 承担（5 分钟规则），不再单独插日期行
                 // P8 微信时间条：与上一条间隔 >5 分钟或跨天时，本条上方插一条居中灰字时间
                 itemsIndexed(snapshot, key = { _, m -> m.id }, contentType = { _, m -> m.isUser }) { idx, msg ->

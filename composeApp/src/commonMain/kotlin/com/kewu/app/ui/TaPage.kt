@@ -170,7 +170,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         mutableStateOf(ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds()))
     }
     var hasMoreHistory by remember {
-        mutableStateOf(chatStore.any { it.ts < visibleCutoff })
+        mutableStateOf(chatStore.any { it.ts > 0 && it.ts < visibleCutoff })
     }
     fun entriesToMsgs(list: List<ChatHistory.Entry>): List<ChatMsg> = list.map { e ->
         ChatMsg(
@@ -196,7 +196,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
         // 按 id 合并写入（不覆盖页面没加载的更早消息 / 页面不在时 AssistantHub 追加的回复）
         ChatHistory.upsert(ChatHistory.KEY_STUDENT, entries)
         // 是否还有更早历史：以全量存档为准（内存里可能只有今天的消息）
-        hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
+        // §85：用最新存档重算，chatStore 快照不随 upsert 更新
+        hasMoreHistory = ChatHistory.loadAll(ChatHistory.KEY_STUDENT).any { it.ts > 0 && it.ts < visibleCutoff }
     }
     // 今天的聊天记录：有历史就不重复显示欢迎语（2026-10-24 用户反馈：每天第一条消息才需要问候）
     val todayEntries = remember(chatStore) { chatStore.filter { it.ts >= visibleCutoff } } // 旧版每敲一个字都全量过滤
@@ -221,12 +222,21 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
     }
     // 顶部下拉加载更早一天
     fun loadOlderDay() {
-        val older = chatStore.filter { it.ts < visibleCutoff }
-        if (older.isEmpty()) return
+        // ★ 2026-11-17 §85：用最新存档判断（chatStore 是进页快照，不随聊新增/更早进度更新）
+        val all = ChatHistory.loadAll(ChatHistory.KEY_STUDENT)
+        // ts<=0 是早期无时间戳的老记录：不能算「更早对话」（§85）
+        val older = all.filter { it.ts > 0 && it.ts < visibleCutoff }
+        if (older.isEmpty()) {
+            // 没有更早的对话了：立刻隐藏顶部「下拉查看更早对话」
+            hasMoreHistory = false
+            return
+        }
         val nextCutoff = ChatHistory.dayStart(visibleCutoff - 1)
         val newly = entriesToMsgs(older.filter { it.ts >= nextCutoff })
         visibleCutoff = nextCutoff
         messages = newly + messages
+        // 取完最后一天就隐藏提示
+        hasMoreHistory = all.any { it.ts > 0 && it.ts < nextCutoff }
     }
     var input by remember { mutableStateOf("") }
     // ★ 引用预览（第三轮 12.8）：引用不再塞进输入框，而是在输入框**上方**单独显示一条灰色小条，
@@ -599,7 +609,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
+                // §85：没有更早的对话就完全不渲染这条提示（不再占位一行）
+                if (hasMoreHistory) item(key = "history-tip") { PullHistoryHint(true, pullAcc / pullLoadPx) }
                 // P8：日期/时间由每条消息上方的 chatTimeLabel 承担（5 分钟规则），不再单独插日期行
                 // 防御：同 id 只渲染一条（LazyColumn key 重复会直接崩溃，历史合并 / 回补时可能出现重复）
                 val visibleMsgs = messages.distinctBy { it.id }

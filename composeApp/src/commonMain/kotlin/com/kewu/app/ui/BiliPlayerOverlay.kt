@@ -345,7 +345,7 @@ private fun VideoTutorPanel(
     var visibleCutoff by remember(bvid) {
         mutableStateOf(ChatHistory.dayStart(kotlin.time.Clock.System.now().toEpochMilliseconds()))
     }
-    var hasMoreHistory by remember(bvid) { mutableStateOf(chatStore.any { it.ts < visibleCutoff }) }
+    var hasMoreHistory by remember(bvid) { mutableStateOf(chatStore.any { it.ts > 0 && it.ts < visibleCutoff }) }
     fun entryToMsg(e: ChatHistory.Entry) = AiChatMsg(
         text = e.text, isUser = e.role == "user", id = e.id, ts = e.ts, quote = e.quote,
     )
@@ -360,16 +360,19 @@ private fun VideoTutorPanel(
             )
         }
         ChatHistory.upsert(chatKey, entries)
-        hasMoreHistory = chatStore.any { it.ts < visibleCutoff }
+        // §85：用最新存档重算（chatStore 是进页快照，不随 upsert 更新）
+        hasMoreHistory = ChatHistory.loadAll(chatKey).any { it.ts > 0 && it.ts < visibleCutoff }
     }
     // 顶部下拉加载更早一天（与助教页同款 110dp 阈值）
     fun loadOlderDay() {
-        val older = chatStore.filter { it.ts < visibleCutoff }
-        if (older.isEmpty()) return
+        // §85：用最新存档 + 排除 ts<=0 的老记录，避免「下拉没反应、提示也关不掉」
+        val all = ChatHistory.loadAll(chatKey)
+        val older = all.filter { it.ts > 0 && it.ts < visibleCutoff }
+        if (older.isEmpty()) { hasMoreHistory = false; return }
         val nextCutoff = ChatHistory.dayStart(visibleCutoff - 1)
         msgs = older.filter { it.ts >= nextCutoff }.map(::entryToMsg) + msgs
         visibleCutoff = nextCutoff
-        hasMoreHistory = chatStore.any { it.ts < nextCutoff }
+        hasMoreHistory = all.any { it.ts > 0 && it.ts < nextCutoff }
     }
     // 对话内容变化即落盘（欢迎语 id=-1 不入盘）
     LaunchedEffect(msgs) { persistConversation() }
@@ -651,7 +654,7 @@ private fun VideoTutorPanel(
                 contentPadding = PaddingValues(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                item(key = "history-tip") { PullHistoryHint(hasMoreHistory, pullAcc / pullLoadPx) }
+                if (hasMoreHistory) item(key = "history-tip") { PullHistoryHint(true, pullAcc / pullLoadPx) }
                 msgs.distinctBy { it.id }.forEach { m ->
                     item(key = m.id, contentType = m.isUser) {
                         ChatMessageItem(m, backdrop, menu)
