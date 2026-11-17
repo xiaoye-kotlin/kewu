@@ -17,9 +17,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AdminPanelSettings
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.RadioButtonUnchecked
+import io.github.suqi8.coui.kmp.basic.HorizontalDivider
 import io.github.suqi8.coui.kmp.basic.Icon
+import io.github.suqi8.coui.kmp.basic.Switch
 import androidx.compose.material3.MaterialTheme
 import io.github.suqi8.coui.kmp.basic.Text
 import androidx.compose.runtime.Composable
@@ -134,15 +134,32 @@ fun LoginScreen(api: AdminApi, onLogin: (AdminSession) -> Unit) {
                 AdminLoginField(password, { password = it }, "密码", password = true, enabled = !loading)
                 Spacer(Modifier.height(14.dp))
 
-                // 记住密码 / 自动登录
-                CheckOption("记住密码", remember, enabled = !loading) {
-                    remember = it
-                    if (!it) autoLogin = false // 取消记住密码时自动登录也失效
-                }
-                Spacer(Modifier.height(6.dp))
-                CheckOption("自动登录（启动时免输入）", autoLogin, enabled = !loading && remember) {
-                    autoLogin = it
-                    if (it) remember = true
+                // 记住密码 / 自动登录（coui 原生 Switch，视觉与 App 一致）
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .background(cs.surfaceContainer.copy(alpha = 0.55f), RoundedCornerShape(14.dp))
+                        .padding(horizontal = 14.dp, vertical = 4.dp),
+                ) {
+                    SwitchOption(
+                        title = "记住密码",
+                        subtitle = "下次打开自动填入本机保存的账号密码",
+                        checked = remember,
+                        enabled = !loading,
+                    ) {
+                        remember = it
+                        if (!it) autoLogin = false // 取消记住密码时自动登录也失效
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.12f))
+                    SwitchOption(
+                        title = "自动登录",
+                        subtitle = "启动时免输入，直接进入控制台",
+                        checked = autoLogin,
+                        enabled = !loading && remember,
+                    ) {
+                        autoLogin = it
+                        if (it) remember = true
+                    }
                 }
 
                 if (error != null) {
@@ -181,21 +198,33 @@ fun LoginScreen(api: AdminApi, onLogin: (AdminSession) -> Unit) {
     }
 }
 
-/** 轻量勾选行：用 coui 文本 + material 图标自绘，避免额外依赖。 */
+/** coui 原生开关选项行：标题 + 说明 + Switch，点击整行也可切换。 */
 @Composable
-private fun CheckOption(label: String, checked: Boolean, enabled: Boolean, onChecked: (Boolean) -> Unit) {
+private fun SwitchOption(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    enabled: Boolean,
+    onChecked: (Boolean) -> Unit,
+) {
     Row(
-        Modifier.fillMaxWidth().height(30.dp).alpha(if (enabled) 1f else 0.45f).clickable(enabled = enabled) { onChecked(!checked) },
+        Modifier
+            .fillMaxWidth()
+            .alpha(if (enabled) 1f else 0.45f)
+            .clickable(enabled = enabled) { onChecked(!checked) }
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(
-            if (checked) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
-            null,
-            tint = if (checked) KewuBlue else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(18.dp),
+        Column(Modifier.weight(1f)) {
+            Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(subtitle, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(
+            checked = checked,
+            onCheckedChange = { onChecked(it) },
+            enabled = enabled,
         )
-        Spacer(Modifier.width(8.dp))
-        Text(label, color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp)
     }
 }
 

@@ -107,6 +107,7 @@ fun ServerPage(api: AdminApi) {
     val h = health
     Column(Modifier.fillMaxSize()) {
         PageHeader("服务器实时状态", "系统性能、Ktor 服务、后端进程与运行时长，每 3 秒刷新") {
+            StatusPill("后端端口 :${api.currentPort()}", StatusTone.SUCCESS)
             StatusPill("实时监控中", StatusTone.SUCCESS)
             Text("更新于 $updatedAt", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             OutlinedButton(onClick = { scope.launch { refresh() } }) {
@@ -127,8 +128,11 @@ fun ServerPage(api: AdminApi) {
                     SectionTitle(Icons.Outlined.Computer, "系统信息")
                     InfoLine("主机名", m?.hostname ?: "—")
                     InfoLine("操作系统", "${m?.osName ?: "—"} ${m?.osVersion ?: ""}".trim())
-                    InfoLine("CPU", "${m?.cpuModel ?: "—"} · ${m?.cpuCores ?: "—"} 线程")
+                    InfoLine("CPU", "${m?.cpuModel ?: "—"}")
+                    InfoLine("核心 / 线程", "${m?.cpuPhysicalCores ?: "—"} 核 · ${m?.cpuCores ?: "—"} 线程")
                     InfoLine("系统运行时长", formatDuration(m?.osUptimeSeconds))
+                    InfoLine("进程 / 线程数", "${m?.processCount?.toString() ?: "—"} 进程 · ${m?.threadCount?.toString() ?: "—"} 线程")
+                    InfoLine("1 分钟系统负载", m?.cpuLoad1Min?.let { String.format("%.2f", it) } ?: "—")
                     monitorError?.let { WarningLine(it) }
                 }
             }
@@ -142,6 +146,9 @@ fun ServerPage(api: AdminApi) {
                         UsageBar("内存", 1.0 - m.freeRamBytes.toDouble() / m.totalRamBytes.coerceAtLeast(1), m.totalRamBytes - m.freeRamBytes to m.totalRamBytes)
                         UsageBar("系统盘", 1.0 - m.diskFreeBytes.toDouble() / m.diskTotalBytes.coerceAtLeast(1), m.diskTotalBytes - m.diskFreeBytes to m.diskTotalBytes)
                         UsageBar("总控端 JVM 堆", m.adminHeapUsedBytes.toDouble() / m.adminHeapMaxBytes.coerceAtLeast(1), m.adminHeapUsedBytes to m.adminHeapMaxBytes)
+                        if (m.swapTotalBytes > 0) {
+                            UsageBar("交换分区", m.swapUsedBytes.toDouble() / m.swapTotalBytes, m.swapUsedBytes to m.swapTotalBytes)
+                        }
                     }
                 }
             }
@@ -198,16 +205,17 @@ fun ServerPage(api: AdminApi) {
             }
             Panel(Modifier.weight(1f)) {
                 Column(Modifier.padding(22.dp)) {
-                    SectionTitle(Icons.Outlined.Storage, "磁盘与采样")
+                    SectionTitle(Icons.Outlined.Storage, "网络 / 磁盘吞吐")
+                    InfoLine("网络下行", formatRate(m?.networkRxBytesPerSec))
+                    InfoLine("网络上行", formatRate(m?.networkTxBytesPerSec))
+                    InfoLine("磁盘读取", formatRate(m?.diskReadBytesPerSec))
+                    InfoLine("磁盘写入", formatRate(m?.diskWriteBytesPerSec))
                     InfoLine("当前系统盘", currentDriveLabel(m))
-                    InfoLine("磁盘剩余", formatBytes(m?.diskFreeBytes ?: 0L))
-                    InfoLine("磁盘总量", formatBytes(m?.diskTotalBytes ?: 0L))
-                    InfoLine("数据采样间隔", "3 秒")
                     Spacer(Modifier.height(10.dp))
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Timer, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                         Text(
-                            " 总控端持续采集本机指标；后端运行时长来自本机 Java 进程启动时间。",
+                            "  采集引擎 OSHI（跨平台系统 API）· 每 3 秒采样一次",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -283,6 +291,15 @@ private fun formatDuration(seconds: Long?): String {
 }
 
 private fun formatCpuSeconds(value: Double?): String = if (value == null) "—" else "%.1f 秒".format(value)
+
+/** 吞吐速率：B/s → 人类可读（KB/s、MB/s）。null 表示首次采样（需要两次差值）。 */
+private fun formatRate(bytesPerSec: Long?): String {
+    if (bytesPerSec == null) return "采样中…"
+    if (bytesPerSec < 1024) return "$bytesPerSec B/s"
+    val kb = bytesPerSec / 1024.0
+    if (kb < 1024) return "%.1f KB/s".format(kb)
+    return "%.2f MB/s".format(kb / 1024.0)
+}
 
 private fun formatPercentValue(value: Double?): String = if (value == null) "—" else "%.0f%%".format(value * 100.0)
 

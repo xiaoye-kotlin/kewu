@@ -46,6 +46,17 @@ class AdminApi(
             baseUrl = "http://127.0.0.1:$port"
         }
     }
+
+    /** 当前后端端口：优先部署/自检注入值，否则从生效的 baseUrl 解析。供首页显著展示（§81）。 */
+    fun currentPort(): Int {
+        if (deployedPort in 1..65535) return deployedPort
+        return runCatching {
+            val afterScheme = baseUrl.substringAfter("://", "")
+            val hostPort = afterScheme.substringBefore("/")
+            hostPort.substringAfterLast(':').toIntOrNull()?.takeIf { it in 1..65535 }
+                ?: if (hostPort.startsWith("http")) 80 else 80
+        }.getOrDefault(8080)
+    }
     private val client = HttpClient(OkHttp) {
         expectSuccess = false
         // 强制直连：服务器上装有 CCProxy 等系统代理时，OkHttp 默认会走系统代理，

@@ -8,7 +8,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Assignment
 import androidx.compose.material.icons.outlined.Cloud
@@ -43,6 +45,7 @@ import com.kewu.admin.formatBytes
 import com.kewu.admin.formatCount
 import com.kewu.admin.long
 import com.kewu.admin.str
+import io.github.suqi8.coui.kmp.basic.Surface
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -114,6 +117,22 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
 
     Column(Modifier.fillMaxSize()) {
         PageHeader("运行概览", "平台数据与服务器组件状态，每 30 秒自动刷新") {
+            // 当前后端端口——用户要求首页显著展示（§81）。
+            Surface(
+                color = KewuBlue.copy(alpha = 0.12f),
+                contentColor = KewuBlue,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.align(Alignment.CenterVertically),
+            ) {
+                Row(Modifier.padding(horizontal = 12.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Cloud, null, tint = KewuBlue, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("后端端口", fontSize = 12.sp, color = KewuBlue)
+                    Spacer(Modifier.width(4.dp))
+                    Text(":${api.currentPort()}", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = KewuBlue)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
             OutlinedButton(onClick = onDeploy) {
                 Icon(Icons.Outlined.CloudUpload, null)
                 Spacer(Modifier.width(6.dp))

@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.kewu"
-version = "1.0.18"
+version = "1.0.19"
 
 repositories {
     mavenCentral()
@@ -37,6 +37,12 @@ kotlin {
                 implementation("io.ktor:ktor-client-core:2.3.12")
                 implementation("io.ktor:ktor-client-okhttp:2.3.12")
                 implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+                // OSHI：跨平台操作系统/硬件信息（CPU 型号/负载、物理内存、磁盘、系统运行时长、
+                // 进程 CPU/内存、网络流量、TCP 连接数），取代慢且易失败的 PowerShell 采样（§81）。
+                implementation("com.github.oshi:oshi-core:7.8.0")
+                // OSHI 依赖 slf4j-api；桌面端不需要日志输出，绑定 nop 避免启动时打
+                // "No SLF4J providers were found" 警告。
+                implementation("org.slf4j:slf4j-nop:2.0.20")
                 // 与学生端 / 教师端完全一致的 coui 视觉体系。
                 implementation("io.github.suqi8.coui.kmp:coui-blur:1.1.0")
                 implementation("io.github.suqi8.coui.kmp:coui-ui:1.1.0")
@@ -67,7 +73,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
-            packageVersion = "1.0.18"
+            packageVersion = "1.0.19"
             description = "课悟平台总控端"
             vendor = "Kewu"
         }
