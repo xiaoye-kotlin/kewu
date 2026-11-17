@@ -23,7 +23,8 @@ class FocusService(
     private val ai: FocusAiClient,
 ) {
     companion object {
-        private const val AI_TIMEOUT_MS = 15_000L
+        // 外层兜底要比 FocusAiClient 的 requestTimeout(90s) 略大，让客户端自己的超时先生效并记录真实原因
+        private const val AI_TIMEOUT_MS = 100_000L
     }
 
     fun start(userId: String, req: FocusStartRequest): FocusStartResult {

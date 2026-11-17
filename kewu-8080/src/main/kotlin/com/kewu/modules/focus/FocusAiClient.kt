@@ -26,9 +26,11 @@ class FocusAiClient {
     private val log = LoggerFactory.getLogger(FocusAiClient::class.java)
     private val client = HttpClient(CIO) {
         install(HttpTimeout) {
-            requestTimeoutMillis = 12_000
-            connectTimeoutMillis = 5_000
-            socketTimeoutMillis = 12_000
+            // 新 MaaS 是推理模型（deepseek-v4.1-flash-1017），content 之外还要生成 reasoning_content，
+            // 12s 经常不够（2026-11-17 实测超时回落）。与纪要客户端 HuaweiMaaSClient 对齐，给足 90s。
+            requestTimeoutMillis = 90_000
+            connectTimeoutMillis = 15_000
+            socketTimeoutMillis = 90_000
         }
     }
 
