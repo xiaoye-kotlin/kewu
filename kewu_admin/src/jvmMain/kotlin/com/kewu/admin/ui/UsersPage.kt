@@ -1,6 +1,8 @@
 package com.kewu.admin.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -8,7 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Refresh
@@ -22,12 +26,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import io.github.suqi8.coui.kmp.basic.Surface
+import io.github.suqi8.coui.kmp.theme.COUITheme
 import com.kewu.admin.AdminApi
 import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.PageResult
+import com.kewu.admin.bool
 import com.kewu.admin.jsonBody
 import com.kewu.admin.long
 import com.kewu.admin.obj
@@ -113,7 +123,7 @@ fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
             result.items.isEmpty() -> EmptyBlock("没有找到用户")
             else -> DataTable(
                 items = result.items,
-                columns = listOf(TableColumn("账号", 1.1f), TableColumn("昵称", 1.2f), TableColumn("角色", .8f), TableColumn("状态", .8f), TableColumn("用户 ID", 1.7f), TableColumn("操作", .7f)),
+                columns = listOf(TableColumn("账号", 1.1f), TableColumn("昵称", 1.1f), TableColumn("在线", .9f), TableColumn("角色", .8f), TableColumn("状态", .8f), TableColumn("用户 ID", 1.5f), TableColumn("操作", .7f)),
                 modifier = Modifier.weight(1f),
                 key = { it.str("id", "") },
                 onRowClick = { editing = it },
@@ -121,6 +131,7 @@ fun UsersPage(api: AdminApi, notify: (String) -> Unit) {
                 when (column.title) {
                     "账号" -> TableText(user.str("username"), bold = true)
                     "昵称" -> TableText(user.str("nickname"))
+                    "在线" -> OnlineBadge(user.bool("online"), user.str("lastSeen").ifBlank { null })
                     "角色" -> StatusPill(roleLabel(user.str("role", "")), if (user.str("role", "") == "ADMIN") StatusTone.INFO else StatusTone.NEUTRAL)
                     "状态" -> StatusPill(statusLabel(user.str("status", "active")), if (user.str("status", "active").equals("active", true)) StatusTone.SUCCESS else StatusTone.ERROR)
                     "用户 ID" -> TableText(user.str("id"), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -243,8 +254,7 @@ private fun UserEditorDialog(
 }
 
 @Composable
-private fun ResetPasswordDialog(working: Boolean, onDismiss: () -> Unit, onSubmit: (String) -> Unit) {
-    var password by remember { mutableStateOf("") }
+private fun ResetPasswordDialog(working: Boolean, onDismiss: () -> Unit, onSubmit: (String) -> Unit) {    var password by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("重置密码") },
@@ -252,4 +262,38 @@ private fun ResetPasswordDialog(working: Boolean, onDismiss: () -> Unit, onSubmi
         confirmButton = { Button(enabled = password.length >= 6 && !working, onClick = { onSubmit(password) }) { Text("确认重置") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
     )
+}
+
+/**
+ * 在线状态徽标（coui 风格，§83）：小圆点 + 文案。
+ * 在线 = 绿色实心点 + 淡绿底；离线 = 灰点 + 淡灰底；从未活跃 = 更浅的灰。
+ */
+@Composable
+private fun OnlineBadge(online: Boolean, lastSeen: String?) {
+    val cs = COUITheme.colorScheme
+    val color = when {
+        online -> KewuGreenDeep
+        lastSeen != null -> MaterialTheme.colorScheme.onSurfaceVariant
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    }
+    val label = when {
+        online -> "在线"
+        lastSeen != null -> "离线"
+        else -> "未登录"
+    }
+    Surface(
+        color = color.copy(alpha = if (online) 0.14f else 0.08f),
+        contentColor = color,
+        shape = RoundedCornerShape(50),
+    ) {
+        Row(Modifier.padding(horizontal = 9.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                Modifier
+                    .size(if (online) 7.dp else 6.dp)
+                    .background(color, RoundedCornerShape(50)),
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(label, color = color, fontSize = 12.sp, fontWeight = if (online) FontWeight.SemiBold else FontWeight.Normal)
+        }
+    }
 }

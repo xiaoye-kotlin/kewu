@@ -13,7 +13,11 @@ data class AdminUserDTO(
     val username: String,
     val nickname: String?,
     val role: String,
-    val status: String
+    val status: String,
+    /** 在线状态（§83）：最近 3 分钟内有受认证请求。 */
+    val online: Boolean = false,
+    /** 最近活跃时间 yyyy-MM-dd HH:mm:ss；从未活跃为 null。 */
+    val lastSeen: String? = null,
 )
 
 // 用户详情：附带基础统计（提交数/录音数按 studentId 关联，缺字段时可能是 0）
@@ -53,6 +57,28 @@ data class AdminResetPasswordRequest(val newPassword: String)
 /** 总控端自助修改当前管理员密码（2026-11-17）：需带旧密码校验，避免误改。 */
 @Serializable
 data class AdminChangePasswordRequest(val oldPassword: String, val newPassword: String)
+
+/** 课堂纪要（§83）：一节课的 AI 产出 + 生成进度。数据来自 class_recordings + Redis 实时状态。 */
+@Serializable
+data class AdminMinuteDTO(
+    val sessionId: String,
+    val courseId: String?,
+    val courseName: String?,
+    val teacher: String?,
+    /** 原始进度文案：等待上传 / 转写中 2/5 / 合并中 / 生成纪要 / 完成 */
+    val stage: String?,
+    val progress: Int?,
+    val transcriptStatus: String?,
+    val summary: String?,
+    val asrError: String?,
+    val durationSec: Int?,
+    val decidedAt: String?,
+    /** Redis 实时状态：PENDING / PROCESSING / FINISHED / ERROR / null(未上报) */
+    val aiStatus: String? = null,
+    val aiProgress: Int? = null,
+    /** 汇总状态，前端直接用来着色：GENERATING / DONE / FAILED / PENDING */
+    val displayStatus: String = "PENDING",
+)
 
 // 分页通用壳
 @Serializable

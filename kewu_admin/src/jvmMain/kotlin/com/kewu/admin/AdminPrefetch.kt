@@ -51,6 +51,8 @@ object AdminPrefetch {
     val courses = Slot<List<JsonObject>>()
     val assignments = Slot<List<JsonObject>>()
     val attendance = Slot<List<JsonObject>>()
+    /** 课堂纪要（§83）：正在生成 + 已生成完毕的列表。 */
+    val minutes = Slot<PageResult>()
     val serverSnapshot = Slot<ServerRuntimeSnapshot>()
 
     // 默认选中项的二级数据，key = 父级 id
@@ -81,6 +83,7 @@ object AdminPrefetch {
     fun clearAll() {
         overview.clear(); health.clear(); config.clear(); users.clear(); recordings.clear()
         obsRecordings.clear(); courses.clear(); assignments.clear(); attendance.clear(); serverSnapshot.clear()
+        minutes.clear()
         classesByCourse = emptyMap(); assignmentSubmissions = emptyMap()
         started.set(false)
     }
@@ -98,6 +101,7 @@ object AdminPrefetch {
                 async { runCatching { api.list("/api/admin/courses") }.getOrNull()?.let { courses.set(it) } },
                 async { runCatching { api.list("/api/admin/assignments") }.getOrNull()?.let { assignments.set(it) } },
                 async { runCatching { api.list("/api/admin/attendance") }.getOrNull()?.let { attendance.set(it) } },
+                async { runCatching { api.page("/api/admin/minutes", mapOf("page" to "1", "size" to "100")) }.getOrNull()?.let { minutes.set(it) } },
                 async { runCatching { ServerMonitor.snapshot() }.getOrNull()?.let { serverSnapshot.set(it) } },
             )
             jobs.forEach { it.await() }

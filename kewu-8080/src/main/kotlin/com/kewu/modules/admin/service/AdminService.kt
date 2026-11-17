@@ -5,6 +5,7 @@ import com.kewu.db.Assignments
 import com.kewu.db.AttendanceRecords
 import com.kewu.db.AttendanceRoster
 import com.kewu.db.AttendanceSessions
+import com.kewu.db.ClassRecordings
 import com.kewu.db.ClassStudents
 import com.kewu.db.Classes
 import com.kewu.db.Courses
@@ -23,7 +24,8 @@ import com.kewu.modules.admin.models.AdminCreateUserRequest
 import com.kewu.modules.admin.models.AdminOverviewDTO
 import com.kewu.modules.admin.models.AdminRecordingDTO
 import com.kewu.modules.admin.models.AdminRecordingDetailDTO
-import com.kewu.modules.admin.models.AdminResetPasswordRequest
+import kotlinx.serialization.json.JsonObject
+import com.kewu.modules.admin.models.AdminMinuteDTO
 import com.kewu.modules.admin.models.AdminSubmissionDTO
 import com.kewu.modules.admin.models.AdminUpdateClassRequest
 import com.kewu.modules.admin.models.AdminUpdateCourseRequest
@@ -108,7 +110,21 @@ class AdminService(
         }
         val total = filtered.size
         val items = filtered.drop((page - 1) * size).take(size).map { row ->
-            AdminUserDTO(row[Users.id], row[Users.username], row[Users.nickname], row[Users.role], row[Users.status])
+            val uid = row[Users.id]
+            val seenAt = com.kewu.modules.user.repository.UserPresence.lastSeenAt(uid)
+            AdminUserDTO(
+                id = uid,
+                username = row[Users.username],
+                nickname = row[Users.nickname],
+                role = row[Users.role],
+                status = row[Users.status],
+                online = com.kewu.modules.user.repository.UserPresence.isOnline(uid),
+                lastSeen = seenAt?.let {
+                    java.time.Instant.ofEpochMilli(it)
+                        .atZone(java.time.ZoneId.systemDefault())
+                        .format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"))
+                },
+            )
         }
         items to total
     }
@@ -261,8 +277,77 @@ class AdminService(
         items to total
     }
 
-    fun getRecording(id: String): AdminRecordingDetailDTO? = transaction {
-        val r = Recordings.selectAll().where { Recordings.id eq id }.firstOrNull() ?: return@transaction null
+    /**
+     * 课堂纪要列表（§83）：把 class_recordings 的 AI 纪要 + 生成进度汇总给总控端。
+     * 除库里的 stage/progress 外，再叠加 Redis 的实时状态（kewu:ai:status:{sessionId}），
+     * 这样「正在生成中」的课也能实时看到百分比，已完成的能直接看纪要正文。
+     */
+    fun listMinutes(
+        page: Int, size: Int, keyword: String?, status: String?
+    ): Pair<List<AdminMinuteDTO>, Int> = transaction {
+        val courses = Courses.selectAll().associate { it[Courses.id] to (it[Courses.name] to it[Courses.teacher]) }
+        val rows = ClassRecordings.selectAll().toList()
+        val dto = rows.map { r ->
+            val courseId = r[ClassRecordings.courseId]
+            val course = courses[courseId]
+            val sid = r[ClassRecordings.sessionId]
+            // 只有还没完成/出错的才去查 Redis，避免每次全量读 Redis。
+            val stageText = r[ClassRecordings.stage]
+            val hasSummary = !r[ClassRecordings.summary].isNullOrBlank()
+            val needLive = !hasSummary || stageText?.contains("完成") != true
+            val live = if (needLive) readAiStatus(sid) else null
+            val aiStatus = live?.first
+            val aiProgress = live?.second
+            val display = when {
+                hasSummary || aiStatus == "FINISHED" || stageText?.contains("完成") == true -> "DONE"
+                aiStatus == "ERROR" || r[ClassRecordings.transcriptStatus] == "FAILED" -> "FAILED"
+                aiStatus == "PROCESSING" || stageText?.let { it.contains("转写") || it.contains("生成") || it.contains("合并") } == true -> "GENERATING"
+                else -> "PENDING"
+            }
+            AdminMinuteDTO(
+                sessionId = sid,
+                courseId = courseId,
+                courseName = course?.first,
+                teacher = course?.second,
+                stage = stageText,
+                progress = r[ClassRecordings.progress] ?: aiProgress,
+                transcriptStatus = r[ClassRecordings.transcriptStatus],
+                summary = r[ClassRecordings.summary],
+                asrError = r[ClassRecordings.asrError],
+                durationSec = r[ClassRecordings.durationSec],
+                decidedAt = r[ClassRecordings.decidedAt],
+                aiStatus = aiStatus,
+                aiProgress = aiProgress,
+                displayStatus = display,
+            )
+        }
+        val filtered = dto.filter { m ->
+            (status.isNullOrBlank() || m.displayStatus.equals(status, true)) &&
+            (keyword.isNullOrBlank() ||
+                m.courseName?.contains(keyword, true) == true ||
+                m.teacher?.contains(keyword, true) == true ||
+                m.summary?.contains(keyword, true) == true ||
+                m.sessionId.contains(keyword, true))
+        }
+        val total = filtered.size
+        val items = filtered.sortedWith(
+            compareByDescending<AdminMinuteDTO> { it.displayStatus == "GENERATING" }
+                .thenByDescending { it.decidedAt ?: "" }
+        ).drop((page - 1) * size).take(size)
+        items to total
+    }
+
+    /** 读 Redis 实时状态，返回 (status, progress)；失败返回 null，不影响列表。 */
+    private fun readAiStatus(sessionId: String): Pair<String?, Int?>? = runCatching {
+        val raw = com.kewu.db.AiStatusRedis().getRaw("kewu:ai:status:$sessionId")
+        val json = (raw as? com.kewu.db.AiRedisResult.Value)?.json ?: return@runCatching null
+        val obj = com.kewu.db.kewuJson.parseToJsonElement(json) as? JsonObject ?: return@runCatching null
+        val status = (obj["status"] as? kotlinx.serialization.json.JsonPrimitive)?.content
+        val progress = (obj["progress"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull()
+        status to progress
+    }.getOrNull()
+
+    fun getRecording(id: String): AdminRecordingDetailDTO? = transaction {        val r = Recordings.selectAll().where { Recordings.id eq id }.firstOrNull() ?: return@transaction null
         val url = r[Recordings.url]
         // 试听/下载暂用直链（OBS 桶若为私有，后续补签名短链，返回原 URL 前端也能直接用或报错后我们再改）
         AdminRecordingDetailDTO(

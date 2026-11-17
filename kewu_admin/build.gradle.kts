@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.kewu"
-version = "1.0.20"
+version = "1.0.21"
 
 repositories {
     mavenCentral()
@@ -73,9 +73,20 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
-            packageVersion = "1.0.20"
+            packageVersion = "1.0.21"
             description = "课悟平台总控端"
             vendor = "Kewu"
+            // 2026-11-17 §83 关键修复：必须显式声明 JDK 模块。
+            // jpackage 默认用 jdeps 自动裁剪运行时镜像，会漏掉通过反射/间接引用的模块——
+            // 之前漏了 java.management，装机版一调 ManagementFactory 就 NoClassDefFoundError，
+            // 导致服务器状态整页取不到数据（本地用完整 JDK 测试发现不了）。
+            // jdk.unsupported：JNA/OSHI 依赖 sun.misc.Unsafe；
+            // jdk.management：com.sun.management 扩展指标（CPU/内存细节）。
+            modules(
+                "java.management",
+                "jdk.management",
+                "jdk.unsupported",
+            )
         }
     }
 }

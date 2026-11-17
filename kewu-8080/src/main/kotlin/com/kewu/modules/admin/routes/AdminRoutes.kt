@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import com.kewu.modules.admin.models.AdminChangePasswordRequest
 import com.kewu.modules.admin.models.AdminClassStudentRequest
 import com.kewu.modules.admin.models.AdminCreateUserRequest
+import com.kewu.modules.admin.models.AdminMinuteDTO
 import com.kewu.modules.admin.models.AdminResetPasswordRequest
 import com.kewu.modules.admin.models.AdminUpdateClassRequest
 import com.kewu.modules.admin.models.AdminUpdateCourseRequest
@@ -395,6 +396,25 @@ fun Routing.adminRoutes(service: AdminService) {
                 val d = service.getRecording(id)
                 if (d == null) call.respond(HttpStatusCode.NotFound, ApiResponse<Unit>(404, "录音不存在"))
                 else call.respond(ApiResponse(0, "ok", d))
+            }
+        }
+
+        // ---------- 课堂纪要（§83）：查看正在生成 / 已生成完毕的所有课堂纪要 ----------
+        get("/minutes") {
+            if (call.checkAdmin(service)) {
+                val page = call.request.queryParameters["page"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
+                val size = call.request.queryParameters["size"]?.toIntOrNull()?.coerceIn(1, 200) ?: 50
+                val keyword = call.request.queryParameters["keyword"]?.takeIf { it.isNotBlank() }
+                val status = call.request.queryParameters["status"]?.takeIf { it.isNotBlank() }
+                val (items, total) = runCatching { service.listMinutes(page, size, keyword, status) }
+                    .getOrElse { e ->
+                        call.respond(
+                            HttpStatusCode.InternalServerError,
+                            ApiResponse<Unit>(500, "课堂纪要读取失败：${e.message ?: e.javaClass.simpleName}"),
+                        )
+                        return@get
+                    }
+                call.respond(ApiResponse(0, "ok", PagedData(items as List<AdminMinuteDTO>, total, page, size)))
             }
         }
 

@@ -1,6 +1,5 @@
 package com.kewu.admin
 
-import kotlinx.serialization.json.JsonObject
 import oshi.SystemInfo
 import oshi.hardware.CentralProcessor
 import java.io.File
@@ -9,9 +8,12 @@ import kotlin.math.roundToLong
 /**
  * 服务器本机实时状态。总控端应运行在服务器上；进程检测不到时仅隐藏本机后端进程指标。
  *
- * 2026-11-17（§81）改用 OSHI（GitHub oshi/oshi，M.I.T.）采集系统/硬件信息：
- * 取代原来慢且易失败的 PowerShell（CIM/Get-Process）方案——CPU 型号、系统运行时长、
- * 后端进程 CPU/内存以前常取不到，现在由 OSHI(JNA) 直接读系统 API，稳定且无需外部命令。
+ * 2026-11-17（§81）改用 OSHI（GitHub oshi/oshi，M.I.T.）采集系统/硬件信息。
+ * 2026-11-17（§83）两处关键修复：
+ *  1) 装机版 jpackage 精简 JRE 缺 `java.management` 模块，`ManagementFactory` 直接
+ *     NoClassDefFoundError，导致整页「全部取不到」。已在 build.gradle.kts 显式声明模块。
+ *  2) 采集改为**逐项容错**：任一指标失败只让该项为默认值并记录原因，
+ *     绝不让一次异常清空整页（此前一个异常就把主机名/CPU/内存全变成 —）。
  */
 data class ServerRuntimeSnapshot(
     val hostname: String,
@@ -34,25 +36,25 @@ data class ServerRuntimeSnapshot(
     val backendCpuSeconds: Double?,
     val osUptimeSeconds: Long?,
     val updatedAtEpochMs: Long,
-    // ---- §81 新增：OSHI 提供的更丰富指标 ----
-    val cpuPhysicalCores: Int,          // 物理核数
-    val cpuLoad1Min: Double?,           // 1 分钟系统负载
-    val processCount: Int?,             // 系统进程数
-    val threadCount: Int?,              // 系统线程数
-    val swapTotalBytes: Long,           // 交换分区总量
-    val swapUsedBytes: Long,            // 交换分区已用
-    val networkRxBytesPerSec: Long?,    // 网卡下行 B/s（本次采样）
-    val networkTxBytesPerSec: Long?,    // 网卡上行 B/s
-    val diskReadBytesPerSec: Long?,     // 磁盘读 B/s
-    val diskWriteBytesPerSec: Long?,    // 磁盘写 B/s
-    val monitorSource: String,          // 采集来源：oshi / fallback
+    val cpuPhysicalCores: Int,
+    val cpuLoad1Min: Double?,
+    val processCount: Int?,
+    val threadCount: Int?,
+    val swapTotalBytes: Long,
+    val swapUsedBytes: Long,
+    val networkRxBytesPerSec: Long?,
+    val networkTxBytesPerSec: Long?,
+    val diskReadBytesPerSec: Long?,
+    val diskWriteBytesPerSec: Long?,
+    val monitorSource: String,          // oshi / jvm-fallback
+    val degradeReason: String? = null,  // 采集降级原因（部分指标不可用时提示，不阻塞其它指标）
 )
 
 object ServerMonitor {
-    // OSHI 系统信息对象构造较重，单例复用；JNA 内部线程安全。
-    private val systemInfo: SystemInfo by lazy { runCatching { SystemInfo() }.getOrElse { throw it } }
-    private val cpu: CentralProcessor by lazy { systemInfo.hardware.processor }
-    private val os by lazy { systemInfo.operatingSystem }
+    // OSHI 构造较重，懒加载且允许失败（失败则走 JVM 兜底，绝不抛给界面）。
+    private val oshi: SystemInfo? by lazy { runCatching { SystemInfo() }.getOrNull() }
+    private val cpu: CentralProcessor? by lazy { oshi?.let { runCatching { it.hardware.processor }.getOrNull() } }
+    private val os: oshi.software.os.OperatingSystem? by lazy { oshi?.let { runCatching { it.operatingSystem }.getOrNull() } }
 
     private var prevTicks: LongArray? = null
     private var prevNet: Pair<Long, Long>? = null
@@ -65,113 +67,199 @@ object ServerMonitor {
     private var lastDiskWritePerSec: Long? = null
 
     fun snapshot(): ServerRuntimeSnapshot {
+        val notes = mutableListOf<String>()
         val now = System.currentTimeMillis()
         val elapsedSec = ((now - prevSampleAt).coerceAtLeast(1L)) / 1000.0
         val freshSample = prevSampleAt == 0L || elapsedSec >= 1.0
 
-        // --- CPU 负载：用 OSHI tick 计数器算差值百分比（跨采样间隔），比 MXBean 可靠 ---
+        // ---------- CPU 负载（OSHI tick 差值；失败则退回 MXBean） ----------
         if (freshSample) {
-            val ticks = cpu.systemCpuLoadTicks
-            val prev = prevTicks
-            if (prev != null && prev.size == ticks.size) {
-                lastCpuLoad = cpu.getSystemCpuLoadBetweenTicks(prev).takeIf { it >= 0.0 }
+            val ticks = runCatching { cpu?.systemCpuLoadTicks }.getOrNull()
+            if (ticks != null) {
+                val prev = prevTicks
+                if (prev != null && prev.size == ticks.size) {
+                    lastCpuLoad = runCatching { cpu?.getSystemCpuLoadBetweenTicks(prev) }.getOrNull()
+                        ?.takeIf { it >= 0.0 }
+                }
+                prevTicks = ticks
+            } else {
+                lastCpuLoad = mxBeanCpuLoad()
             }
-            prevTicks = ticks
         }
 
-        // --- 网络 / 磁盘 吞吐（每次采样取差值 / 秒） ---
+        // ---------- 网络 / 磁盘吞吐 ----------
         if (freshSample) {
             runCatching {
-                val net = systemInfo.hardware.networkIFs
-                    .filter { it.name.isNotBlank() && it.bytesRecv > 0 }
-                    .fold(0L to 0L) { acc, n -> acc.first + n.bytesRecv to acc.second + n.bytesSent }
-                val p = prevNet
-                if (p != null && net.first >= p.first && net.second >= p.second) {
-                    lastRxPerSec = ((net.first - p.first) / elapsedSec).roundToLong()
-                    lastTxPerSec = ((net.second - p.second) / elapsedSec).roundToLong()
+                val net = oshi?.hardware?.networkIFs
+                    ?.filter { it.name.isNotBlank() && it.bytesRecv > 0 }
+                    ?.fold(0L to 0L) { acc, n -> acc.first + n.bytesRecv to acc.second + n.bytesSent }
+                if (net != null) {
+                    val p = prevNet
+                    if (p != null && net.first >= p.first && net.second >= p.second) {
+                        lastRxPerSec = ((net.first - p.first) / elapsedSec).roundToLong()
+                        lastTxPerSec = ((net.second - p.second) / elapsedSec).roundToLong()
+                    }
+                    prevNet = net
                 }
-                prevNet = net
-            }
+            }.onFailure { notes += "网络吞吐不可用" }
+
             runCatching {
-                val io = systemInfo.hardware.diskStores
-                    .filter { it.model?.isNotBlank() == true || it.name.isNotBlank() }
-                    .fold(0L to 0L) { acc, d -> acc.first + d.readBytes to acc.second + d.writeBytes }
-                val p = prevDisk
-                if (p != null && io.first >= p.first && io.second >= p.second) {
-                    lastDiskReadPerSec = ((io.first - p.first) / elapsedSec).roundToLong()
-                    lastDiskWritePerSec = ((io.second - p.second) / elapsedSec).roundToLong()
+                val io = oshi?.hardware?.diskStores
+                    ?.fold(0L to 0L) { acc, d -> acc.first + d.readBytes to acc.second + d.writeBytes }
+                if (io != null) {
+                    val p = prevDisk
+                    if (p != null && io.first >= p.first && io.second >= p.second) {
+                        lastDiskReadPerSec = ((io.first - p.first) / elapsedSec).roundToLong()
+                        lastDiskWritePerSec = ((io.second - p.second) / elapsedSec).roundToLong()
+                    }
+                    prevDisk = io
                 }
-                prevDisk = io
-            }
+            }.onFailure { notes += "磁盘吞吐不可用" }
             prevSampleAt = now
         }
 
-        val mem = systemInfo.hardware.memory
-        val vmem = mem.virtualMemory
-        val heap = java.lang.management.ManagementFactory.getMemoryMXBean().heapMemoryUsage
-        val backend = findBackendProcess()
+        // ---------- 内存（OSHI 优先，JVM MXBean 兜底） ----------
+        val mem = runCatching { oshi?.hardware?.memory }.getOrNull()
+        val totalRam = runCatching { mem?.total ?: 0L }.getOrDefault(0L).takeIf { it > 0 }
+            ?: jvmTotalRam()
+        val freeRam = runCatching { mem?.available ?: 0L }.getOrDefault(0L).takeIf { it > 0 && totalRam > 0 }
+            ?: jvmFreeRam()
+        val swapTotal = runCatching { mem?.virtualMemory?.swapTotal ?: 0L }.getOrDefault(0L)
+        val swapUsed = runCatching { mem?.virtualMemory?.swapUsed ?: 0L }.getOrDefault(0L)
+        if (totalRam <= 0) notes += "物理内存读取失败"
 
-        // 后端进程 CPU/内存：OSHI 直接按 PID 取，替代 PowerShell Get-Process。
-        val backendMemBytes: Long?
-        val backendCpuSec: Double?
+        // ---------- 自身堆 ----------
+        val heap = runCatching {
+            java.lang.management.ManagementFactory.getMemoryMXBean().heapMemoryUsage
+        }.getOrNull()
+        if (heap == null) notes += "java.management 模块缺失（JVM 堆不可用）"
+
+        // ---------- 后端进程 ----------
+        val backend = runCatching { findBackendProcess() }.getOrNull()
+        var backendMemBytes: Long? = null
+        var backendCpuSec: Double? = null
         if (backend != null) {
-            val proc = os.getProcess(backend.pid().toInt())
-            backendMemBytes = proc?.residentMemory?.takeIf { it > 0 }
-            backendCpuSec = proc?.let { (it.userTime + it.kernelTime).toDouble() / 1_000_000_000.0 }?.takeIf { it > 0 }
-        } else {
-            backendMemBytes = null
-            backendCpuSec = null
+            val proc = runCatching { os?.getProcess(backend.pid().toInt()) }.getOrNull()
+            backendMemBytes = runCatching { proc?.residentMemory }.getOrNull()?.takeIf { it > 0 }
+            backendCpuSec = runCatching {
+                proc?.let { (it.userTime + it.kernelTime).toDouble() / 1_000_000_000.0 }
+            }.getOrNull()?.takeIf { it > 0 }
         }
 
-        val driveRoot = currentDriveRoot()
+        // ---------- 磁盘 ----------
+        val driveRoot = runCatching { currentDriveRoot() }.getOrDefault("/")
         val drive = File(driveRoot)
-        val loadAvg = runCatching { cpu.getSystemLoadAverage(1).firstOrNull() }.getOrNull()?.takeIf { it >= 0.0 }
+        val diskTotal = runCatching { drive.totalSpace }.getOrDefault(0L)
+        val diskFree = runCatching { drive.freeSpace }.getOrDefault(0L)
+
+        // ---------- 其余 ----------
+        val cores = runCatching { cpu?.logicalProcessorCount }.getOrNull()
+            ?: Runtime.getRuntime().availableProcessors()
+        val physicalCores = runCatching { cpu?.physicalProcessorCount }.getOrNull() ?: cores
+        val cpuModel = runCatching { cpu?.processorIdentifier?.name?.trim() }.getOrNull()
+            ?.takeIf { it.isNotBlank() && it != "unknown" }
+            ?: System.getenv("PROCESSOR_IDENTIFIER")?.trim()?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("os.arch", "—")
+        if (cpuModel == "—") notes += "CPU 型号不可用"
+
+        val osName = runCatching { os?.family }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("os.name", "Unknown OS")
+        val osVersion = runCatching { os?.versionInfo?.version }.getOrNull()?.takeIf { it.isNotBlank() }
+            ?: System.getProperty("os.version", "")
+        val osUptime = runCatching { os?.systemUptime }.getOrNull()?.takeIf { it > 0 }
+            ?: runCatching { osLongUptimeFallback() }.getOrNull()
+        val loadAvg = runCatching { cpu?.getSystemLoadAverage(1)?.firstOrNull() }.getOrNull()
+            ?.takeIf { it >= 0.0 }
+
+        val source = if (oshi != null && cpu != null) "oshi" else "jvm-fallback"
+        if (source == "jvm-fallback") notes += "OSHI 不可用，已降级为 JVM 指标"
 
         return ServerRuntimeSnapshot(
-            hostname = (System.getenv("COMPUTERNAME") ?: runCatching { java.net.InetAddress.getLocalHost().hostName }.getOrDefault("server")).ifBlank { "server" },
-            osName = os.family ?: System.getProperty("os.name", "Unknown OS"),
-            osVersion = runCatching { os.versionInfo.version }.getOrNull() ?: System.getProperty("os.version", ""),
-            cpuModel = cpu.processorIdentifier.name?.trim()?.ifBlank { "Unknown CPU" } ?: "Unknown CPU",
-            cpuCores = cpu.logicalProcessorCount,
+            hostname = runCatching {
+                (System.getenv("COMPUTERNAME")
+                    ?: java.net.InetAddress.getLocalHost().hostName).ifBlank { "server" }
+            }.getOrDefault("server"),
+            osName = osName,
+            osVersion = osVersion,
+            cpuModel = cpuModel,
+            cpuCores = cores,
             cpuLoad = lastCpuLoad,
-            adminProcessCpuLoad = runCatching { os.getProcess(os.processId)?.let { (it.userTime + it.kernelTime) / 1_000_000_000.0 } }.getOrNull(),
-            totalRamBytes = mem.total,
-            freeRamBytes = mem.available,
-            diskTotalBytes = drive.totalSpace,
-            diskFreeBytes = drive.freeSpace,
-            adminHeapUsedBytes = heap.used,
-            adminHeapMaxBytes = heap.max,
+            adminProcessCpuLoad = mxBeanCpuLoad(),
+            totalRamBytes = totalRam,
+            freeRamBytes = freeRam,
+            diskTotalBytes = diskTotal,
+            diskFreeBytes = diskFree,
+            adminHeapUsedBytes = heap?.used ?: 0L,
+            adminHeapMaxBytes = heap?.max ?: 0L,
             backendPid = backend?.pid(),
-            backendStartedAtEpochMs = backend?.info()?.startInstant()?.orElse(null)?.toEpochMilli(),
-            backendUptimeSeconds = backend?.info()?.startInstant()?.orElse(null)?.let {
-                (now - it.toEpochMilli()).coerceAtLeast(0L) / 1000L
-            },
+            backendStartedAtEpochMs = runCatching {
+                backend?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+            }.getOrNull(),
+            backendUptimeSeconds = runCatching {
+                backend?.info()?.startInstant()?.orElse(null)?.let { (now - it.toEpochMilli()).coerceAtLeast(0L) / 1000L }
+            }.getOrNull(),
             backendWorkingSetBytes = backendMemBytes,
             backendCpuSeconds = backendCpuSec,
-            osUptimeSeconds = runCatching { os.systemUptime }.getOrNull(),
+            osUptimeSeconds = osUptime,
             updatedAtEpochMs = now,
-            cpuPhysicalCores = cpu.physicalProcessorCount,
+            cpuPhysicalCores = physicalCores,
             cpuLoad1Min = loadAvg,
-            processCount = runCatching { os.processCount }.getOrNull(),
-            threadCount = runCatching { os.threadCount }.getOrNull(),
-            swapTotalBytes = runCatching { vmem.swapTotal }.getOrDefault(0L),
-            swapUsedBytes = runCatching { vmem.swapUsed }.getOrDefault(0L),
+            processCount = runCatching { os?.processCount }.getOrNull()
+                ?: runCatching { ProcessHandle.allProcesses().count().toInt() }.getOrNull(),
+            threadCount = runCatching { os?.threadCount }.getOrNull()
+                ?: runCatching { java.lang.management.ManagementFactory.getThreadMXBean().threadCount }.getOrNull(),
+            swapTotalBytes = swapTotal,
+            swapUsedBytes = swapUsed,
             networkRxBytesPerSec = lastRxPerSec,
             networkTxBytesPerSec = lastTxPerSec,
             diskReadBytesPerSec = lastDiskReadPerSec,
             diskWriteBytesPerSec = lastDiskWritePerSec,
-            monitorSource = "oshi",
+            monitorSource = source,
+            degradeReason = notes.distinct().takeIf { it.isNotEmpty() }?.joinToString("；"),
         )
     }
+
+    /** 进程自身 CPU 占用（MXBean；模块缺失时返回 null，不影响其它指标）。 */
+    private fun mxBeanCpuLoad(): Double? = runCatching {
+        val bean = java.lang.management.ManagementFactory.getOperatingSystemMXBean()
+        if (bean is com.sun.management.OperatingSystemMXBean) {
+            bean.processCpuLoad.takeIf { it >= 0.0 }
+        } else null
+    }.getOrNull()
+
+    private fun jvmTotalRam(): Long = runCatching {
+        (java.lang.management.ManagementFactory.getOperatingSystemMXBean() as? com.sun.management.OperatingSystemMXBean)
+            ?.totalMemorySize ?: 0L
+    }.getOrDefault(0L)
+
+    private fun jvmFreeRam(): Long = runCatching {
+        (java.lang.management.ManagementFactory.getOperatingSystemMXBean() as? com.sun.management.OperatingSystemMXBean)
+            ?.freeMemorySize ?: 0L
+    }.getOrDefault(0L)
+
+    /** 无 OSHI 时的系统运行时长兜底：Windows 用开机时间推算。 */
+    private fun osLongUptimeFallback(): Long? = runCatching {
+        if (System.getProperty("os.name", "").startsWith("Windows", true)) {
+            val out = ProcessBuilder(
+                "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToFileTimeUtc()",
+            ).redirectErrorStream(true).start()
+            val text = out.inputStream.bufferedReader().use { it.readText() }.trim()
+            out.waitFor()
+            val fileTime = text.lines().firstOrNull()?.trim()?.toLongOrNull() ?: return@runCatching null
+            // FILETIME(100ns since 1601) -> epoch ms
+            val bootMs = fileTime / 10_000L - 116_444_736_000_000L / 10_000L
+            (System.currentTimeMillis() - bootMs).coerceAtLeast(0L) / 1000L
+        } else null
+    }.getOrNull()
 
     private fun findBackendProcess(): ProcessHandle? =
         ProcessHandle.allProcesses().iterator().asSequence()
             .filter { it.pid() != ProcessHandle.current().pid() }
-            .mapNotNull { process ->
-                val command = process.info().commandLine().orElse("") ?: ""
-                if (command.contains("kewu-8080.jar", true) && command.contains("-jar", true)) process else null
+            .firstOrNull { process ->
+                val command = runCatching { process.info().commandLine().orElse("") }.getOrDefault("") ?: ""
+                command.contains("kewu-8080.jar", true) && command.contains("-jar", true)
             }
-            .firstOrNull()
 
     private fun currentDriveRoot(): String {
         val cwd = File(".").absolutePath.replace('\\', '/')

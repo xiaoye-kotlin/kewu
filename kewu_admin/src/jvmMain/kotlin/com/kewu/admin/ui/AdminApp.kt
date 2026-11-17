@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.Class
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.FactCheck
 import androidx.compose.material.icons.outlined.Logout
+import androidx.compose.material.icons.outlined.Article
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.Monitor
 import androidx.compose.material.icons.outlined.People
@@ -66,6 +67,7 @@ enum class AdminSection(val title: String, val icon: ImageVector) {
     CONFIG("密钥配置", Icons.Outlined.VpnKey),
     USERS("用户管理", Icons.Outlined.People),
     RECORDINGS("录音资源", Icons.Outlined.Mic),
+    MINUTES("课堂纪要", Icons.Outlined.Article),
     COURSES("课程与班级", Icons.Outlined.Class),
     ASSIGNMENTS("作业与批阅", Icons.Outlined.Assignment),
     ATTENDANCE("签到管理", Icons.Outlined.FactCheck),
@@ -156,6 +158,7 @@ fun AdminApp() {
                         AdminSection.CONFIG -> ConfigPage(api, notify, onDeploy = openDeploy)
                         AdminSection.USERS -> UsersPage(api, notify)
                         AdminSection.RECORDINGS -> RecordingsPage(api, notify)
+                        AdminSection.MINUTES -> MinutesPage(api, notify)
                         AdminSection.COURSES -> CoursesPage(api, notify)
                         AdminSection.ASSIGNMENTS -> AssignmentsPage(api, notify)
                         AdminSection.ATTENDANCE -> AttendancePage(api, notify)

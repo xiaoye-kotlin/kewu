@@ -41,6 +41,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.kewu.admin.AdminApi
+import com.kewu.admin.AdminDiagnostics
 import com.kewu.admin.AdminPrefetch
 import com.kewu.admin.ServerMonitor
 import com.kewu.admin.ServerRuntimeSnapshot
@@ -77,6 +78,8 @@ fun ServerPage(api: AdminApi) {
             AdminPrefetch.serverSnapshot.set(it)
         }.onFailure {
             monitorError = it.message ?: "本机状态读取失败"
+            // §83：采集失败写诊断日志，便于事后定位（此前只能看到界面上一行红字）。
+            AdminDiagnostics.recordError("MONITOR", it, mapOf("stage" to "ServerMonitor.snapshot"))
         }
         runCatching { api.health() }.onSuccess {
             health = it
@@ -133,6 +136,8 @@ fun ServerPage(api: AdminApi) {
                     InfoLine("系统运行时长", formatDuration(m?.osUptimeSeconds))
                     InfoLine("进程 / 线程数", "${m?.processCount?.toString() ?: "—"} 进程 · ${m?.threadCount?.toString() ?: "—"} 线程")
                     InfoLine("1 分钟系统负载", m?.cpuLoad1Min?.let { String.format("%.2f", it) } ?: "—")
+                    InfoLine("采集引擎", m?.monitorSource?.let { if (it == "oshi") "OSHI（系统原生 API）" else "JVM 兜底" } ?: "—")
+                    m?.degradeReason?.let { WarningLine(it) }
                     monitorError?.let { WarningLine(it) }
                 }
             }
@@ -215,7 +220,7 @@ fun ServerPage(api: AdminApi) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Outlined.Timer, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                         Text(
-                            "  采集引擎 OSHI（跨平台系统 API）· 每 3 秒采样一次",
+                            "  采集引擎 ${if (m?.monitorSource == "oshi") "OSHI（跨平台系统 API）" else "JVM 兜底"} · 每 3 秒采样一次",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )

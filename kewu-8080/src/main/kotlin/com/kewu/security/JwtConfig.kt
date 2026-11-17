@@ -50,6 +50,9 @@ object JwtConfig {
             .build()
             .verify(token)
         val userId = decoded.getClaim(CLAIM_USER_ID).asString()
+        // 在线状态（§83）：总控端等走手动 verifyToken 的调用也要记录活跃，
+        // 否则只走 JWT 插件的端用户才有在线状态。
+        if (userId.isNotBlank()) com.kewu.modules.user.repository.UserPresence.touch(userId)
         userId.takeIf { it.isNotBlank() }
     }.getOrNull()
 
@@ -67,7 +70,11 @@ object JwtConfig {
                 val username = credential.payload.getClaim(CLAIM_USERNAME).asString()
                 val sid = credential.payload.getClaim(CLAIM_SID).asString()
                 val plat = credential.payload.getClaim(CLAIM_PLATFORM).asString()
-                if (userId.isNotBlank() && username.isNotBlank() && UserSessionStore.isValid(userId, plat, sid)) JWTPrincipal(credential.payload) else null
+                if (userId.isNotBlank() && username.isNotBlank() && UserSessionStore.isValid(userId, plat, sid)) {
+                    // 在线状态（§83）：任何受认证请求都刷新该用户的「最后活跃」，无需各端改心跳。
+                    com.kewu.modules.user.repository.UserPresence.touch(userId)
+                    JWTPrincipal(credential.payload)
+                } else null
             }
             challenge { _, _ ->
                 val token = call.request.headers["Authorization"]?.removePrefix("Bearer ")?.trim().orEmpty()
