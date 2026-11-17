@@ -17,6 +17,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -259,15 +261,8 @@ private fun SessionDetail(s: ClassRecordingInfo, courseName: String, onBack: () 
                                 FocusCell("未分析", students.size - analyzed.size, cs.onSurfaceSecondary, Modifier.weight(1f))
                             }
                         }
-                        // 不认真的排在前面
-                        val order = listOf("疑似聊天", "疑似开小差", "认真", null)
-                        val sorted = list.sortedWith(
-                            compareBy<SessionRecordingInfo> { it.role.equals("teacher", true) }
-                                .thenBy { order.indexOf(it.focusVerdict).let { i -> if (i < 0) 3 else i } },
-                        )
-                        sorted.forEachIndexed { i, r ->
-                            StudentRecordingCard(r, i, backdrop = backdrop, courseId = s.courseId)
-                        }
+                        // §89 重构：分区玻璃卡网格（需关注 / 认真 / 未分析），替代一长列录音
+                        StudentSeatGrid(list, backdrop, s.courseId)
                     }
                 }
             }
@@ -387,4 +382,161 @@ internal fun StudentRecordingCard(
             onDismiss = { showContact = false },
         )
     }
+}
+
+/**
+ * §89 课堂纪要重构：紧凑「听课座位卡」，用于两列网格。
+ * 相比 [StudentRecordingCard] 的整行大卡，这张卡压缩了留白，把一整班学生排成整洁的卡片矩阵，
+ * 老师一眼扫完谁认真谁开小差；点击头像/姓名进个人主页，播放条支持开小差片段 seek。
+ */
+@Composable
+internal fun StudentSeatCard(
+    r: SessionRecordingInfo,
+    backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop? = null,
+    courseId: String = "",
+    modifier: Modifier = Modifier,
+) {
+    val cs = COUITheme.colorScheme
+    val teacher = r.role.equals("teacher", true)
+    var showContact by remember { mutableStateOf(false) }
+    val displayName = r.name ?: r.username ?: if (teacher) "教师端" else "未知同学"
+    val offTrack = r.focusVerdict == "疑似开小差" || r.focusVerdict == "疑似聊天"
+    val hasClip = !teacher && offTrack && r.focusStartSec != null && r.focusEndSec != null &&
+        r.focusEndSec!! > r.focusStartSec!!
+    val verdictLabel = when {
+        teacher -> "教师端"
+        r.focusVerdict == "认真" -> "认真"
+        r.focusVerdict != null -> r.focusVerdict.removePrefix("疑似")
+        r.transcriptStatus == null -> "未转写"
+        else -> "未分析"
+    }
+    val verdictColor = when {
+        teacher -> cs.tertiaryContainer to cs.onTertiaryContainer
+        r.focusVerdict == "认真" -> KewuGreen.copy(alpha = 0.18f) to KewuGreen
+        r.focusVerdict != null -> cs.errorContainer to cs.onErrorContainer
+        else -> cs.secondaryContainer to cs.onSecondaryVariant
+    }
+
+    val body: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit = {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Surface(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(50))
+                    .then(if (!teacher) Modifier.clickable { haptic(HapticKind.Tick); showContact = true } else Modifier),
+                color = if (offTrack) cs.errorContainer else KewuBlue.copy(alpha = 0.16f),
+            ) {
+                androidx.compose.foundation.layout.Box(contentAlignment = Alignment.Center) {
+                    Text(displayName.take(1), color = if (offTrack) cs.onErrorContainer else KewuBlue,
+                        fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(displayName, color = if (!teacher) cs.primary else cs.onSurface,
+                fontSize = 13.5.sp, fontWeight = FontWeight.Medium, maxLines = 1,
+                modifier = Modifier.weight(1f, fill = false)
+                    .then(if (!teacher) Modifier.clickable { haptic(HapticKind.Tick); showContact = true } else Modifier))
+            Spacer(Modifier.width(4.dp))
+            Surface(shape = RoundedCornerShape(50), color = verdictColor.first, contentColor = verdictColor.second) {
+                Text(verdictLabel, color = verdictColor.second, fontSize = 10.5.sp,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp))
+            }
+        }
+        val ev = r.focusEvidence?.takeIf { it.isNotBlank() }
+        if (ev != null && !teacher) {
+            Spacer(Modifier.height(6.dp))
+            Text(ev + (r.focusConfidence?.let { " · ${it}%" } ?: ""),
+                color = cs.onSurfaceSecondary, fontSize = 11.5.sp, lineHeight = 16.sp, maxLines = 2)
+        } else {
+            Spacer(Modifier.height(6.dp))
+            Text(if (teacher) "教师讲课主录音" else "暂无专注结论",
+                color = cs.onSurfaceVariantSummary, fontSize = 11.5.sp, maxLines = 1)
+        }
+        Spacer(Modifier.height(8.dp))
+        Surface(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), color = cs.secondaryContainer) {
+            AudioPlayerBar(
+                key = "seat:${r.recordingId}",
+                source = r.url.ifBlank { null },
+                durationHintSec = r.durationSec ?: 0,
+                modifier = Modifier.padding(start = 8.dp, end = 10.dp, top = 6.dp, bottom = 2.dp),
+                stopOnDispose = false,
+                clipStartSec = if (hasClip) r.focusStartSec else null,
+                clipEndSec = if (hasClip) r.focusEndSec else null,
+            )
+        }
+    }
+
+    if (backdrop != null) {
+        KewuGlassCard(backdrop = backdrop, shape = RoundedCornerShape(16.dp),
+            tintAlpha = if (offTrack) 0.34f else 0.26f, modifier = modifier) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), content = body)
+        }
+    } else {
+        Card(modifier = modifier, cornerRadius = 16.dp, insideMargin = PaddingValues(12.dp),
+            colors = kewuCardColors(), content = body)
+    }
+
+    if (showContact && !teacher) {
+        StudentContactDialog(name = r.name ?: "", username = r.username, courseId = courseId,
+            onDismiss = { showContact = false })
+    }
+}
+
+/**
+ * §89 课堂纪要重构：学生听课状态分区网格。
+ * 分「需要关注（开小差/聊天）」「认真听讲」「未分析」三段，每段标题带人数，下面两列玻璃卡。
+ * 老师先看到要关注的人，整班情况一目了然，避免原来一长列录音的杂乱感。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+internal fun StudentSeatGrid(
+    list: List<SessionRecordingInfo>,
+    backdrop: io.github.suqi8.coui.kmp.blur.LayerBackdrop?,
+    courseId: String,
+) {
+    val cs = COUITheme.colorScheme
+    val attention = list.filter {
+        !it.role.equals("teacher", true) && (it.focusVerdict == "疑似开小差" || it.focusVerdict == "疑似聊天")
+    }
+    val good = list.filter { !it.role.equals("teacher", true) && it.focusVerdict == "认真" }
+    val rest = list.filter {
+        it.role.equals("teacher", true) || (it.focusVerdict != "认真" && it.focusVerdict != "疑似开小差" && it.focusVerdict != "疑似聊天")
+    }
+    // 组内按置信度/时间排序，重点在前
+    fun sortAttention(l: List<SessionRecordingInfo>) = l.sortedWith(
+        compareByDescending<SessionRecordingInfo> { it.focusConfidence ?: 0 }
+    )
+    fun sortRest(l: List<SessionRecordingInfo>) = l.sortedByDescending { it.createdAt }
+
+    @Composable
+    fun section(title: String, count: Int, color: androidx.compose.ui.graphics.Color, items: List<SessionRecordingInfo>) {
+        if (items.isEmpty()) return
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 4.dp)) {
+            Spacer(Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(color))
+            Spacer(Modifier.width(6.dp))
+            Text(title, color = color, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(6.dp))
+            Text("$count 人", color = cs.onSurfaceVariantSummary, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            maxItemsInEachRow = 2,
+        ) {
+            items.forEach { r ->
+                StudentSeatCard(
+                    r = r, backdrop = backdrop, courseId = courseId,
+                    modifier = Modifier.fillMaxWidth(0.485f),
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+    }
+
+    section("需要关注", attention.size, cs.error, sortAttention(attention))
+    section("认真听讲", good.size, KewuGreen, sortRest(good))
+    section("未分析 / 教师端", rest.size, cs.onSurfaceSecondary, sortRest(rest))
 }

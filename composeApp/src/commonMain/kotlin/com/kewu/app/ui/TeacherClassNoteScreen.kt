@@ -17,6 +17,8 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -220,20 +222,13 @@ fun TeacherClassNoteScreen(courseId: String, date: String, onBack: () -> Unit) {
                         }
                         Spacer(Modifier.height(10.dp))
                         Text(
-                            "录音转写已交给 AI 逐人分析：谁开小差、谁讲了小话都有依据，点卡片听本人录音回放。",
+                            "录音转写已交给 AI 逐人分析：谁开小差、谁讲了小话都有依据，点头像看资料、点播放条听本人录音。",
                             color = cs.onSurfaceSecondary, fontSize = 12.sp, lineHeight = 18.sp,
                             modifier = Modifier.padding(horizontal = 4.dp),
                         )
-                        Spacer(Modifier.height(10.dp))
-                        // 不认真的排前面，老师先看到要关注的人
-                        val order = listOf("疑似聊天", "疑似开小差", "认真", null)
-                        val sorted = list.sortedWith(
-                            compareBy<SessionRecordingInfo> { it.role.equals("teacher", true) }
-                                .thenBy { order.indexOf(it.focusVerdict).let { i -> if (i < 0) 3 else i } },
-                        )
-                        sorted.forEachIndexed { i, r ->
-                            StudentRecordingCard(r, i, backdrop = pageBackdrop, courseId = courseId)
-                        }
+                        Spacer(Modifier.height(12.dp))
+                        // §89 重构：按听课状态分区 + 两列玻璃卡网格，替代原来的一长列大卡
+                        StudentSeatGrid(list, pageBackdrop, courseId)
                         Spacer(Modifier.height(4.dp))
                     }
                 }

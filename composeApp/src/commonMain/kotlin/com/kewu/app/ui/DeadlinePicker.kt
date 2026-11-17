@@ -62,7 +62,11 @@ fun DeadlinePickerField(value: String, onChange: (String) -> Unit, modifier: Mod
 }
 
 @Composable
-private fun DeadlineSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+/**
+ * §89：截止时间选择底稿（复盘页「一键发布作业」复用，与作业页同款 coui DatePicker/TimePicker）。
+ * internal 供同包复盘页直接调用；onConfirm 返回 `yyyy-MM-dd HH:mm`。
+ */
+internal fun DeadlineSheet(initial: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     val start = remember { parseDeadline(initial) ?: defaultDeadline() }
     var date by remember { mutableStateOf(start.first) }
     var time by remember { mutableStateOf(start.second) }

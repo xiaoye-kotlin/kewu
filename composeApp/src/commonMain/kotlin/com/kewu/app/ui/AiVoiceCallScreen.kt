@@ -135,7 +135,12 @@ private const val SENTENCE_END_CHARS = "。？！?!,.、；;～~"
 private fun vcEndsWithPunct(t: String): Boolean = t.lastOrNull()?.let { it in SENTENCE_END_CHARS } == true
 
 @Composable
-internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) {
+internal fun AiVoiceCallScreen(
+    onDismiss: () -> Unit,
+    teacher: Boolean = false,
+    /** §89：通话结束回传时长（秒），供助教页落一条「语音通话 · 时长」消息。 */
+    onCallEnd: ((Int) -> Unit)? = null,
+) {
     val backdrop = rememberGlassBackdrop()
     val scope = rememberCoroutineScope()
     val recorder = rememberChatVoiceRecorder()
@@ -444,6 +449,8 @@ internal fun AiVoiceCallScreen(onDismiss: () -> Unit, teacher: Boolean = false) 
         stopAiVoice()
         scope.launch {
             if (recorder.recording) recorder.cancel()
+            // §89：先把这一通时长（至少 1 秒）回传，助教页插一条「语音通话 · 时长」消息，再关闭通话层
+            runCatching { onCallEnd?.invoke(elapsedSec.coerceAtLeast(1)) }
             onDismiss()
         }
     }

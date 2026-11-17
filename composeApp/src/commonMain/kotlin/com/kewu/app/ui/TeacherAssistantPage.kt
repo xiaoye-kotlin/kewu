@@ -6,6 +6,7 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.tween
 import com.kewu.app.BackHandler
 import io.github.suqi8.coui.kmp.icon.COUIIcons
+import io.github.suqi8.coui.kmp.icon.extended.Phone
 import io.github.suqi8.coui.kmp.icon.extended.Add
 import io.github.suqi8.coui.kmp.icon.extended.Edit
 import io.github.suqi8.coui.kmp.icon.extended.Mic
@@ -94,6 +95,7 @@ import com.kewu.app.kvGet
 import com.kewu.app.kvSet
 import com.kewu.app.ui.liquidglass.KewuGlassCard
 import com.kewu.app.ui.liquidglass.rememberGlassBackdrop
+import io.github.suqi8.coui.kmp.basic.Icon
 import io.github.suqi8.coui.kmp.basic.Surface
 import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
@@ -126,6 +128,15 @@ private sealed interface TaBlock {
     data class Text(val s: String, val emphasis: Boolean = false) : TaBlock
     data class Students(val list: List<WatchStudent>) : TaBlock
     data class Chips(val list: List<String>) : TaBlock
+    /** §89：一通结束的 AI 语音通话，占一条居中消息，显示「语音通话 · 时长」。 */
+    data class Call(val secs: Int) : TaBlock
+}
+
+/** §89：通话时长格式化 mm:ss（>=1h 用 h:mm:ss）。 */
+private fun fmtCallDur(secs: Int): String {
+    val s = secs.coerceAtLeast(0)
+    fun two(v: Int) = if (v < 10) "0$v" else "$v"
+    return if (s >= 3600) "${s / 3600}:${two(s % 3600 / 60)}:${two(s % 60)}" else "${two(s / 60)}:${two(s % 60)}"
 }
 
 private data class TaMsg(
@@ -151,6 +162,7 @@ private fun TaMsg.plainText(): String = blocks.joinToString("\n") { b ->
         is TaBlock.Text -> b.s
         is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
         is TaBlock.Chips -> b.list.joinToString("、")
+        is TaBlock.Call -> "语音通话 ${fmtCallDur(b.secs)}"
     }
 }
 
@@ -205,6 +217,7 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             is TaBlock.Text -> b.s
             is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
             is TaBlock.Chips -> b.list.joinToString("、")
+            is TaBlock.Call -> "CALL:${b.secs}"
         }
     }
 
@@ -252,7 +265,9 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
      */
     fun restored(e: ChatHistory.Entry): TaMsg = TaMsg(
         isUser = e.role == "user",
-        blocks = e.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it) },
+        blocks = if (e.text.startsWith("CALL:")) {
+            listOf(TaBlock.Call(e.text.removePrefix("CALL:").toIntOrNull() ?: 0))
+        } else e.text.lines().filter { it.isNotBlank() }.map { TaBlock.Text(it) },
         id = if (e.id != 0L) e.id else ChatHistory.nextId(),
         ts = e.ts,
         keep = true, // 来自历史，后续整体落盘时要保留
@@ -787,8 +802,9 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 reportBounds = msg == menuMsg,
                                 onBounds = { menuAnchor = it },
                                 selectFor = textSelect,
-                                // P8 weui 规则：连续 AI 消息只第一条带头像
-                                showAvatar = prevMsg?.isUser != false,
+                                // §89：每条 AI 消息都带头像（含自动简报）——头像位恒为 40dp+8dp，
+                                // 气泡左缘完全对齐；旧版连续 AI 省略头像用 40dp 占位少了 8dp，看起来参差。
+                                showAvatar = true,
                                 onLongPress = {
                                     // ★ V5：长按一律弹整条消息菜单（复制 / 引用 / 分享），不再进文字选择
                                     menuMsg = msg
@@ -807,8 +823,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                                 pageBackdrop,
                                 TaMsg(false, streamText.lines()
                                     .filter { it.isNotBlank() }.map { TaBlock.Text(it.trim()) }),
-                                // P8 weui 规则：上一条是用户消息 → 流式泡带头像
-                                showAvatar = snapshot.lastOrNull()?.isUser != false,
+                                // §89：流式泡同样恒带头像，与正式消息气泡对齐
+                                showAvatar = true,
                             )
                         }
                         Spacer(Modifier.height(10.dp))
@@ -958,7 +974,12 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 
         // ── ★ C2（2026-11-05）：AI 语音通话全屏层（与学生端同款，教师上下文/落盘 key） ──
         SlideOverlay(if (showVoiceCall) Unit else null) {
-            AiVoiceCallScreen(onDismiss = { showVoiceCall = false }, teacher = true)
+            AiVoiceCallScreen(
+                onDismiss = { showVoiceCall = false },
+                teacher = true,
+                // §89：挂断后把这一通作为一条消息插进对话（落盘），像微信一样显示时长
+                onCallEnd = { secs -> push(TaMsg(false, listOf(TaBlock.Call(secs))), persist = true) },
+            )
         }
     }
 }
@@ -993,10 +1014,32 @@ private fun TaBubble(
             is TaBlock.Text -> b.s
             is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
             is TaBlock.Chips -> b.list.joinToString("；")
+            is TaBlock.Call -> "语音通话 ${fmtCallDur(b.secs)}"
         }
     }.trim()
     val press = onLongPress ?: {}
     val media = msg.media
+    // §89：语音通话结束消息 —— 居中灰底胶囊「📞 语音通话 · mm:ss」，单独占一条，不带头像/气泡
+    val callBlock = msg.blocks.firstOrNull { it is TaBlock.Call } as? TaBlock.Call
+    if (callBlock != null) {
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = COUITheme.colorScheme.secondaryContainer,
+                contentColor = COUITheme.colorScheme.onSecondaryContainer,
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(COUIIcons.Phone, contentDescription = null, modifier = Modifier.size(13.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("语音通话 · ${fmtCallDur(callBlock.secs)}", fontSize = 12.5.sp)
+                }
+            }
+        }
+        return
+    }
     if (msg.isUser && media != null) {
         // 图片 / 语音：与学生端同一套气泡（上传 / 识别状态、失败点按重试）
         ChatUserBubble(

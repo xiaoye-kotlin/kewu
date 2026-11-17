@@ -67,7 +67,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.app.AiClient
 import com.kewu.app.BackHandler
-import com.kewu.app.AiNav
 import com.kewu.app.ClassRecordingInfo
 import com.kewu.app.formatPlayTime
 import com.kewu.app.HapticKind
@@ -1219,7 +1218,10 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
     var raw by remember { mutableStateOf(StudyLabStore.review(s.sessionId)) }
     var loading by remember { mutableStateOf(false) }
     var failed by remember { mutableStateOf(false) }
-    var publishing by remember { mutableStateOf(false) }
+    // §89 一键发布作业状态：0 未发布 / 1 已提交给小悟·出题中 / 2 发布中 / 3 已发布
+    var publishState by remember { mutableIntStateOf(0) }
+    var showDeadline by remember { mutableStateOf(false) }
+    var publishNote by remember { mutableStateOf("") }
     val o = remember(raw) { aiJsonObject(raw)?.takeIf { it.num("overall") != null } }
 
     fun load() {
@@ -1270,10 +1272,19 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
         shareText(text)
     }
 
-    /** §88 一键发布本节课作业：AI 依据本节重点与作业草稿生成题目 → 填进程级草稿 → 跳作业页的发布表单。 */
-    fun publishHomework() {
-        if (publishing) return
-        publishing = true
+    /**
+     * §89 一键发布作业（全自动，不跳页）：选好截止时间后 —
+     * ① 立即置「已提交任务给小悟」并让发布按钮消失（出题中）；
+     * ② 后台 AI 依据本节重点出题；
+     * ③ 出题完成直接调 publishAssignment 发布；
+     * ④ 全程状态文案提示，完成后显示「作业已发布」。
+     */
+    fun submitHomework(deadlineText: String) {
+        if (publishState != 0) return
+        publishState = 1
+        publishNote = "已提交任务给小悟，正在出题…"
+        haptic(HapticKind.Light)
+        snackbar.toast("已提交任务给小悟")
         scope.launch {
             val hw = o?.texts("homework").orEmpty()
             val nextLine = o?.txt("next").orEmpty()
@@ -1285,20 +1296,38 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
             }
             val questions = runCatching { AiClient.generateQuestions(spec) }.getOrNull()
             if (questions.isNullOrEmpty()) {
-                snackbar.toast("出题失败，请检查网络后重试")
-                publishing = false
+                // 出题失败：回到可重试状态，按钮重新出现
+                publishState = 0
+                publishNote = ""
+                snackbar.toast("出题失败，请重试")
                 return@launch
             }
-            PublishDraft.courseId.value = s.courseId
-            PublishDraft.title.value = "${courseName.ifBlank { "课堂" }} · ${s.date} 课后作业"
-            PublishDraft.desc.value = "由 AI 课堂复盘自动生成，依据本节重点与学生专注情况。"
-            PublishDraft.questions.value = questions
-            PublishDraft.totalScore.value = questions.sumOf { it.score }.takeIf { it > 0 }?.toString() ?: "100"
-            publishing = false
-            haptic(HapticKind.Light)
-            snackbar.toast("已生成 ${questions.size} 道题，请在发布页确认")
-            AiNav.goTeacherTab(2) // 作业 tab
-            onBack()
+            // 出题完成 → 直接发布（无需跳作业页）
+            publishState = 2
+            publishNote = "题目已生成，正在发布…"
+            val title = "${courseName.ifBlank { "课堂" }} · ${s.date} 课后作业"
+            val info = runCatching {
+                KewuApi.publishAssignment(
+                    courseId = s.courseId,
+                    title = title,
+                    description = "由 AI 课堂复盘自动生成，依据本节重点与学生专注情况。",
+                    deadline = deadlineText,
+                    totalScore = questions.sumOf { it.score }.takeIf { it > 0 } ?: 100,
+                    knowledgePoints = emptyList(),
+                    publisher = KewuApi.nameForServer(),
+                    questions = questions,
+                )
+            }.getOrNull()
+            if (info != null) {
+                publishState = 3
+                publishNote = "作业已发布 · ${questions.size} 道题"
+                haptic(HapticKind.Light)
+                snackbar.toast("作业已发布")
+            } else {
+                publishState = 0
+                publishNote = ""
+                snackbar.toast("发布失败，请重试")
+            }
         }
     }
 
@@ -1378,13 +1407,43 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
                 Spacer(Modifier.height(4.dp))
                 KewuSecondaryButton("导出复盘报告", { haptic(HapticKind.Light); exportReport() }, Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
-                KewuSecondaryButton(
-                    if (publishing) "正在出题…" else "一键发布本节课作业",
-                    { publishHomework() }, Modifier.fillMaxWidth(), enabled = !publishing,
-                )
+                // §89：一键发布作业（选时间 → 已提交给小悟 → 自动出题 → 自动发布，不跳页）
+                when (publishState) {
+                    0 -> KewuSecondaryButton("一键发布本节课作业", {
+                        haptic(HapticKind.Tick); showDeadline = true
+                    }, Modifier.fillMaxWidth())
+                    1, 2 -> KewuGlassCard(backdrop = backdrop, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            io.github.suqi8.coui.kmp.basic.InfiniteProgressIndicator(Modifier.size(18.dp))
+                            Spacer(Modifier.width(10.dp))
+                            Text(publishNote, color = cs.primary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                    3 -> KewuGlassCard(backdrop = backdrop, shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(14.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text("✓", color = KewuGreen, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.width(10.dp))
+                            Text(publishNote, color = KewuGreen, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        }
+                    }
+                }
                 Spacer(Modifier.height(8.dp))
                 KewuSecondaryButton("重新复盘", { load() }, Modifier.fillMaxWidth())
             }
+        }
+        // §89：选择作业提交时间（与作业页同款 coui DatePicker/TimePicker），确认后自动出题并发布
+        if (showDeadline) {
+            DeadlineSheet(
+                initial = "",
+                onDismiss = { showDeadline = false },
+                onConfirm = { deadlineText -> showDeadline = false; submitHomework(deadlineText) },
+            )
         }
     }
 }
