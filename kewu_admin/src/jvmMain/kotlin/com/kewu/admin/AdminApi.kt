@@ -3,6 +3,7 @@ package com.kewu.admin
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.header
@@ -18,6 +19,7 @@ import io.ktor.http.content.TextContent
 import io.ktor.http.encodeURLPath
 import java.net.Proxy
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -63,9 +65,11 @@ class AdminApi(
         // 连 127.0.0.1:8080 / 公网 8080 都可能被代理劫持而报「无法连接服务器」。
         engine { proxy = Proxy.NO_PROXY }
         install(HttpTimeout) {
-            requestTimeoutMillis = 30_000
-            connectTimeoutMillis = 10_000
-            socketTimeoutMillis = 30_000
+            // 2026-11-17 §82：服务器可能是 1 核 2G 的小机器，冷启动首次登录（BCrypt + 连接池预热）
+            // 实测要 29.5s，原来的 30s 正好卡在超时线上导致「连接不上」。放宽到 60s。
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 15_000
+            socketTimeoutMillis = 60_000
         }
     }
 
@@ -125,14 +129,16 @@ class AdminApi(
         ?: "https://kewu2.obs.cn-north-4.myhuaweicloud.com"
 
     suspend fun login(username: String, password: String): AdminSession {
-        val data = request(
+        // 登录是「冷启动最慢」的请求（BCrypt 校验 + 数据库连接池首次建连 + JIT 预热）。
+        // 低配服务器首次可能接近 30s，这里给 120s 超时，并允许超时自动重试一次（第二次已预热会很快）。
+        val data = requestWithRetry(
             path = "/api/user/login",
-            method = HttpMethod.Post,
             body = buildJsonObject {
                 put("username", username)
                 put("password", password)
             },
-            authenticate = false,
+            timeoutMs = 120_000,
+            attempts = 2,
         ).objOrThrow("登录响应缺少数据")
         val role = data.str("role", "").ifBlank { data.obj("user").str("role", "") }
         if (!role.equals("ADMIN", ignoreCase = true)) {
@@ -261,13 +267,54 @@ class AdminApi(
         body: JsonObject? = null,
         params: Map<String, String?> = emptyMap(),
         authenticate: Boolean = true,
+        timeoutMs: Long? = null,
     ) = AdminJson.parseToJsonElement(
-        requestText(path, method, body, params, authenticate, envelope = true),
+        requestText(path, method, body, params, authenticate, envelope = true, timeoutMs = timeoutMs),
     ).let { root ->
         val envelope = root as? JsonObject ?: throw AdminApiException("服务器响应格式异常")
         val code = envelope.long("code", -1)
         if (code != 0L) throw AdminApiException(envelope.str("message", "操作失败，请稍后重试"))
         envelope["data"]
+    }
+
+    /**
+     * 带超时重试的 POST（仅用于登录等冷启动敏感请求）。
+     * 服务器低配时首次请求可能超时，但服务端其实仍在处理并最终成功（§82 实测 29.5s 返回 200）。
+     * 因此超时后重试一次是安全的：命中已预热的连接与 JIT，通常几秒内返回。
+     */
+    private suspend fun requestWithRetry(
+        path: String,
+        body: JsonObject,
+        timeoutMs: Long,
+        attempts: Int,
+    ): kotlinx.serialization.json.JsonElement? {
+        var lastError: Exception? = null
+        repeat(attempts) { index ->
+            try {
+                return request(
+                    path = path,
+                    method = HttpMethod.Post,
+                    body = body,
+                    authenticate = false,
+                    timeoutMs = timeoutMs,
+                )
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: AdminApiException) {
+                // 业务错误（密码错等）不重试，直接抛
+                if (!isTimeoutLike(e)) throw e
+                lastError = e
+            } catch (e: Exception) {
+                lastError = e
+            }
+            if (index < attempts - 1) kotlinx.coroutines.delay(1200)
+        }
+        throw lastError ?: AdminApiException("登录失败，请稍后重试")
+    }
+
+    private fun isTimeoutLike(e: Throwable): Boolean {
+        val msg = e.message.orEmpty()
+        return msg.contains("超时", true) || msg.contains("timeout", true) || msg.contains("无法连接", true)
     }
 
     private suspend fun requestText(
@@ -277,6 +324,7 @@ class AdminApi(
         params: Map<String, String?> = emptyMap(),
         authenticate: Boolean = true,
         envelope: Boolean,
+        timeoutMs: Long? = null,
     ): String {
         try {
             val response = client.request("$baseUrl$path") {
@@ -284,6 +332,12 @@ class AdminApi(
                 params.forEach { (key, value) -> if (!value.isNullOrBlank()) parameter(key, value) }
                 if (authenticate) bearerToken?.let { header("Authorization", "Bearer $it") }
                 if (body != null) setBody(TextContent(body.toString(), ContentType.Application.Json))
+                if (timeoutMs != null) {
+                    timeout {
+                        requestTimeoutMillis = timeoutMs
+                        socketTimeoutMillis = timeoutMs
+                    }
+                }
             }
             val text = response.bodyAsText()
             if (!envelope && response.status.value >= 400) {
@@ -308,8 +362,15 @@ class AdminApi(
                     "log" to AdminDiagnostics.logFile.absolutePath,
                 ),
             )
+            val isTimeout = e is io.ktor.client.network.sockets.SocketTimeoutException ||
+                e is io.ktor.client.plugins.HttpRequestTimeoutException ||
+                e.message?.contains("timeout", true) == true
             throw AdminApiException(
-                "暂时无法连接服务器（当前后端地址 $baseUrl）。\n详情见日志：${AdminDiagnostics.logFile.absolutePath}",
+                if (isTimeout) {
+                    "服务器响应超时（当前后端地址 $baseUrl）。\n低配服务器首次请求较慢，已自动放宽等待时间，请再点一次登录重试。\n详情见日志：${AdminDiagnostics.logFile.absolutePath}"
+                } else {
+                    "暂时无法连接服务器（当前后端地址 $baseUrl）。\n请确认后端已启动；详情见日志：${AdminDiagnostics.logFile.absolutePath}"
+                },
             )
         }
     }
