@@ -955,8 +955,14 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
 // ───────────────────────── 气泡 ─────────────────────────
 
 /**
- * 对话气泡。长按 → 复制 / 引用 / 分享菜单（[onLongPress] 为 null 时不响应，如流式草稿）。
- * 按压 Q 弹只作用在气泡**内部内容**上（AI 气泡是玻璃采样者，外壳禁 scale）。
+ * 对话气泡（2026-11-17 §84 重做）：**直接复用学生端共用气泡** [ChatAiBubble] / [ChatUserBubble]。
+ *
+ * 教师端助教页从此与学生端小悟页视觉完全一致：12dp 圆角、Markdown 正文、
+ * 去掉旧版「小悟 / KEWU AI」标签条、AI 侧不带头像。
+ *
+ * 顺带修掉「AI 主动连发的简报气泡左右不齐」：
+ * 旧实现每条气泡都预留 40dp 头像位，再按「上一条是不是 AI」省略头像（showAvatar），
+ * 保留与省略两种排版宽度不同 → 连续 4 条简报参差不齐；共用气泡不带头像，天然左对齐。
  */
 @Composable
 private fun TaBubble(
@@ -966,203 +972,53 @@ private fun TaBubble(
     reportBounds: Boolean = false,
     onBounds: (androidx.compose.ui.geometry.Rect) -> Unit = {},
     onLongPress: (() -> Unit)? = null,
-    /** 文字选择模式（P4）：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
+    /** 文字选择模式：本消息被选中时正文渲染为可选中纯文本 + 拖柄 */
     selectFor: ChatTextSelectState? = null,
-    /** P8 weui 规则：上一条也是 AI 消息时省略本条头像（false = 省略）。 */
-    showAvatar: Boolean = true,
+    /** 旧版控制「省略头像」的参数，共用气泡已统一不带头像，保留仅为兼容既有调用点。 */
+    @Suppress("UNUSED_PARAMETER") showAvatar: Boolean = true,
 ) {
-    val cs = COUITheme.colorScheme
-    val bounds = Modifier.onGloballyPositioned { if (reportBounds) onBounds(it.boundsInWindow()) }
-    // P4 选择模式：整条消息的纯文本（blocks → 纯文本），选区按字符稳定映射
-    // U2：不再只在选择态计算，双击查看（SelectTextDialog）也复用同一份全文。
-    val selecting = selectFor?.msgKey == msg.id
-    val plainText = msg.blocks.joinToString("\n") { b ->
+    val text = msg.blocks.joinToString("\n") { b ->
         when (b) {
-            is TaBlock.Text -> stripMarkdown(b.s)
+            is TaBlock.Text -> b.s
             is TaBlock.Students -> b.list.joinToString("\n") { "· ${it.name}：${it.reason}" }
-            is TaBlock.Chips -> b.list.joinToString("、")
+            is TaBlock.Chips -> b.list.joinToString("；")
         }
-    }
-    val press = if (onLongPress != null) {
-        Modifier.bubblePress(
-            onLongPress,
-            onDoubleTap = { if (plainText.isNotBlank()) ChatTextSelectEventBus.openViewer(plainText) },
-        )
-    } else Modifier
+    }.trim()
+    val press = onLongPress ?: {}
     val media = msg.media
     if (msg.isUser && media != null) {
         // 图片 / 语音：与学生端同一套气泡（上传 / 识别状态、失败点按重试）
-        val longPress = onLongPress ?: {}
-        if (media.isVoice) {
-            Box(Modifier.fillMaxWidth().then(bounds), contentAlignment = Alignment.CenterEnd) {
-                ChatVoiceBubble(media, longPress)
-            }
-        } else {
-            Column(
-                Modifier.fillMaxWidth().then(bounds),
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                ChatImageBubble(media, longPress)
-                if (msg.blocks.isNotEmpty() || msg.quote != null) {
-                    TaBubble(backdrop, msg.copy(media = null), onLongPress = onLongPress)
-                }
-            }
-        }
-    } else if (msg.isUser) {
-        // U3 weui：用户泡纯 #95EC69 + 黑字 + 6dp 圆角 + 右侧尖角 + 40dp 方头像（与学生端一致）
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.End,
-            verticalAlignment = Alignment.Top,
-        ) {
-            Box(
-                Modifier
-                    .widthIn(max = 280.dp)
-                    .then(bounds)
-                    .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 2.dp, bottomEnd = 6.dp, bottomStart = 6.dp))
-                    .background(WeuiUserGreen),
-            ) {
-                Column(press.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                    if (selecting && selectFor != null) {
-                        SelectableChatText(plainText, selectFor, color = WeuiText,
-                            fontSize = 15.sp, lineHeight = 22.sp, selectedBg = Color.White.copy(alpha = 0.45f))
-                    } else {
-                        // 微信引用条：灰底 + 左侧竖条 + 小字
-                        msg.quote?.let { quoted ->
-                            Row(
-                                Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(Color(0x1A000000))
-                                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                            ) {
-                                Box(
-                                    Modifier.width(2.5.dp).heightIn(min = 20.dp)
-                                        .clip(RoundedCornerShape(2.dp)).background(Color(0xFF9A9A9A)),
-                                )
-                                Spacer(Modifier.width(7.dp))
-                                Text(
-                                    quoted, color = Color(0xFF5B5B5B),
-                                    fontSize = 11.5.sp, lineHeight = 16.sp,
-                                    maxLines = 3, overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 220.dp),
-                                )
-                            }
-                            if (msg.blocks.isNotEmpty()) Spacer(Modifier.height(7.dp))
-                        }
-                        msg.blocks.filterIsInstance<TaBlock.Text>().forEach { t ->
-                            Text(t.s, color = WeuiText, fontSize = 15.sp, lineHeight = 22.sp)
-                        }
-                    }
-                }
-            }
-            WeuiBubbleTail(isUser = true, modifier = Modifier.padding(top = 13.dp))
-            Spacer(Modifier.width(8.dp))
-            ChatUserAvatar()
-        }
+        ChatUserBubble(
+            msg = media.copy(
+                quote = media.quote ?: msg.quote,
+                text = media.text.ifBlank { text },
+                id = media.id.takeIf { it != 0L } ?: msg.id,
+                ts = media.ts.takeIf { it != 0L } ?: msg.ts,
+            ),
+            reportBounds = reportBounds,
+            onBounds = onBounds,
+            onLongPress = press,
+            selectFor = selectFor,
+        )
+        return
+    }
+    if (msg.isUser) {
+        ChatUserBubble(
+            msg = AiChatMsg(text = text, isUser = true, id = msg.id, ts = msg.ts, quote = msg.quote),
+            reportBounds = reportBounds,
+            onBounds = onBounds,
+            onLongPress = press,
+            selectFor = selectFor,
+        )
     } else {
-        // U3 weui：AI 泡纯白 + 黑字 + 左侧尖角（不再整颗毛玻璃），40dp 方头像
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start, verticalAlignment = Alignment.Top) {
-            if (showAvatar) {
-                ChatAiAvatar()
-                Spacer(Modifier.width(8.dp))
-            } else {
-                Spacer(Modifier.width(40.dp))
-            }
-            WeuiBubbleTail(isUser = false, modifier = Modifier.padding(top = 13.dp))
-            val aiShape = RoundedCornerShape(topStart = 2.dp, topEnd = 6.dp, bottomEnd = 6.dp, bottomStart = 6.dp)
-            Box(
-                Modifier
-                    .widthIn(max = 300.dp)
-                    .border(1.dp, WeuiBubbleBorder, aiShape)
-                    .clip(aiShape)
-                    .background(WeuiAiWhite)
-                    .then(bounds),
-            ) {
-                Column(press.padding(horizontal = 12.dp, vertical = 9.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("小悟", color = Color(0xFF7A7A7A), fontSize = 10.5.sp, fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.width(6.dp))
-                        Surface(shape = RoundedCornerShape(4.dp), color = Color(0xFFF0F0F0)) {
-                            Text(
-                                "KEWU AI", color = Color(0xFF8A8A8A), fontSize = 9.sp, fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                            )
-                        }
-                    }
-                    Spacer(Modifier.height(6.dp))
-                    if (selecting && selectFor != null) {
-                        SelectableChatText(plainText, selectFor, color = WeuiText,
-                            fontSize = 15.sp, lineHeight = 22.sp,
-                            selectedBg = Color(0xFF3D7BEF).copy(alpha = 0.26f))
-                    } else {
-                    msg.blocks.forEach { block ->
-                        when (block) {
-                            is TaBlock.Text -> {
-                                if (block.emphasis) Text(
-                                    stripMarkdown(block.s),
-                                    color = cs.onSurface,
-                                    fontSize = 13.5.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    lineHeight = 20.sp,
-                                ) else MarkdownText(block.s, color = cs.onSurfaceSecondary, fontSize = 13.5.sp, lineHeight = 20.sp)
-                                Spacer(Modifier.height(4.dp))
-                            }
-                            is TaBlock.Students -> {
-                                block.list.forEach { w ->
-                                    Surface(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = cs.secondaryContainer,
-                                    ) {
-                                    Row(
-                                        Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Column(Modifier.weight(1f)) {
-                                            Text(w.name, color = cs.onSurface, fontSize = 13.5.sp,
-                                                fontWeight = FontWeight.Medium)
-                                            Text(w.reason, color = cs.onSurfaceSecondary, fontSize = 11.5.sp,
-                                                maxLines = 2, lineHeight = 15.sp)
-                                        }
-                                        Spacer(Modifier.width(8.dp))
-                                        KewuTag(
-                                            when (w.kind) { 0 -> "退步"; 1 -> "风险"; else -> "需关注" },
-                                            when (w.kind) {
-                                                0 -> cs.errorContainer
-                                                1 -> Color(0xFFFFB300).copy(alpha = 0.2f)
-                                                else -> cs.tertiaryContainer
-                                            },
-                                            when (w.kind) {
-                                                0 -> cs.onErrorContainer
-                                                1 -> Color(0xFF8A5A00)
-                                                else -> cs.onTertiaryContainer
-                                            },
-                                        )
-                                    }
-                                    }
-                                    Spacer(Modifier.height(6.dp))
-                                }
-                            }
-                            is TaBlock.Chips -> {
-                                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                    block.list.forEach { c ->
-                                        Surface(shape = RoundedCornerShape(8.dp), color = cs.tertiaryContainer) {
-                                            Text(
-                                                c, color = cs.onTertiaryContainer, fontSize = 11.5.sp, maxLines = 1,
-                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                                            )
-                                        }
-                                    }
-                                }
-                                Spacer(Modifier.height(4.dp))
-                            }
-                        }
-                    }
-                    }
-                }
-            }
-        }
+        ChatAiBubble(
+            msg = AiChatMsg(text = text, isUser = false, id = msg.id, ts = msg.ts),
+            backdrop = backdrop,
+            reportBounds = reportBounds,
+            onBounds = onBounds,
+            onLongPress = press,
+            selectFor = selectFor,
+        )
     }
 }
 

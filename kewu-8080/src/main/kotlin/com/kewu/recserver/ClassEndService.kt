@@ -222,8 +222,44 @@ class ClassEndService(private val services: RecServices) {
         return (fromRedis + fromDb).distinctBy { it.recordingId }
     }
 
-    private fun setProgress(sessionId: String, status: String?, stageText: String, pct: Int, error: String? = null) {
-        transaction {
+    /**
+     * 提前写进度（2026-11-17 §84）：下课后「段拼接」可能耗时较久，而择优/转写还没开始，
+     * 首页进度卡会一直停在「排队中 0%」，看起来像没开始。
+     * 这里先建行 + 写阶段文字，让老师一下课就能看到「拼接录音中」→「转写中」→「合并中」→「完成」。
+     */
+    fun markStage(sessionId: String, courseId: String, stageText: String, pct: Int, status: String = "PENDING_ASR") {
+        runCatching {
+            transaction {
+                val exists = ClassRecordings.selectAll().where { ClassRecordings.sessionId eq sessionId }.firstOrNull()
+                if (exists == null) {
+                    ClassRecordings.insert {
+                        it[ClassRecordings.sessionId] = sessionId
+                        it[ClassRecordings.courseId] = courseId
+                        it[primaryRecordingId] = null
+                        it[primaryUrl] = null
+                        it[strategy] = "PENDING"
+                        it[candidateCount] = 0
+                        it[endReason] = "MANUAL"
+                        it[decidedAt] = LocalDateTime.now().format(fmt)
+                        it[durationSec] = null
+                        it[transcriptStatus] = status
+                        it[stage] = stageText.take(64)
+                        it[progress] = pct.coerceIn(0, 100)
+                    }
+                } else {
+                    ClassRecordings.update({ ClassRecordings.sessionId eq sessionId }) {
+                        it[stage] = stageText.take(64)
+                        it[progress] = pct.coerceIn(0, 100)
+                        // 已经在转写 / 已经完成的不动状态，只更新阶段文字（避免把 DONE 冲回去重跑）
+                        val cur = exists[ClassRecordings.transcriptStatus]
+                        if (cur !in setOf("TRANSCRIBING", "DONE")) it[transcriptStatus] = status
+                    }
+                }
+            }
+        }.onFailure { println("MARK-STAGE-WARN $sessionId: ${it.message}") }
+    }
+
+    private fun setProgress(sessionId: String, status: String?, stageText: String, pct: Int, error: String? = null) {        transaction {
             ClassRecordings.update({ ClassRecordings.sessionId eq sessionId }) {
                 if (status != null) it[transcriptStatus] = status
                 it[stage] = stageText.take(64)

@@ -825,6 +825,8 @@ private fun LiveSessionCard(
     // 2026-11-04（任务 #16）：融合录音——教师决定何时把现有录音交给 AI 助教
     var confirmFuse by remember { mutableStateOf(false) }
     var fuseCount by remember { mutableStateOf(0) }
+    /** 分段录音提示（§84）：有分段时在确认框里说明会自动拼成整轨。 */
+    var fuseSegmentHint by remember { mutableStateOf<String?>(null) }
     var fusing by remember { mutableStateOf(false) }
 
     // 动态码：进场拉一次 + 倒计时归零自动刷新
@@ -939,17 +941,23 @@ private fun LiveSessionCard(
                     haptic(HapticKind.Medium)
                     scope.launch {
                         val sid = KewuApi.classSessionId(session.courseId, todayCn())
-                        val n = KewuApi.getSessionRecordings(sid).getOrNull()?.size ?: -1
-                        if (n < 0) {
+                        // ★ §84：App 默认分段上传，段只在 Redis、不进 recordings 表。
+                        //   旧版查 /recordings 数量恒为 0 → 误报「还没有录音上传成功」。
+                        //   现在查 /uploaded（整轨 + 分段组），total>0 才允许融合。
+                        val cnt = KewuApi.getSessionUploadedCount(sid)
+                        if (cnt == null) {
                             snackbar.toast("查询录音份数失败，请检查网络后重试")
                             return@launch
                         }
-                        if (n == 0) {
+                        if (cnt.total == 0) {
                             // 用户口径：一条录音都没上传成功就不让融合
                             snackbar.toast("还没有录音上传成功，暂不能融合")
                             return@launch
                         }
-                        fuseCount = n
+                        fuseCount = cnt.total
+                        fuseSegmentHint = if (cnt.segmentGroups > 0) {
+                            "含 ${cnt.segmentGroups} 组分段录音（共 ${cnt.segmentCount} 段），融合时会自动拼成整轨"
+                        } else null
                         confirmFuse = true
                     }
                 },
@@ -1005,6 +1013,8 @@ private fun LiveSessionCard(
                 // 同步下课状态到后端（POST /api/teacher/class-state END）；失败只提示，签到已关不影响下课
                 runCatching { KewuApi.setClassState(session.courseId, "END") }
                 closing = false
+                // §84：后端此时已开始「拼接 → 择优 → 转写」，让首页进度卡立刻刷新显示进度
+                ClassNoteWatchKick()
                 onClosed()
             }
         },
@@ -1017,6 +1027,7 @@ private fun LiveSessionCard(
         title = "融合录音交给 AI？",
         summary = buildString {
             append("目前已收到 $fuseCount 份录音。")
+            fuseSegmentHint?.let { append(it).append("。") }
             append(
                 if (fuseCount < 3) "录音份数较少，AI 课堂纪要可能不完整，建议稍等更多录音上传后再融合。"
                 else "份数已较充足，建议现在融合。"
@@ -1050,6 +1061,8 @@ private fun LiveSessionCard(
                 runCatching { KewuApi.closeAttendance(session.id) }
                 snackbar.toast("已开始融合，课堂纪要生成后会推送给全班")
                 fusing = false
+                // §84：让首页「课堂纪要」进度卡立刻刷新，马上看到拼接/转写进度
+                ClassNoteWatchKick()
                 onClosed()
             }
         },

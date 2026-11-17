@@ -103,13 +103,25 @@ fun Application.configureRouting() {
     val bg = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.IO)
     teacherService.onClassEnded = { st, reason ->
         bg.launch {
-            // 下课时各端正在自动停止并上传录音：先按现有录音择优一次，2 分钟后再择优一次（把晚到的上传算进去）
-            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }.onFailure { println("CLASS-END-ERROR: $it") }
-            kotlinx.coroutines.delay(120_000)
-            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }
-            // 第二轮择优（晚到的上传已算进去）后，用主录音走 SIS 转写 + AI 课堂纪要
             val sid = st.courseId + "-" + (st.startedAt?.take(10) ?: java.time.LocalDate.now().toString()).replace("-", "")
+            // ★ 2026-11-17 §84：下课先「把分段拼回整轨」再做择优。
+            //   现在的 App 默认分段上传（segGroup），段只记在 Redis 不落 recordings 表；
+            //   以前这里直接择优 → 找不到任何整轨 → NO_AUDIO → 首页进度卡（NOTE_FINAL 含 NO_AUDIO）直接不显示，
+            //   表现就是「结束课程后没有融合进度」。拼接后 recordings 表才有整轨可择优。
+            // 先写一行「拼接录音中」：段拼接可能耗时，首页进度卡一下课就能显示进度（§84）
+            classEnd.markStage(sid, st.courseId, "拼接录音中", 3)
+            runCatching { segmentService.mergeSessionSafe(sid) }
+                .onFailure { println("CLASS-END-MERGE-ERROR: " + it.stackTraceToString()) }
+            // 立即择优 + 立即转写（用户要求：结束课程后服务器马上开始融合，进度实时回前端）
+            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }.onFailure { println("CLASS-END-ERROR: $it") }
             runCatching { classEnd.transcribe(sid) }.onFailure { println("ASR-ERROR: $it") }
+            // 2 分钟后再补一轮：把下课后才传完的段拼进来重新择优；
+            // 有新录音时 onClassEnded 会把状态打回 PENDING_ASR，这里的 transcribe 才会真正重跑（DONE 不动）
+            kotlinx.coroutines.delay(120_000)
+            runCatching { segmentService.mergeSessionSafe(sid) }
+                .onFailure { println("CLASS-END-MERGE-ERROR(2nd): " + it.stackTraceToString()) }
+            runCatching { classEnd.onClassEnded(st.courseId, st.startedAt, reason) }
+            runCatching { classEnd.transcribe(sid) }.onFailure { println("ASR-ERROR(2nd): $it") }
         }
     }
     com.kewu.recserver.ClassEndService.onUpload = { sid ->
@@ -199,6 +211,8 @@ fun Application.configureRouting() {
                 // 1. 先封口：晚到的段上传立刻被拒，学生端收到 SESSION_SEALED 后丢弃本地剩余段
                 recServices.redis.markSessionSealed(sid)
                 // 2. 段拼回整轨并登记（合并失败不阻断：已有整轨录音仍可融合转写）
+                //    先写阶段文字，老师点完立刻能在首页看到「拼接录音中」（§84）
+                runCatching { classEnd.markStage(sid, courseId, "拼接录音中", 3) }
                 val merged = runCatching { segmentService.mergeSession(sid) }
                     .onFailure { println("FINALIZE-MERGE-ERROR $sid: " + it.stackTraceToString()) }
                     .getOrNull()

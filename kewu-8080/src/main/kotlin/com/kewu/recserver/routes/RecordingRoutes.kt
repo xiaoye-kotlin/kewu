@@ -30,6 +30,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.jetbrains.exposed.sql.SqlExpressionBuilder.eq
+import org.jetbrains.exposed.sql.and
 import org.jetbrains.exposed.sql.insert
 import org.jetbrains.exposed.sql.selectAll
 import org.jetbrains.exposed.sql.transactions.transaction
@@ -218,6 +219,45 @@ fun Route.recordingRoutes() {
 
     // 教师端：一节课所有端上传的录音 + 课堂专注结论（2026-11-02）。需登录且不是学生
     authenticate(com.kewu.security.JwtConfig.NAME) {
+        /**
+         * 已上传录音计数（2026-11-17 §84）：给「融合录音」按钮做前置判断。
+         * 关键：App 默认**分段上传**（segGroup），段只记在 Redis、不落 recordings 表；
+         * 旧版按钮用 /recordings 的数量判断 → 恒为 0 → 误报「还没有录音上传成功，暂不能融合」。
+         * 这里把「整轨数」和「分段组/段数」一起返回，total>0 即可融合。
+         */
+        get("/api/class-recordings/{sessionId}/uploaded") {
+            val uid = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload
+                ?.getClaim(com.kewu.security.JwtConfig.CLAIM_USER_ID)?.asString()
+            val role = uid?.let { id ->
+                transaction { com.kewu.db.Users.selectAll().where { com.kewu.db.Users.id eq id }.firstOrNull()?.get(com.kewu.db.Users.role) }
+            }
+            if (role == null || role.equals("student", ignoreCase = true)) {
+                call.respond(HttpStatusCode.Forbidden, com.kewu.models.ApiResponse<String>(1, "仅教师可查看"))
+                return@get
+            }
+            val sid = call.parameters["sessionId"]!!
+            val dbCount = runCatching {
+                transaction {
+                    com.kewu.db.Recordings.selectAll()
+                        .where { (com.kewu.db.Recordings.sessionId eq sid) and com.kewu.db.Recordings.deletedAt.isNull() }
+                        .count().toInt()
+                }
+            }.getOrDefault(0)
+            val groups = runCatching { services.redis.getSegmentGroups(sid) }.getOrDefault(emptySet())
+            val segCount = runCatching { groups.sumOf { services.redis.getSegments(sid, it).size } }.getOrDefault(0)
+            call.respond(
+                com.kewu.models.ApiResponse(
+                    0, "ok",
+                    mapOf(
+                        "dbRecordings" to dbCount,
+                        "segmentGroups" to groups.size,
+                        "segmentCount" to segCount,
+                        "total" to (dbCount + groups.size),
+                    ),
+                )
+            )
+        }
+
         get("/api/class-recordings/{sessionId}/recordings") {
             val uid = call.principal<io.ktor.server.auth.jwt.JWTPrincipal>()?.payload
                 ?.getClaim(com.kewu.security.JwtConfig.CLAIM_USER_ID)?.asString()

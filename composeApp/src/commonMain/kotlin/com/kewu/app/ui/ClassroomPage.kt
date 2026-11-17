@@ -1682,9 +1682,16 @@ private object ClassNoteWatch {
     val dismissed = androidx.compose.runtime.mutableStateListOf<String>()
     /** 本地首次看到某节次处于某状态的时刻（老后端没有 progress 时用来估算进度）。 */
     val firstSeen = mutableMapOf<String, Long>()
+    /** 手动踢一次刷新（§84）：老师刚结束课程 / 点了融合后，进度卡不必等下一个轮询周期。 */
+    var refreshTick by androidx.compose.runtime.mutableStateOf(0)
 }
 
 private val NOTE_FINAL = setOf("DONE", "FAILED", "EMPTY", "NO_AUDIO", "")
+
+/** §84：结束课程 / 融合后由页面调用，让首页「课堂纪要」进度卡立刻重拉一次。 */
+internal fun ClassNoteWatchKick() {
+    ClassNoteWatch.refreshTick++
+}
 
 /**
  * 首页「课堂纪要生成进度」：下课后到纪要出来要十几分钟，旧版期间什么都看不到。
@@ -1702,7 +1709,8 @@ internal fun ClassNoteProgressSection(
     var items by remember { mutableStateOf<List<ClassNoteProgress>>(emptyList()) }
     var nowMs by remember { mutableStateOf(kotlin.time.Clock.System.now().toEpochMilliseconds()) }
     val courseKey = courses.joinToString(",") { it.first }
-    LaunchedEffect(courseKey) {
+    // refreshTick：下课 / 融合后由页面主动 +1，立即重拉一次，不用等下一个轮询周期（§84）
+    LaunchedEffect(courseKey, ClassNoteWatch.refreshTick) {
         while (true) {
             val now = kotlin.time.Clock.System.now().toEpochMilliseconds()
             val recent = setOf(todayCn(now), todayCn(now - 86_400_000L))
@@ -1718,8 +1726,8 @@ internal fun ClassNoteProgressSection(
                         (p.status == "DONE" && p.sessionId in ClassNoteWatch.seenRunning && p.sessionId !in ClassNoteWatch.dismissed))
                 }.sortedBy { it.sessionId }
             }
-            // 有生成中的节次每 20 秒刷新；都没有就放慢到 60 秒
-            val wait = if (items.any { it.status !in NOTE_FINAL }) 20_000L else 60_000L
+            // 有生成中的节次每 5 秒刷新（§84：下课后要能实时看到拼接/转写/融合进度）；都没有就放慢到 60 秒
+            val wait = if (items.any { it.status !in NOTE_FINAL }) 5_000L else 60_000L
             var waited = 0L
             while (waited < wait) {
                 kotlinx.coroutines.delay(1_000)

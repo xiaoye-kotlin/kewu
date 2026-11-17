@@ -101,8 +101,21 @@ data class SessionRecordingInfo(
     val transcriptStatus: String?, val focusVerdict: String?, val focusEvidence: String?, val focusConfidence: Int?,
 )
 
-/** 教师联系方式（受登录和课程关系保护；未公开字段为 null）。 */
-data class TeacherContactInfo(
+/**
+ * 已上传录音计数（2026-11-17 §84）。
+ * App 默认分段上传，段只记在 Redis 不落 recordings 表，所以「份数」必须把分段组也算进去，
+ * 否则「融合录音」按钮会误报「还没有录音上传成功」。
+ */
+data class SessionUploadedCount(
+    val dbRecordings: Int = 0,
+    val segmentGroups: Int = 0,
+    val segmentCount: Int = 0,
+) {
+    /** 可融合的「份数」：整轨 + 分段组（每组会被拼成一条整轨）。 */
+    val total: Int get() = dbRecordings + segmentGroups
+}
+
+/** 教师联系方式（受登录和课程关系保护；未公开字段为 null）。 */data class TeacherContactInfo(
     val teacherId: String? = null, val teacherName: String? = null,
     val phone: String? = null, val email: String? = null,
 )
@@ -1228,8 +1241,23 @@ object KewuApi {
     catch (_: Exception) { null }
 
     /** 教师端：一节课所有端上传的录音 + 课堂专注结论（需教师 token）。失败返回 null。 */
-    suspend fun getSessionRecordings(sessionId: String): Result<List<SessionRecordingInfo>> = try {
-        val el = getJson("$BASE_URL/api/class-recordings/${pathSegment(sessionId)}/recordings", auth = true)
+    /**
+     * 已上传录音计数（2026-11-17 §84）：整轨数 + 分段组数。
+     * 「融合录音」按钮用它判断能否融合——分段上传时 recordings 表是空的，只看它会误判成 0 份。
+     */
+    suspend fun getSessionUploadedCount(sessionId: String): SessionUploadedCount? = try {
+        val el = getJson("$BASE_URL/api/class-recordings/${pathSegment(sessionId)}/uploaded", auth = true)
+        el.dataObjectOrNull("data")?.let { d ->
+            SessionUploadedCount(
+                dbRecordings = d["dbRecordings"].int(),
+                segmentGroups = d["segmentGroups"].int(),
+                segmentCount = d["segmentCount"].int(),
+            )
+        }
+    } catch (e: CancellationException) { throw e }
+    catch (_: Exception) { null }
+
+    suspend fun getSessionRecordings(sessionId: String): Result<List<SessionRecordingInfo>> = try {        val el = getJson("$BASE_URL/api/class-recordings/${pathSegment(sessionId)}/recordings", auth = true)
         el.asDataOrThrow()
         Result.success(el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map { o ->
             SessionRecordingInfo(
