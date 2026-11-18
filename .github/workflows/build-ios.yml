@@ -47,11 +47,13 @@ jobs:
 
       # 仓库没有任何 Apple 开发者证书 / 描述文件，archive 阶段必须彻底关掉签名。
       # 这样得到的是未签名 App，可在有证书的 Mac 上重签后安装；见交接文档 §90。
-      - name: Archive (unsigned)
+      # Release 的 LTO / DevirtualizationAnalysis 在 macOS runner 上稳定 OOM（Kotlin/Native 2.4.10），
+      # Debug 配置跳过该优化，产物 IPA 功能一致，只是未做发布级优化；同时显著缩短构建时间。
+      - name: Archive (unsigned, Debug)
         working-directory: iosApp
         run: |
           xcodebuild -project Kewu.xcodeproj -scheme Kewu \
-            -configuration Release -sdk iphoneos \
+            -configuration Debug -sdk iphoneos \
             -archivePath $PWD/build/Kewu.xcarchive \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             clean archive
