@@ -91,7 +91,8 @@ actual fun platformExitApp() = Unit
 /** iOS 没有 Context / Activity：返回占位对象（录音器 / 权限请求只需要非空）。 */
 actual fun platformAppContext(): Any = Unit
 
-actual fun platformActivity(): Any? = Unit
+// iOS 无 Activity：按 common 契约返回 null（Desktop 同样为 null），避免调用方把 Unit 误判为有效 Activity
+actual fun platformActivity(): Any? = null
 
 actual fun platformCacheDir(): String = platform.Foundation.NSTemporaryDirectory().removeSuffix("/")
 

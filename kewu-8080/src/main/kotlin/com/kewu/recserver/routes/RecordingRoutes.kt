@@ -40,6 +40,9 @@ import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 // 录音上传 + 融合：多端把音频传上来，存好、算电平/信噪比、打分，教师端优先择优，异常自动回退学生端
+/** 单段音频上传上限 120MB（正常 10 分钟 44.1kHz WAV ≈ 53MB，留足余量；挡恶意超大请求）。 */
+private const val MAX_UPLOAD_BYTES = 120L * 1024 * 1024
+
 fun Route.recordingRoutes() {
     val services = application.attributes[RecServicesKey]
 
@@ -94,6 +97,14 @@ fun Route.recordingRoutes() {
 
             if (bytes == null || classId.isBlank()) {
                 call.respond(HttpStatusCode.BadRequest, mapOf("error" to "缺少 audio 文件或 classId"))
+                return@post
+            }
+
+            // ★ 安全修复（2026-11-19）：formFieldLimit 300MB 只是 Ktor 解析层上限，
+            //   单段正常最大 ~53MB（44.1kHz × 10 分钟）；这里加业务层上限，
+            //   挡住超大恶意请求继续占用内存/写入 OBS。
+            if (bytes.size > MAX_UPLOAD_BYTES) {
+                call.respond(HttpStatusCode.PayloadTooLarge, mapOf("error" to "单段音频超过 120MB 上限"))
                 return@post
             }
 

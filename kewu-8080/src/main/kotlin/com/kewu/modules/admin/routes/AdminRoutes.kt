@@ -143,8 +143,8 @@ fun Routing.adminRoutes(service: AdminService) {
         get("/users") {
             if (call.checkAdmin(service)) {
                 val qp = call.request.queryParameters
-                val page = qp["page"]?.toIntOrNull() ?: 1
-                val size = qp["size"]?.toIntOrNull() ?: 20
+                val page = (qp["page"]?.toIntOrNull() ?: 1).coerceAtLeast(1)
+                val size = (qp["size"]?.toIntOrNull() ?: 20).coerceIn(1, 200)
                 val (items, total) = service.listUsers(page, size, qp["role"], qp["keyword"], qp["status"])
                 call.respond(ApiResponse(0, "ok", PagedData(items, total, page, size)))
             }
@@ -380,8 +380,8 @@ fun Routing.adminRoutes(service: AdminService) {
         get("/recordings") {
             if (call.checkAdmin(service)) {
                 val qp = call.request.queryParameters
-                val page = qp["page"]?.toIntOrNull() ?: 1
-                val size = qp["size"]?.toIntOrNull() ?: 20
+                val page = (qp["page"]?.toIntOrNull() ?: 1).coerceAtLeast(1)
+                val size = (qp["size"]?.toIntOrNull() ?: 20).coerceIn(1, 200)
                 val (items, total) = service.listRecordings(
                     page, size, qp["classId"], qp["courseId"], qp["studentId"],
                     qp["role"], qp["from"], qp["to"], qp["keyword"]
@@ -452,8 +452,8 @@ fun Routing.adminRoutes(service: AdminService) {
         // 融合会话列表/详情：融合接口尚未把会话落 RecordingSessions 表，目前返回空（表结构已就绪，落库后自动有数据）
         get("/sessions") {
             if (call.checkAdmin(service)) {
-                val page = call.request.queryParameters["page"]?.toIntOrNull() ?: 1
-                val size = call.request.queryParameters["size"]?.toIntOrNull() ?: 20
+                val page = (call.request.queryParameters["page"]?.toIntOrNull() ?: 1).coerceAtLeast(1)
+                val size = (call.request.queryParameters["size"]?.toIntOrNull() ?: 20).coerceIn(1, 200)
                 call.respond(ApiResponse(0, "ok", PagedData(emptyList<Map<String, String>>(), 0, page, size)))
             }
         }

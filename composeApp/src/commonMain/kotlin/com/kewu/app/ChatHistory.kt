@@ -90,6 +90,8 @@ object ChatHistory {
     private var idSeq = 0L
 
     /** 生成单调递增的本地消息 id（恢复历史用存的 id，不冲突即可）。 */
+    // ★ 修复（2026-11-19）：多协程并发发消息时 ++idSeq 非原子，可能生成相同后三位。加同步保证唯一。
+    @Synchronized
     fun nextId(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds() * 1000 + (++idSeq % 1000)
 
     /** UTC+8 当天 00:00 的 epoch 毫秒。 */

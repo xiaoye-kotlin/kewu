@@ -1,8 +1,9 @@
 package com.kewu.admin
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -64,12 +65,16 @@ object AdminPrefetch {
 
     private var ready = CompletableDeferred<Unit>()
     private val started = AtomicBoolean(false)
+    // ★ 修复（2026-11-19）：用应用级 SupervisorJob 作用域替代 GlobalScope——
+    //   GlobalScope 无父作业、不可取消、不受结构化并发约束；这里改为本对象持有的作用域，
+    //   单个预加载子任务失败（SupervisorJob 隔离）不会连带取消其它，语义更可控。
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** 登录成功调用；重复调用安全。所有首屏数据 + 默认二级数据就绪后 [awaitReady] 返回。 */
     fun begin(api: AdminApi) {
         if (!started.compareAndSet(false, true)) return
         ready = CompletableDeferred<Unit>()
-        GlobalScope.launch(Dispatchers.IO) { prefetch(api) }
+        scope.launch(Dispatchers.IO) { prefetch(api) }
     }
 
     /** 页面首屏用：等待预加载完成；已就绪时立即返回。超时只作兜底，不影响缓存读取。 */

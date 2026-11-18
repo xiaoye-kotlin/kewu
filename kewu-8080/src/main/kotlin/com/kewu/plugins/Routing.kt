@@ -186,15 +186,29 @@ fun Application.configureRouting() {
         rosterRoutes()
         // 某门课历次下课选出的最佳录音（转写状态 PENDING_ASR / DONE…）
         // 手动重新转写（转写失败 / 后来补了更好的录音时用）：POST /api/class-recordings/{sessionId}/transcribe
-        post("/api/class-recordings/{sessionId}/transcribe") {
-            val sid = call.parameters["sessionId"]!!
-            bg.launch { runCatching { classEnd.transcribe(sid, force = true) } }
-            call.respond(com.kewu.models.ApiResponse(0, "已开始转写，约几分钟后完成", true))
-        }
+        // ★ 安全修复（2026-11-19）：此接口原先裸奔，任何人可 force 触发 SIS+MaaS 造成计费/DoS；
+        //   已移入下方 authenticate 块并加教师角色 + sessionId 格式校验。
         // 教师融合录音（2026-11-04，任务 #16，文档六十六节）：
         // 封口会话（晚到的段上传 409 SESSION_SEALED，客户端丢弃本地剩余段）→ 段拼回整轨 → 下课 → 择优 + 立即转写。
         // 用户口径：「点击融合录音按钮就将目前已有的所有录音转文本然后融合交给 AI 助教；没传完的不用再传，这节课算结束」。
         authenticate(com.kewu.security.JwtConfig.NAME) {
+            // 手动强制重新转写（需 JWT + 教师角色）——安全修复 2026-11-19
+            post("/api/class-recordings/{sessionId}/transcribe") {
+                val uid = call.principal<JWTPrincipal>()?.payload
+                    ?.getClaim(com.kewu.security.JwtConfig.CLAIM_USER_ID)?.asString()
+                val role = com.kewu.recserver.ClassEndService.roleOf(uid)
+                if (role == null || role.equals("student", ignoreCase = true)) {
+                    call.respond(com.kewu.models.ApiResponse<String>(1, "仅教师可重新转写"))
+                    return@post
+                }
+                val sid = call.parameters["sessionId"]?.takeIf { it.length in 5..200 && it.all { ch -> ch.isLetterOrDigit() || ch == '-' || ch == '_' } }
+                if (sid == null) {
+                    call.respond(com.kewu.models.ApiResponse<String>(1, "sessionId 格式非法"))
+                    return@post
+                }
+                bg.launch { runCatching { classEnd.transcribe(sid, force = true) } }
+                call.respond(com.kewu.models.ApiResponse(0, "已开始转写，约几分钟后完成", true))
+            }
             post("/api/class-recordings/{sessionId}/finalize") {
                 val uid = call.principal<JWTPrincipal>()?.payload
                     ?.getClaim(com.kewu.security.JwtConfig.CLAIM_USER_ID)?.asString()

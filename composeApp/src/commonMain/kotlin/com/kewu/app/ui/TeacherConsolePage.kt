@@ -5,6 +5,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.SizeTransform
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import com.kewu.app.LockTabSwipe
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -187,8 +189,14 @@ fun TeacherConsolePage(
             // 无本地会话但后端课堂状态 ON（别处在上课/上次杀进程丢 kv）→ 提示仍在上课
             if (activeSession == null && sid.isNullOrBlank()) {
                 val onCourseId = c?.todayCourses?.firstOrNull { it.state == "ON" }?.courseId
-                    ?: courses?.firstNotNullOfOrNull { co ->
-                        KewuApi.getClassState(co.id)?.takeIf { it.state == "ON" }?.let { co.id }
+                    ?: courses?.let { list ->
+                        // ★ 修复（2026-11-19）：原 firstNotNullOfOrNull 串行请求每门课 getClassState（N+1），
+                        //   课程多时首屏恢复慢；改为并发拉取后取第一个 ON。
+                        coroutineScope {
+                            val results = list.map { co -> async { co.id to runCatching { KewuApi.getClassState(co.id) }.getOrNull() } }
+                                .mapNotNull { it.await().takeIf { p -> p.second?.state == "ON" }?.first }
+                            results.firstOrNull()
+                        }
                     }
                 if (onCourseId != null) {
                     // 找到该课今天的 OPEN 签到会话，恢复上课中面板
@@ -1329,13 +1337,25 @@ private fun CourseSessionsScreen(
     }
     val cs = COUITheme.colorScheme
     var sessions by remember { mutableStateOf<List<AttendanceSession>?>(null) }
-    LaunchedEffect(course.id) { sessions = KewuApi.getAttendances(course.id) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var reloadTick by remember { mutableStateOf(0) }
+    LaunchedEffect(course.id, reloadTick) {
+        sessions = null; loadError = null
+        runCatching { KewuApi.getAttendances(course.id) }
+            .onSuccess { sessions = it }
+            .onFailure { loadError = it.message ?: "网络异常" }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("${course.name} · 签到记录", onBack = onBack)
         Spacer(Modifier.height(4.dp))
         val list = sessions
         when {
+            loadError != null -> {
+                Text("签到记录加载失败：${loadError}", color = cs.error, fontSize = 13.sp,
+                    modifier = Modifier.fillMaxWidth().padding(16.dp))
+                KewuSecondaryButton("重试", { haptic(HapticKind.Tick); reloadTick++ }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            }
             list == null -> KewuLoading()
             list.isEmpty() -> KewuEmpty("暂无签到记录")
             else -> list.forEach { s ->

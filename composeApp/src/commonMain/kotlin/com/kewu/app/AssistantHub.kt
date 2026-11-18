@@ -54,6 +54,22 @@ object AssistantHub {
     private val unreadFlows = mutableMapOf<String, MutableStateFlow<Int>>()
 
     private val _pending = MutableStateFlow<Set<String>>(emptySet())
+    // ★ 修复（2026-11-19）：同一会话并发两次请求时，Set 加法不计数、先完成者就 -key 会误清「正在输入中」。
+    //   用计数 Map 派生对外 Set，计数归零才移除。
+    private val pendingCounts = mutableMapOf<String, Int>()
+
+    @Synchronized
+    private fun pendingAdd(key: String) {
+        pendingCounts[key] = (pendingCounts[key] ?: 0) + 1
+        _pending.value = pendingCounts.keys.toSet()
+    }
+
+    @Synchronized
+    private fun pendingRemove(key: String) {
+        val n = (pendingCounts[key] ?: 0) - 1
+        if (n <= 0) pendingCounts.remove(key) else pendingCounts[key] = n
+        _pending.value = pendingCounts.keys.toSet()
+    }
 
     /** 正在等 AI 回复的会话 key 集合（页面据此显示「小悟正在输入中…」，切走再回来也能接上）。 */
     val pending: StateFlow<Set<String>> = _pending.asStateFlow()
@@ -72,23 +88,29 @@ object AssistantHub {
      * 用户口径：发消息后先什么都不显示，等流式输出**拿到第一个字**再出现气泡。思考状态由 [pending] 承担。
      */
     fun askStream(key: String, block: suspend (emit: (String) -> Unit) -> Reply) {
-        _pending.value = _pending.value + key
+        pendingAdd(key)
         val acc = StringBuilder()
         scope.launch {
-            val reply = try {
-                block { piece ->
-                    acc.append(piece)
-                    _streaming.value = _streaming.value + (key to AiAgent.visiblePart(acc.toString()))
+            // ★ 修复（2026-11-19）：清理统一放进 finally 并包住 deliver——
+            //   原实现把 `_streaming - key` 放在 deliver() 之后，deliver 抛异常或协程在落盘阶段被取消时，
+            //   流式草稿气泡会永久残留（key 永远留在 _streaming 里，页面一直显示半截回答）。
+            //   同时 pendingRemove 也在 finally，保证两张状态表必定一起清。
+            try {
+                val reply = try {
+                    block { piece ->
+                        acc.append(piece)
+                        _streaming.value = _streaming.value + (key to AiAgent.visiblePart(acc.toString()))
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    Reply("小悟暂时连不上 AI 服务，请稍后再试～")
                 }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                Reply("小悟暂时连不上 AI 服务，请稍后再试～")
+                deliver(key, reply.text, reply.payload)
             } finally {
-                _pending.value = _pending.value - key
+                pendingRemove(key)
+                _streaming.value = _streaming.value - key
             }
-            deliver(key, reply.text, reply.payload)
-            _streaming.value = _streaming.value - key
         }
     }
 
@@ -181,7 +203,7 @@ object AssistantHub {
      * 抛异常时投递一条「暂时连不上」的说明，保证不会无声无息。
      */
     fun ask(key: String, block: suspend () -> Reply) {
-        _pending.value = _pending.value + key
+        pendingAdd(key)
         scope.launch {
             val reply = try {
                 block()
@@ -190,7 +212,7 @@ object AssistantHub {
             } catch (_: Exception) {
                 Reply("小悟暂时连不上 AI 服务，请稍后再试～")
             } finally {
-                _pending.value = _pending.value - key
+                pendingRemove(key)
             }
             deliver(key, reply.text, reply.payload)
         }

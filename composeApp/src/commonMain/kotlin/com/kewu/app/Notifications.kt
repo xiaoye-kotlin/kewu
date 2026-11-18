@@ -304,16 +304,20 @@ object SystemNotifier {
 object NoticeCenter {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private var job: Job? = null
+    // ★ 修复（2026-11-19）：角色曾被引擎闭包永久捕获，切换 student/teacher 后轮询仍按旧角色过滤。
+    //   改为易变字段，每次 start 更新，轮询每轮读取最新值。
+    @Volatile private var currentTeacher: Boolean = false
     private val _incoming = MutableSharedFlow<Notifications.Info>(extraBufferCapacity = 8)
     val incoming: SharedFlow<Notifications.Info> = _incoming.asSharedFlow()
 
     fun start(teacher: Boolean) {
+        currentTeacher = teacher // 角色切换即时生效，即使 job 已在跑
         if (job?.isActive == true) return
         Notifications.refreshUnread()
         job = scope.launch {
             delay(1_500) // 让首页先渲染
             while (true) {
-                pollOnce(teacher)
+                pollOnce(currentTeacher)
                 delay(if (SystemNotifier.foreground) 60_000 else 120_000)
             }
         }

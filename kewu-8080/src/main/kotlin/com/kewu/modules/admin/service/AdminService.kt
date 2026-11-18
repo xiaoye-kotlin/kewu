@@ -207,7 +207,22 @@ class AdminService(
                     else if (line.trim().startsWith("ADMIN_PASSWORD=")) "ADMIN_PASSWORD=$newPassword"
                     else line
                 }
-                envFile.writeText(lines.joinToString("\n") + "\n")
+                // ★ 修复（2026-11-19）：原 writeText 直接截断覆盖，写到一半崩溃/断电会损坏 kewu.env，
+                //   导致总控端登录页再也读不到凭证。改为「临时文件 + 原子替换」，失败时旧文件保持完整。
+                val tmp = File(root, "kewu.env.tmp")
+                tmp.writeText(lines.joinToString("\n") + "\n")
+                try {
+                    java.nio.file.Files.move(
+                        tmp.toPath(), envFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+                    )
+                } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
+                    java.nio.file.Files.move(
+                        tmp.toPath(), envFile.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    )
+                }
             }
         }
         return true

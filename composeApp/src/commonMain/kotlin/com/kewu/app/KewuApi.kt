@@ -901,7 +901,7 @@ object KewuApi {
     /** 课堂纪要列表（无需 token）。失败返回 null（调用方降级 mock）。 */
     suspend fun getNotes(courseId: String): List<ClassNoteInfo>? = try {
         val el = getJson("$BASE_URL/api/courses/${pathSegment(courseId)}/notes")
-        el.dataArrayOrEmpty("data").map { it as JsonObject }.map {
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map {
             ClassNoteInfo(
                 it["id"].str(), it["courseId"].str(), it["title"].str(), it["content"].str(),
                 it["author"].str(), it["createdAt"].str(),
@@ -985,8 +985,8 @@ object KewuApi {
             submittedCount = d["submittedCount"].int(), reviewedCount = d["reviewedCount"].int(),
             pendingCount = d["pendingCount"].int(), avgScore = d["avgScore"].num(),
             maxScore = d["maxScore"].num(), minScore = d["minScore"].num(),
-            scoreDistribution = (d["scoreDistribution"] as? JsonArray).orEmpty().map { b ->
-                val bo = b as JsonObject
+            scoreDistribution = (d["scoreDistribution"] as? JsonArray).orEmpty().mapNotNull { b ->
+                val bo = b as? JsonObject ?: return@mapNotNull null
                 ScoreBucket(bo["label"].str(), bo["count"].int())
             },
             avgVersions = d["avgVersions"].num(), aiGapAvg = d["aiGapAvg"].num(),
@@ -1485,7 +1485,7 @@ object KewuApi {
     /** 全部提交（老师看）。失败返回 null。 */
     suspend fun getSubmissions(id: String): List<SubmissionInfo>? = try {
         val el = getJson("$BASE_URL/api/assignments/${pathSegment(id)}/submissions")
-        el.dataArrayOrEmpty("data").map { parseSubmission(it as JsonObject) }
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map(::parseSubmission)
     } catch (e: CancellationException) { throw e }
     catch (_: Exception) { null }
 
@@ -1506,7 +1506,7 @@ object KewuApi {
     /** 相似片段检测（查重）。失败返回 null。 */
     suspend fun getSimilarity(id: String): List<SimilarityPair>? = try {
         val el = getJson("$BASE_URL/api/assignments/${pathSegment(id)}/similarity")
-        el.dataArrayOrEmpty("data").map { it as JsonObject }.map {
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map {
             SimilarityPair(
                 submissionA = it["submissionA"].str(), studentA = it["studentA"].str(),
                 submissionB = it["submissionB"].str(), studentB = it["studentB"].str(),
@@ -1520,7 +1520,7 @@ object KewuApi {
     /** 智能批阅队列。失败返回 null。 */
     suspend fun getReviewQueue(id: String): List<ReviewQueueItem>? = try {
         val el = getJson("$BASE_URL/api/assignments/${pathSegment(id)}/review-queue")
-        el.dataArrayOrEmpty("data").map { it as JsonObject }.map {
+        el.dataArrayOrEmpty("data").mapNotNull { it as? JsonObject }.map {
             ReviewQueueItem(
                 submissionId = it["submissionId"].str(), studentId = it["studentId"].str(),
                 studentName = it["studentName"].str(), version = it["version"].int(),
@@ -1539,13 +1539,13 @@ object KewuApi {
         Analytics(
             courseId = d["courseId"].str(), assignmentCount = d["assignmentCount"].int(),
             submissionCount = d["submissionCount"].int(),
-            knowledgeMastery = (d["knowledgeMastery"] as? JsonArray).orEmpty().map { m ->
-                val mo = m as JsonObject
+            knowledgeMastery = (d["knowledgeMastery"] as? JsonArray).orEmpty().mapNotNull { m ->
+                val mo = m as? JsonObject ?: return@mapNotNull null
                 KnowledgeMastery(mo["point"].str(), mo["sampleCount"].int(), mo["avgScoreRate"].num())
             },
-            weakPoints = (d["weakPoints"] as? JsonArray).orEmpty().map { it.str() },
-            scoreTrend = (d["scoreTrend"] as? JsonArray).orEmpty().map { t ->
-                val to = t as JsonObject
+            weakPoints = (d["weakPoints"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.content },
+            scoreTrend = (d["scoreTrend"] as? JsonArray).orEmpty().mapNotNull { t ->
+                val to = t as? JsonObject ?: return@mapNotNull null
                 ScoreTrendItem(to["label"].str(), to["avgScore"].num())
             },
         )
@@ -2223,8 +2223,8 @@ object KewuApi {
     // ── 解析：Submission / AiSuggestion ──
 
     private fun parseSubmission(o: JsonObject): SubmissionInfo {
-        val history = (o["history"] as? JsonArray).orEmpty().map { h ->
-            val ho = h as JsonObject
+        val history = (o["history"] as? JsonArray).orEmpty().mapNotNull { h ->
+            val ho = h as? JsonObject ?: return@mapNotNull null
             SubmissionVersion(
                 version = ho["version"].int(), content = ho["content"].str(),
                 submittedAt = ho["submittedAt"].str(),
@@ -2250,8 +2250,8 @@ object KewuApi {
     }
 
     private fun parseAiSuggestion(o: JsonObject): AiSuggestion {
-        val reasons = (o["reasons"] as? JsonArray).orEmpty().map { r ->
-            val ro = r as JsonObject
+        val reasons = (o["reasons"] as? JsonArray).orEmpty().mapNotNull { r ->
+            val ro = r as? JsonObject ?: return@mapNotNull null
             AiReason(ro["item"].str(), ro["detail"].str(), ro["score"].num())
         }
         return AiSuggestion(

@@ -386,13 +386,25 @@ private fun ClassRowCard(cls: ClassRoomInfo, onOpen: () -> Unit) {
 private fun ClassStudentsScreen(cls: ClassRoomInfo, onBack: () -> Unit, onImportSchedule: () -> Unit) {
     val cs = COUITheme.colorScheme
     var students by remember { mutableStateOf<List<ClassStudent>?>(null) }
-    LaunchedEffect(cls.id) { students = KewuApi.getClassStudents(cls.id) }
+    var loadError by remember { mutableStateOf<String?>(null) }
+    var reloadTick by remember { mutableStateOf(0) }
+    LaunchedEffect(cls.id, reloadTick) {
+        students = null; loadError = null
+        runCatching { KewuApi.getClassStudents(cls.id) }
+            .onSuccess { students = it }
+            .onFailure { loadError = it.message ?: "网络异常" }
+    }
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(bottom = KewuNavClearance)) {
         KewuTopBar("${cls.name} · 学生名单", onBack)
         KewuSecondaryButton("导入 / 更新本班课表", onImportSchedule, Modifier.fillMaxWidth().padding(horizontal = 16.dp).padding(bottom = 8.dp))
         val list = students
         when {
+            loadError != null -> {
+                Text("学生名单加载失败：${loadError}", color = cs.error, fontSize = 13.sp,
+                    modifier = Modifier.fillMaxWidth().padding(16.dp))
+                KewuSecondaryButton("重试", { haptic(HapticKind.Tick); reloadTick++ }, Modifier.fillMaxWidth().padding(horizontal = 16.dp))
+            }
             list == null -> KewuLoading()
             list.isEmpty() -> KewuEmpty("班级还没有学生，把邀请码 ${cls.inviteCode} 发给学生即可加入")
             else -> {

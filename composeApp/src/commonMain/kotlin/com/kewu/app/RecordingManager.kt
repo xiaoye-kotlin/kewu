@@ -177,7 +177,9 @@ object RecordingManager {
     /** 队列消费协程（空队列时退出，入队再踢活）。 */
     private var queueJob: Job? = null
     /** 已封口会话（教师 finalize 后，本端不再传该会话的任何段）。 */
-    private var sealedSessions: Set<String> = loadSealed()
+    // ★ 修复（2026-11-19）：写入在 scope 单线程、读取 isSealed() 可在任意线程（UI / 心跳），
+    //   加 @Volatile 保证引用可见性；写入本身是「构造新 Set 再整体替换」的原子引用赋值。
+    @kotlin.concurrent.Volatile private var sealedSessions: Set<String> = loadSealed()
 
     val isRecording: Boolean get() = _status.value is RecordingStatus.Recording
 
@@ -633,7 +635,9 @@ object RecordingManager {
     }
 
     /** 本次录音期间是否见过「上课中」：见过后再变成「已下课」才自动停（从没开过课的不误停）。 */
-    private var sawClassOn = false
+    // ★ 修复（2026-11-19）：start() 在主线程置 false，checkClassEnded() 在 netScope(Default 多线程) 置 true，
+    //   存在跨线程读写；加 @Volatile 保证状态可见，避免自动停课漏触发。
+    @kotlin.concurrent.Volatile private var sawClassOn = false
 
     private val _events = MutableStateFlow<String?>(null)
 

@@ -204,35 +204,46 @@ private fun MistakeCard(m: Mistake, onMastered: () -> Unit) {
             }
             Spacer(Modifier.height(10.dp))
             KewuSecondaryButton(if (open) "收起" else "讲错因", { open = !open }, Modifier.fillMaxWidth())
+            // ★ 修复（2026-11-19）：AI 请求协程从 AnimatedVisibility 内容里提升到卡片层，以 open 为 key。
+            //   原实现把 LaunchedEffect 挂在 AnimatedVisibility 内容中——展开中途点「收起」会让内容退出组合、
+            //   协程被取消，explain 卡在半截、explaining 永远 true，守卫 `explain != null || explaining` 导致再也无法重试。
+            //   现在：只在「完成且非空」时复用缓存；协程取消时（finally）清空半截结果并复位 explaining，可随时重试。
+            LaunchedEffect(open) {
+                if (!open) return@LaunchedEffect
+                if (!explain.isNullOrBlank() && !explaining) return@LaunchedEffect // 已完成 → 复用
+                explaining = true
+                explain = ""
+                var finished = false
+                try {
+                    AiClient.chatStream(
+                        listOf(
+                            AiClient.Msg("system", "你是课悟的 AI 助教小悟，帮学生分析一道错题。用中文、不用 Markdown 符号，分三段：" +
+                                "【错因】学生为什么会选 / 写错（结合他的答案推测思维误区；如果给了他做题时和小悟的辅导对话，要据此指出他当时具体卡在哪一步、哪个想法错了）；" +
+                                "【正解】这道题的正确思路；【避坑】下次遇到同类题的一句口诀。总共不超过 250 字。"),
+                            AiClient.Msg("user", "课程：$course\n题目：${m.question.stem}\n选项：${m.question.options.joinToString(" / ")}\n" +
+                                "学生答案：${m.result.studentValue}\n正确答案：${m.result.standardAnswer.ifBlank { m.question.answer }}\n解析：${m.question.analysis}" +
+                                TutorSessions.transcript(m.key).let { t ->
+                                    if (t.isBlank()) "\n做题时没有向小悟求助。"
+                                    else "\n学生做这道题时和小悟的辅导对话（学生真实的思考过程）：\n$t"
+                                }),
+                        ),
+                        maxTokens = 1024,
+                    ) { explain = (explain ?: "") + it }
+                    if (explain.isNullOrBlank()) explain = "小悟暂时连不上 AI 服务，请稍后重试"
+                    finished = true
+                } finally {
+                    explaining = false
+                    // 被取消（收起 / 离开卡片）时清空半截结果，下次展开可重新请求
+                    if (!finished) explain = null
+                }
+            }
             AnimatedVisibility(
                 visible = open,
                 enter = expandVertically(spring(dampingRatio = 0.86f, stiffness = 380f)) + fadeIn(),
                 exit = shrinkVertically() + fadeOut(),
             ) {
                 Column(Modifier.padding(top = 10.dp)) {
-                    LaunchedEffect(Unit) {
-                        if (explain != null || explaining) return@LaunchedEffect
-                        explaining = true
-                        explain = ""
-                        AiClient.chatStream(
-                            listOf(
-                                AiClient.Msg("system", "你是课悟的 AI 助教小悟，帮学生分析一道错题。用中文、不用 Markdown 符号，分三段：" +
-                                    "【错因】学生为什么会选 / 写错（结合他的答案推测思维误区；如果给了他做题时和小悟的辅导对话，要据此指出他当时具体卡在哪一步、哪个想法错了）；" +
-                                    "【正解】这道题的正确思路；【避坑】下次遇到同类题的一句口诀。总共不超过 250 字。"),
-                                AiClient.Msg("user", "课程：$course\n题目：${m.question.stem}\n选项：${m.question.options.joinToString(" / ")}\n" +
-                                    "学生答案：${m.result.studentValue}\n正确答案：${m.result.standardAnswer.ifBlank { m.question.answer }}\n解析：${m.question.analysis}" +
-                                    // 2026-11-02：做题时「问小悟」的对话（按作业 id#题目 id 落盘），让 AI 知道学生当时怎么想的
-                                    TutorSessions.transcript(m.key).let { t ->
-                                        if (t.isBlank()) "\n做题时没有向小悟求助。"
-                                        else "\n学生做这道题时和小悟的辅导对话（学生真实的思考过程）：\n$t"
-                                    }),
-                            ),
-                            maxTokens = 1024,
-                        ) { explain = (explain ?: "") + it }
-                        if (explain.isNullOrBlank()) explain = "小悟暂时连不上 AI 服务，请稍后重试"
-                        explaining = false
-                    }
-                    Text(explain?.ifEmpty { "小悟正在分析你的错因…" } ?: "", color = cs.onSurface, fontSize = 14.sp, lineHeight = 21.sp)
+                    Text(explain?.ifEmpty { "小悟正在分析你的错因…" } ?: "小悟正在分析你的错因…", color = cs.onSurface, fontSize = 14.sp, lineHeight = 21.sp)
                 }
             }
             // ★ 变式题区放在动画容器之外：作答卡是液态玻璃采样者，不能处在尺寸 / 透明度动画里（会压成 0 高闪退）

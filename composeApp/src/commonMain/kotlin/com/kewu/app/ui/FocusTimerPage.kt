@@ -103,7 +103,10 @@ fun FocusTimerPage(
     val reveal = remember { Animatable(0f) }
 
     // 每秒展示 tick（不参与业务时间）
-    LaunchedEffect(Unit) {
+    // ★ 修复（2026-11-19）：只在沉浸页才需要每秒刷新；原实现用 LaunchedEffect(Unit) 在 SETUP 页也每秒 tick，
+    //   导致设置页无意义重组（选时动画被干扰 / 耗电）。以 phase 为 key，离开沉浸页即取消协程。
+    LaunchedEffect(phase) {
+        if (phase != FocusPhase.SESSION) return@LaunchedEffect
         while (true) { delay(1000); tick++ }
     }
 
@@ -127,9 +130,14 @@ fun FocusTimerPage(
     }
 
     // 沉浸界面内的返回：先退回设置页（若后端仍在进行，提示去完成/取消）
+    // ★ 修复（2026-11-19）：退出沉浸页但后端会话仍在跑时，原来静默退回，
+    //   用户再点「开始」会被后端拒绝且不知原因。现在明确提示会话仍在进行。
     fun leaveSession() {
         phase = FocusPhase.SETUP
         scope.launch { reveal.snapTo(0f) }
+        if (status?.focusing == true || status?.resting == true) {
+            notice = "本次专注仍在进行中，可继续专注或在会话中结束"
+        }
     }
 
     BackHandler {
@@ -155,7 +163,7 @@ fun FocusTimerPage(
                     onBack = onBack,
                     onStart = {
                         scope.launch {
-                            val err = KewuApi.focusStart(planned.toInt().coerceIn(1, 180))
+                            val err = KewuApi.focusStart(planned.toInt().coerceIn(1, 120))
                             if (err != null) {
                                 notice = err
                             } else {
@@ -191,7 +199,7 @@ fun FocusTimerPage(
                     FocusSessionScreen(
                         status = status,
                         suggestion = suggestion,
-                        plannedMinutes = planned.toInt().coerceIn(1, 180),
+                        plannedMinutes = planned.toInt().coerceIn(1, 120),
                         tick = tick,
                         baseTick = baseTick,
                         loading = loading,

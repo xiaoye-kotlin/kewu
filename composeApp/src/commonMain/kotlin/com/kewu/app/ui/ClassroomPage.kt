@@ -503,14 +503,17 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
                 val tomorrow = mine
                     .filter { it.weekday == tomorrowWd }
                     .sortedBy { minutesOf(it.startTime) }
-                val next = (todayLeft + tomorrow).firstOrNull() ?: return@mapNotNull null
+                val next = (todayLeft + tomorrow).firstOrNull()
+                if (next == null && schedule.isNotEmpty()) return@mapNotNull null // 有课表但此课今天无排 → 不显示
+                // ★ 修复（2026-11-19）：课表为空/导入失败时（schedule 为空），原来会把所有课程 mapNotNull 掉 →
+                //   首页误显示「还没有加入课程」。现在降级为直接展示课程本身，时间标「待定」。
                 Course(
                     name = c.name,
-                    teacher = next.teacherName?.ifBlank { null } ?: c.teacher,
-                    room = next.location?.ifBlank { null } ?: "待定",
-                    time = next.let { e ->
+                    teacher = next?.teacherName?.ifBlank { null } ?: c.teacher,
+                    room = next?.location?.ifBlank { null } ?: "待定",
+                    time = next?.let { e ->
                         (if (e.weekday == todayWd) "" else "明天 ") + e.startTime
-                    },
+                    } ?: "待定",
                     status = CourseStatus.PENDING, summary = c.description,
                 )
             }.sortedWith(compareBy({ if (it.time.startsWith("明天")) 1 else 0 }, { it.time }))
@@ -538,11 +541,15 @@ fun ClassroomPage(onGoToTab: (Int) -> Unit, onNavHide: (Boolean) -> Unit) {
     LaunchedEffect(Unit) {
         // 课程与 /user/me 并行，互不阻塞；每次回到首页都静默刷新一次（有缓存先显示缓存）
         launch { CourseRepo.refresh(force = true) }
-        // me 失败（后端不可达）时隔几秒重试，拿到真实昵称为止；期间显示缓存昵称
+        // me 失败（后端不可达）时隔几秒重试，拿到真实昵称为止；期间显示缓存昵称。
+        // ★ 修复（2026-11-19）：原循环无上限，后端持续不可达时会永久每 30s 轮询耗电；改为最多 5 次后放弃，
+        //   保留缓存昵称，下次重进首页再试。
         var delayMs = 3_000L
-        while (KewuApi.currentUser == null) {
+        var attempts = 0
+        while (KewuApi.currentUser == null && attempts < 5) {
             KewuApi.me()
             if (KewuApi.currentUser != null) break
+            attempts++
             kotlinx.coroutines.delay(delayMs)
             delayMs = (delayMs * 2).coerceAtMost(30_000L)
         }
@@ -854,7 +861,8 @@ private fun GreetingBar(
 
 @Composable
 private fun rememberGreeting(): String {
-    val hour = remember { ((Clock.System.now().toEpochMilliseconds() / 3_600_000L + 8L) % 24L).toInt() }
+    // 不用 remember：时段跨越（如 11:59→12:00）时问候语应能刷新，读取开销可忽略
+    val hour = ((Clock.System.now().toEpochMilliseconds() / 3_600_000L + 8L) % 24L).toInt()
     return when {
         hour < 6 -> "凌晨好"
         hour < 12 -> "早上好"

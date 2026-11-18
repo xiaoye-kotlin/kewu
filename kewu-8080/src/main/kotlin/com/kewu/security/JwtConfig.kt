@@ -13,7 +13,32 @@ import java.util.Date
 
 // 负责生成和校验登录用的 JWT 令牌
 object JwtConfig {
-    private val SECRET = System.getenv("JWT_SECRET") ?: "kewu-dev-secret-change-me"
+    // 安全修复（2026-11-19）：不再回退到公开硬编码密钥（任何人都能据此伪造 ADMIN token 越权）。
+    // 策略（保证现有部署不中断、token 跨重启有效）：
+    //   1) 优先环境变量 JWT_SECRET（长度 >= 16）；
+    //   2) 否则读写工作目录下的 .kewu_jwt_secret —— 首次用 SecureRandom 生成 32 字节随机密钥并持久化，
+    //      之后重启直接复用。密钥是随机且不在代码/文档里公开的，攻击者无法伪造签名。
+    private val SECRET: String = resolveSecret()
+
+    private fun resolveSecret(): String {
+        System.getenv("JWT_SECRET")?.takeIf { it.length >= 16 }?.let { return it }
+        val file = java.io.File(System.getProperty("user.dir"), ".kewu_jwt_secret")
+        return runCatching {
+            if (file.exists() && file.length() > 0) {
+                file.readText().trim().takeIf { it.length >= 16 }
+            } else {
+                val bytes = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+                val key = java.util.Base64.getEncoder().encodeToString(bytes)
+                file.writeText(key)
+                runCatching { file.setReadable(false, false); file.setWritable(false, false) }
+                println("🔐 已生成并持久化随机 JWT 密钥：${file.absolutePath}（请勿删除，否则所有用户需重新登录）")
+                key
+            }
+        }.getOrNull() ?: error(
+            "无法生成/读取 JWT 密钥，且未设置 JWT_SECRET 环境变量。" +
+                "请设置 JWT_SECRET 或确保工作目录可写。"
+        )
+    }
     private const val ISSUER = "kewu"
     private const val AUDIENCE = "kewu-app"
     const val REALM = "kewu"

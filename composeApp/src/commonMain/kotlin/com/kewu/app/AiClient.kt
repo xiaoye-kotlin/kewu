@@ -13,6 +13,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -84,8 +85,11 @@ object AiClient {
      * 但回答偏长时适当调大）。
      */
     suspend fun chat(messages: List<Msg>, maxTokens: Int = 4096): String? {
-        // 流式中转一次性收齐（比非流式接口少一层超时风险）；出题 / 批改等结构化任务保留思考
-        streamOnce(STREAM_RELAY_URL, relayBody(messages, maxTokens, thinking = true), onDelta = {})?.let { return it }
+        // 流式中转一次性收齐（比非流式接口少一层超时风险）；出题 / 批改等结构化任务保留思考。
+        // ★ 修复（2026-11-19）：结构化任务必须是完整答案——streamOnce 中途断开会返回半截 JSON，
+        //   此时必须继续走 relayOnce 兜底，不能像打字机那样接受部分结果（否则出题/批改解析失败返回 null）。
+        streamOnce(STREAM_RELAY_URL, relayBody(messages, maxTokens, thinking = true), onDelta = {}, acceptPartial = false)
+            ?.let { return it }
         return relayOnce(messages, maxTokens)
     }
 
@@ -127,8 +131,18 @@ object AiClient {
      * 读一路 SSE：兼容 OpenAI 格式（choices[0].delta.content）与后端中转格式（{"d":…}）。
      * 没吐出任何内容就失败 → 返回 null（换下一个通道）；吐过内容 → 返回已累积文本。
      */
-    private suspend fun streamOnce(url: String, body: String, onDelta: (String) -> Unit): String? {
+    private suspend fun streamOnce(
+        url: String,
+        body: String,
+        onDelta: (String) -> Unit,
+        /** false = 必须收到 [DONE] 才算成功（结构化任务不接受半截答案）；true = 打字机接受部分结果。 */
+        acceptPartial: Boolean = true,
+    ): String? {
+        // ★ 修复（2026-11-19）：熔断标记此前只写不读（死代码）——连接失败后仍每次重试同一接入点。
+        //   现在冷却期内直接跳过该通道，交由上层兜底通道处理；成功时清除标记。
+        if (isCoolingDown(url)) return null
         val acc = StringBuilder()
+        var completed = false
         return try {
             client.preparePost(url) {
                 KewuApi.token?.let { header(HttpHeaders.Authorization, "Bearer $it") }
@@ -151,7 +165,7 @@ object AiClient {
                     val t = line.trim()
                     if (!t.startsWith("data:")) continue
                     val data = t.removePrefix("data:").trim()
-                    if (data == "[DONE]") break
+                    if (data == "[DONE]") { completed = true; break }
                     val o = runCatching { json.parseToJsonElement(data) as? JsonObject }.getOrNull() ?: continue
                     if (o["error"] != null) {
                         lastError = "stream error @ $url: ${o["error"]}"
@@ -168,21 +182,34 @@ object AiClient {
                     }
                 }
             }
-            acc.toString().takeIf { it.isNotBlank() }
+            if (completed) clearCooldown(url)
+            acc.toString().takeIf { it.isNotBlank() && (acceptPartial || completed) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             logErr("stream", e)
             val name = e::class.simpleName.orEmpty()
             if (acc.isEmpty() && (name.contains("Connect") || name.contains("UnknownHost") || name.contains("NoRouteToHost"))) {
-                unreachableUntil[url] = kotlin.time.Clock.System.now().toEpochMilliseconds() + 5 * 60_000L
+                cooldownLock.withLock {
+                    unreachableUntil[url] = kotlin.time.Clock.System.now().toEpochMilliseconds() + 5 * 60_000L
+                }
             }
-            acc.toString().takeIf { it.isNotBlank() }
+            // acceptPartial=false 时超时/异常一律不接受半截结果，交给上层走兜底通道
+            acc.toString().takeIf { it.isNotBlank() && acceptPartial }
         }
     }
 
-    /** 接入点 → 「连不上」标记的失效时刻（只记网络层失败，HTTP 错误 / 空内容不算）。 */
+    /** 接入点 → 「连不上」标记的失效时刻（只记网络层失败，HTTP 错误 / 空内容不算）。加锁保护并发读写。 */
     private val unreachableUntil = mutableMapOf<String, Long>()
+    private val cooldownLock = kotlinx.coroutines.sync.Mutex()
+
+    private suspend fun isCoolingDown(url: String): Boolean = cooldownLock.withLock {
+        val until = unreachableUntil[url] ?: return@withLock false
+        if (kotlin.time.Clock.System.now().toEpochMilliseconds() < until) true
+        else { unreachableUntil.remove(url); false }
+    }
+
+    private suspend fun clearCooldown(url: String) = cooldownLock.withLock { unreachableUntil.remove(url) }
 
     /**
      * 8081 中转：多轮消息压成 {question = 最后一条用户消息, context = system + 之前的对话}。

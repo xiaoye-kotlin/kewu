@@ -56,7 +56,7 @@ class AdminApi(
             val afterScheme = baseUrl.substringAfter("://", "")
             val hostPort = afterScheme.substringBefore("/")
             hostPort.substringAfterLast(':').toIntOrNull()?.takeIf { it in 1..65535 }
-                ?: if (hostPort.startsWith("http")) 80 else 80
+                ?: if (baseUrl.startsWith("https", ignoreCase = true)) 443 else 80
         }.getOrDefault(8080)
     }
     private val client = HttpClient(OkHttp) {

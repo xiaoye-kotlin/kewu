@@ -3,6 +3,7 @@ package com.kewu.admin
 import oshi.SystemInfo
 import oshi.hardware.CentralProcessor
 import java.io.File
+import java.util.concurrent.TimeUnit
 import kotlin.math.roundToLong
 
 /**
@@ -66,6 +67,9 @@ object ServerMonitor {
     private var lastDiskReadPerSec: Long? = null
     private var lastDiskWritePerSec: Long? = null
 
+    // ★ 修复（2026-11-19）：snapshot 会被定时刷新与预加载并发调用，而 prev* / last* 差值是共享可变状态，
+    //   并发读写会算出错误的每秒增量（甚至拿到半更新的 prevNet）。加锁串行化，保证差值计算一致。
+    @Synchronized
     fun snapshot(): ServerRuntimeSnapshot {
         val notes = mutableListOf<String>()
         val now = System.currentTimeMillis()
@@ -244,11 +248,14 @@ object ServerMonitor {
                 "powershell", "-NoProfile", "-NonInteractive", "-Command",
                 "(Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToFileTimeUtc()",
             ).redirectErrorStream(true).start()
+            // ★ 修复（2026-11-19）：waitFor() 无超时——powershell 被系统卡住时会永久阻塞采集线程池。
+            //   3 秒超时后强杀进程，避免总控端刷新线程被挂死。
+            val finished = out.waitFor(3, TimeUnit.SECONDS)
+            if (!finished) { out.destroyForcibly(); return@runCatching null }
             val text = out.inputStream.bufferedReader().use { it.readText() }.trim()
-            out.waitFor()
             val fileTime = text.lines().firstOrNull()?.trim()?.toLongOrNull() ?: return@runCatching null
-            // FILETIME(100ns since 1601) -> epoch ms
-            val bootMs = fileTime / 10_000L - 116_444_736_000_000L / 10_000L
+            // FILETIME(100ns since 1601) -> epoch ms（1601→1970 偏移 = 11,644,473,600,000 ms）
+            val bootMs = fileTime / 10_000L - 11_644_473_600_000L
             (System.currentTimeMillis() - bootMs).coerceAtLeast(0L) / 1000L
         } else null
     }.getOrNull()

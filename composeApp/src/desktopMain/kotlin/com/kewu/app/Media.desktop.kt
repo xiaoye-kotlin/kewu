@@ -5,6 +5,8 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import java.awt.EventQueue
 import java.io.File
 import java.net.URI
+import java.net.URL
+import java.net.URLConnection
 import javax.sound.sampled.AudioFormat
 import javax.sound.sampled.AudioInputStream
 import javax.sound.sampled.AudioSystem
@@ -41,7 +43,12 @@ actual class PlatformAudioPlayer actual constructor() {
                 val f = if (url.startsWith("http://") || url.startsWith("https://")) {
                     File.createTempFile("kewu_play_", ".wav").also { tmp ->
                         tmp.deleteOnExit()
-                        URI(url).toURL().openStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
+                        // ★ 修复（2026-11-19）：openStream() 无超时，网络挂起会永久卡住播放线程。
+                        //   显式设置连接/读取超时，超时后走 onError 兜底而不是无响应。
+                        val conn: URLConnection = URI(url).toURL().openConnection()
+                        conn.connectTimeout = 15_000
+                        conn.readTimeout = 30_000
+                        conn.getInputStream().use { input -> tmp.outputStream().use { input.copyTo(it) } }
                     }
                 } else File(url)
                 AudioSystem.getAudioInputStream(f).use { s ->
