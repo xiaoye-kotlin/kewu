@@ -33,6 +33,10 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      # 兜底：即便索引权限位出错，也保证 Xcode Run Script 里的 ./gradlew 可执行。
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
       - name: Generate Xcode project
         # project.yml 在 iosApp/ 下，XcodeGen 默认在 spec 同目录生成 iosApp/Kewu.xcodeproj
         run: xcodegen generate --spec iosApp/project.yml
