@@ -115,23 +115,16 @@ actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 actual fun platformReadFileRange(path: String, offset: Long, len: Int): ByteArray? {
-    // Xcode 26 SDK 已移除 fileHandleForReadingAtPath，改用 URL 版构造器。
-    val url = platform.Foundation.NSURL.fileURLWithPath(path)
-    val handle = platform.Foundation.NSFileHandle.fileHandleForReadingFromURL(url, error = null) ?: return null
-    return try {
-        handle.seekToFileOffset(offset.toULong())
-        val data = handle.readDataOfLength(len.toULong())
-        val n = data.length.toInt()
-        if (n == 0) ByteArray(0)
-        else {
-            val bytes = data.bytes ?: return null
-            bytes.reinterpret<ByteVar>().readBytes(n)
-        }
-    } catch (_: Exception) {
-        null
-    } finally {
-        try { handle.closeFile() } catch (_: Throwable) { }
-    }
+    // 只用本文件已验证可编译的 NSData.create(contentsOfFile=)：不同 Xcode SDK 下
+    // NSFileHandle 的工厂方法名变化频繁，避免再踩 API 命名坑。
+    val data = platform.Foundation.NSData.create(contentsOfFile = path) ?: return null
+    val total = data.length.toLong()
+    val start = offset.coerceAtLeast(0).coerceAtMost(total)
+    val end = (start + len.toLong()).coerceAtMost(total)
+    if (end <= start) return ByteArray(0)
+    val bytes = data.bytes ?: return null
+    val all = bytes.reinterpret<ByteVar>().readBytes(total.toInt())
+    return all.copyOfRange(start.toInt(), end.toInt())
 }
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
@@ -140,8 +133,9 @@ actual fun platformWriteFile(path: String, bytes: ByteArray): Boolean {
         val data = bytes.usePinned { pinned ->
             platform.Foundation.NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
         }
-        // Xcode 26 SDK 已移除 writeToFile:atomically:，改用 URL 版。
-        data.writeToURL(platform.Foundation.NSURL.fileURLWithPath(path), atomically = true)
+        // NSData.writeToFile / writeToURL 在 Xcode 26 SDK 的 Kotlin 绑定里均不可用，
+        // 用 NSFileManager.createFileAtPath 写盘（标准 API，跨 SDK 稳定）。
+        platform.Foundation.NSFileManager.defaultManager.createFileAtPath(path, data, null)
     } catch (_: Exception) {
         false
     }
