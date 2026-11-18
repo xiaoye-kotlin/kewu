@@ -66,8 +66,22 @@ actual fun isCameraPermissionGranted(): Boolean = true
 actual fun openAppSettings() = Unit
 actual fun shareText(text: String) = Unit
 // B 站搜索走网页（B 站 universal link 会在 Safari 自动提示「在 App 中打开」）
-actual fun openBilibiliSearch(keyword: String) =
-    openUrl("https://search.bilibili.com/all?keyword=" + io.ktor.http.encodeURLParameter(keyword))
+actual fun openBilibiliSearch(keyword: String) = openUrl("https://search.bilibili.com/all?keyword=" + percentEncodeUrl(keyword))
+
+/** 不依赖 ktor-http 的 UTF-8 百分号编码（iosMain 只依赖 ktor-client-core）。 */
+private fun percentEncodeUrl(value: String): String {
+    val hex = "0123456789ABCDEF"
+    return buildString {
+        for (byte in value.encodeToByteArray()) {
+            val v = byte.toInt() and 0xff
+            val unreserved = v in 'A'.code..'Z'.code || v in 'a'.code..'z'.code ||
+                v in '0'.code..'9'.code || v == '-'.code || v == '_'.code ||
+                v == '.'.code || v == '~'.code
+            if (unreserved) append(v.toChar())
+            else { append('%'); append(hex[v ushr 4]); append(hex[v and 0x0f]) }
+        }
+    }
+}
 actual fun openBilibiliVideo(bvid: String) = openUrl("https://www.bilibili.com/video/$bvid")
 // iOS 人机指南：App 不应自行退出，双击返回的第二下不做任何事（提示照常消失由调用方收起）
 actual fun platformExitApp() = Unit
@@ -101,7 +115,9 @@ actual fun platformFileChannel(path: String): io.ktor.utils.io.ByteReadChannel =
 
 @OptIn(kotlinx.cinterop.ExperimentalForeignApi::class)
 actual fun platformReadFileRange(path: String, offset: Long, len: Int): ByteArray? {
-    val handle = platform.Foundation.NSFileHandle.fileHandleForReadingAtPath(path) ?: return null
+    // Xcode 26 SDK 已移除 fileHandleForReadingAtPath，改用 URL 版构造器。
+    val url = platform.Foundation.NSURL.fileURLWithPath(path)
+    val handle = platform.Foundation.NSFileHandle.fileHandleForReadingFromURL(url, error = null) ?: return null
     return try {
         handle.seekToFileOffset(offset.toULong())
         val data = handle.readDataOfLength(len.toULong())
@@ -114,7 +130,7 @@ actual fun platformReadFileRange(path: String, offset: Long, len: Int): ByteArra
     } catch (_: Exception) {
         null
     } finally {
-        runCatching { handle.closeFile() }
+        try { handle.closeFile() } catch (_: Throwable) { }
     }
 }
 
@@ -124,7 +140,8 @@ actual fun platformWriteFile(path: String, bytes: ByteArray): Boolean {
         val data = bytes.usePinned { pinned ->
             platform.Foundation.NSData.create(bytes = pinned.addressOf(0), length = bytes.size.toULong())
         }
-        data.writeToFile(path, atomically = true)
+        // Xcode 26 SDK 已移除 writeToFile:atomically:，改用 URL 版。
+        data.writeToURL(platform.Foundation.NSURL.fileURLWithPath(path), atomically = true)
     } catch (_: Exception) {
         false
     }
