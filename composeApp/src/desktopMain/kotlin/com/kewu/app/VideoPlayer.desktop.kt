@@ -159,10 +159,13 @@ private fun DesktopJavaFxPlayer(url: String, modifier: Modifier, onError: (Strin
             VideoControls.buffering = false
             VideoControls.onToggle = null
             VideoControls.onSeek = null
+            VideoControls.onSpeed = null
+            VideoControls.speed = 1f
+            VideoControls.showSpeedToast = false
         }
     }
 
-    // 播放/暂停 / 拖动 由公共控制条回调进来（切到 FX 线程操作 MediaPlayer）
+    // 播放/暂停 / 拖动 / 倍速 由公共控制条回调进来（切到 FX 线程操作 MediaPlayer）
     LaunchedEffect(url) {
         VideoControls.onToggle = {
             playerRef[0]?.let { p ->
@@ -171,6 +174,13 @@ private fun DesktopJavaFxPlayer(url: String, modifier: Modifier, onError: (Strin
         }
         VideoControls.onSeek = { ms ->
             playerRef[0]?.let { p -> Platform.runLater { p.seek(Duration(ms.toDouble())) } }
+        }
+        VideoControls.onSpeed = { rate ->
+            playerRef[0]?.let { p -> Platform.runLater { runCatching { p.rate = rate.toDouble() } } }
+        }
+        // 兜底：若单例残留倍速（正常退出时已重置），应用到本播放器
+        playerRef[0]?.let { p ->
+            Platform.runLater { runCatching { p.rate = VideoControls.speed.toDouble() } }
         }
     }
 

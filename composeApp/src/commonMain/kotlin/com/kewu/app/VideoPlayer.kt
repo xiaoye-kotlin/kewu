@@ -69,14 +69,30 @@ object VideoControls {
     var buffering by androidx.compose.runtime.mutableStateOf(false)
     var positionMs by androidx.compose.runtime.mutableStateOf(0L)
     var durationMs by androidx.compose.runtime.mutableStateOf(0L)
+    /** 播放倍速：1f 正常，长按画面切 2f，控制条可循环 1 / 1.5 / 2。 */
+    var speed by androidx.compose.runtime.mutableStateOf(1f)
+    /** 长按倍速后的瞬时提示开关（覆盖层读它显示「2× 倍速播放中」）。 */
+    var showSpeedToast by androidx.compose.runtime.mutableStateOf(false)
     var onToggle: (() -> Unit)? = null
     var onSeek: ((Long) -> Unit)? = null
+    var onSpeed: ((Float) -> Unit)? = null
     fun toggle() { onToggle?.invoke() }
     fun seekTo(ms: Long) {
         val d = durationMs
         val t = if (d > 0) ms.coerceIn(0L, d) else ms.coerceAtLeast(0L)
         positionMs = t
         onSeek?.invoke(t)
+    }
+    /** 设置倍速并同步给平台播放器；[speed] 先本地更新，保证 UI 即时反馈。 */
+    fun applySpeed(value: Float) {
+        val v = value.coerceIn(0.5f, 3f)
+        speed = v
+        onSpeed?.invoke(v)
+    }
+    /** 重置为正常速度（播放器销毁、退出全屏时调用，避免影响下一条视频）。 */
+    fun resetSpeed() {
+        speed = 1f
+        onSpeed?.invoke(1f)
     }
 }
 

@@ -1,7 +1,9 @@
 package com.kewu.app.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.slideInVertically
@@ -36,6 +38,7 @@ import io.github.suqi8.coui.kmp.icon.extended.Play
 import io.github.suqi8.coui.kmp.icon.extended.Mic
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -71,6 +74,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -157,6 +161,14 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
     val fullscreen = VideoFullscreen.on
     // 弹幕开关（2026-11-05）：默认开，画面右上角可一键关掉；关掉时 DanmakuLayer 会清空弹幕池
     var danmakuOn by remember(video.bvid) { mutableStateOf(true) }
+    // 弹幕字号档位 0 小 / 1 中 / 2 大（用户反馈默认偏大）：0.58 / 0.72 / 0.90
+    var danmakuSize by remember(video.bvid) { mutableStateOf(1) }
+    val danmakuFontScale = when (danmakuSize) { 0 -> 0.58f; 2 -> 0.90f; else -> 0.72f }
+    // 长按画面 2 倍速的瞬时提示（松手后淡出，状态在单例里，控制层手势也会写它）
+    LaunchedEffect(VideoControls.showSpeedToast) {
+        if (VideoControls.showSpeedToast) { delay(1100); VideoControls.showSpeedToast = false }
+    }
+    val speedToast = VideoControls.showSpeedToast
 
     BackHandler {
         when {
@@ -197,27 +209,29 @@ private fun BilibiliPlayOverlay(video: BilibiliVideoInfo, onDismiss: () -> Unit)
                         bvid = fresh.bvid,
                         cid = sources.cid,
                         enabled = danmakuOn,
+                        fontScale = danmakuFontScale,
                         modifier = Modifier.fillMaxSize(),
                     )
-                    // 右上角开关放在弹幕之上，保证能点到
-                    Box(
-                        Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(10.dp)
-                            .clip(CircleShape)
-                            .background(
-                                if (danmakuOn) Color(0xFFFB7299).copy(alpha = 0.65f)
-                                else Color.Black.copy(alpha = 0.42f),
-                            )
-                            .clickable { danmakuOn = !danmakuOn }
-                            .padding(horizontal = 10.dp, vertical = 6.dp),
-                    ) {
+                    // 控制层先声明；弹幕玻璃开关在**控制层之后**声明并加 zIndex，避免被满屏手势抢走点击
+                    if (VideoControls.available) VideoControlsLayer(fullscreen)
+                    DanmakuGlassSwitch(
+                        on = danmakuOn,
+                        sizeLevel = danmakuSize,
+                        onToggle = { danmakuOn = !it; haptic(HapticKind.Tick) },
+                        onSizeChange = { danmakuSize = it; haptic(HapticKind.Tick) },
+                        modifier = Modifier.align(Alignment.TopEnd).padding(10.dp).zIndex(4f),
+                    )
+                    // 长按 2 倍速提示
+                    if (speedToast) {
                         Text(
-                            if (danmakuOn) "弹幕 开" else "弹幕 关",
-                            color = Color.White, fontSize = 11.sp,
+                            if (VideoControls.speed >= 2f) "2× 倍速播放中" else "1× 正常速度",
+                            color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.align(Alignment.Center).zIndex(5f)
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(Color.Black.copy(alpha = 0.62f))
+                                .padding(horizontal = 16.dp, vertical = 9.dp),
                         )
                     }
-                    if (VideoControls.available) VideoControlsLayer(fullscreen)
                 } else {
                     Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
@@ -913,6 +927,14 @@ private fun VideoControlsLayer(fullscreen: Boolean) {
                 detectTapGestures(
                     onTap = { shown = !shown; poke++ },
                     onDoubleTap = { haptic(HapticKind.Tick); c.toggle(); shown = true; poke++ },
+                    // 长按画面：正常 ↔ 2 倍速切换（用户 2026-11-19 需求）
+                    onLongPress = {
+                        haptic(HapticKind.Light)
+                        val next = if (c.speed >= 2f) 1f else 2f
+                        c.applySpeed(next)
+                        c.showSpeedToast = true
+                        shown = true; poke++
+                    },
                 )
             }
             .pointerInput(Unit) {
@@ -994,6 +1016,29 @@ private fun VideoControlsLayer(fullscreen: Boolean) {
                     ) {
                         VideoGlassBtn(backdrop, if (c.playing) "暂停" else "播放", onClick = { c.toggle(); poke++ }) {
                             Icon(if (c.playing) COUIIcons.Pause else COUIIcons.Play, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
+                        // 倍速钮：循环 1× → 1.5× → 2×（长按画面也能直接 2×）
+                        Box(
+                            Modifier.size(36.dp).clip(CircleShape)
+                                .border(0.8.dp, Color.White.copy(alpha = 0.28f), CircleShape)
+                                .clickable {
+                                    haptic(HapticKind.Tick)
+                                    val next = when {
+                                        c.speed < 1.2f -> 1.5f
+                                        c.speed < 1.8f -> 2f
+                                        else -> 1f
+                                    }
+                                    c.applySpeed(next); c.showSpeedToast = true; poke++
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            val label = when {
+                                c.speed >= 1.8f -> "2×"
+                                c.speed >= 1.2f -> "1.5×"
+                                else -> "1×"
+                            }
+                            Text(label, color = if (c.speed > 1f) Color(0xFFFB7299) else Color.White,
+                                fontSize = 10.sp, fontWeight = FontWeight.Bold)
                         }
                         Row(Modifier.weight(1f).height(36.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text(formatPlayTime(if (dragFrac != null) (frac * total).toLong() else c.positionMs), color = Color.White, fontSize = 11.sp, maxLines = 1)
@@ -1088,6 +1133,68 @@ private fun VideoGlassBtn(
             onClick = { haptic(HapticKind.Tick); onClick() },
         ) {
             Box(Modifier.fillMaxSize().semantics { contentDescription = desc }, contentAlignment = Alignment.Center) { glyph() }
+        }
+    }
+}
+
+/**
+ * 弹幕玻璃开关（2026-11-19 重构，用户反馈「开关点不起 + 设计丑」）：
+ * - 液态玻璃胶囊 + 精致滑动开关轨道（圆钮弹簧位移动画），比原来的纯色文字块高级；
+ * - 右侧「字」按钮循环 小 / 中 / 大 三档字号，解决「弹幕太大」；
+ * - 调用方必须把它放在 VideoControlsLayer **之后**并加 zIndex，否则满屏手势会吃掉点击。
+ */
+@Composable
+private fun DanmakuGlassSwitch(
+    on: Boolean,
+    sizeLevel: Int,
+    onToggle: (Boolean) -> Unit,
+    onSizeChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val track by animateFloatAsState(if (on) 1f else 0f, spring(dampingRatio = 0.72f, stiffness = 620f), label = "dmTrack")
+    val trackColor by animateColorAsState(
+        if (on) Color(0xFFFB7299) else Color.White.copy(alpha = 0.22f),
+        label = "dmTrackColor",
+    )
+    val sizeLabels = listOf("小", "中", "大")
+    Box(modifier.clip(RoundedCornerShape(999.dp)).background(Color.Black.copy(alpha = 0.40f))
+        .border(0.8.dp, Color.White.copy(alpha = 0.22f), RoundedCornerShape(999.dp))) {
+        Row(Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+                // 开关本体：整块可点，点谁都切换
+                Row(
+                    Modifier.clip(RoundedCornerShape(999.dp)).clickable { onToggle(!on) }
+                        .padding(end = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "弹幕", color = if (on) Color.White else Color.White.copy(alpha = 0.72f),
+                        fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    // 轨道 30×17，圆钮 13dp，位移 = (1-track)*13
+                    Box(
+                        Modifier.size(width = 30.dp, height = 17.dp).clip(CircleShape).background(trackColor),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(13.dp)
+                                .offset(x = androidx.compose.ui.unit.Dp((1f - track) * 13f), y = 2.dp)
+                                .clip(CircleShape)
+                                .background(Color.White),
+                        )
+                    }
+                }
+                Box(Modifier.width(1.dp).height(15.dp).background(Color.White.copy(alpha = 0.22f)))
+                // 字号档位：小 / 中 / 大
+                Box(
+                    Modifier.clip(RoundedCornerShape(999.dp)).clickable { onSizeChange((sizeLevel + 1) % 3) }
+                        .padding(start = 8.dp, end = 2.dp),
+                ) {
+                    Text(
+                        "字号 ${sizeLabels.getOrNull(sizeLevel) ?: "中"}",
+                        color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Medium,
+                    )
+                }
         }
     }
 }

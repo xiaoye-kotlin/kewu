@@ -2,8 +2,14 @@ package com.kewu.app.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -29,8 +37,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.ClipOp
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.text.font.FontWeight
@@ -240,12 +251,36 @@ private fun FocusSetupScreen(
         ) {
             Column(Modifier.fillMaxWidth().padding(20.dp)) {
                 Text("本次专注时长", color = cs.onSurfaceSecondary, fontSize = 13.sp)
+                Spacer(Modifier.height(2.dp))
+                // 分钟数字：数值变化时弹簧「弹一下」+ 轻微上滑淡入，选时更有质感（用户 2026-11-19 需求）
+                val minute = planned.toInt()
+                val bump = remember { Animatable(1f) }
+                val minuteFade = remember { Animatable(1f) }
+                LaunchedEffect(minute) {
+                    // 先放大再回弹（弹簧），同时从下方 8px 淡入
+                    bump.snapTo(1.18f)
+                    minuteFade.snapTo(0f)
+                    launch {
+                        bump.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 380f))
+                    }
+                    minuteFade.animateTo(1f, tween(240, easing = FastOutSlowInEasing))
+                }
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        "$minute", color = KewuGreen,
+                        fontSize = 40.sp, fontWeight = FontWeight.Bold,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = bump.value
+                            scaleY = bump.value
+                            translationY = (1f - minuteFade.value) * 8f
+                            alpha = 0.4f + minuteFade.value * 0.6f
+                        },
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("分钟", color = KewuGreen, fontSize = 16.sp, fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(bottom = 6.dp))
+                }
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    "${planned.toInt()} 分钟", color = KewuGreen,
-                    fontSize = 40.sp, fontWeight = FontWeight.Bold,
-                )
-                Spacer(Modifier.height(6.dp))
                 Text(
                     "自由调节 1–120 分钟，找到属于你的节奏",
                     color = cs.onSurfaceSecondary, fontSize = 12.sp,
@@ -267,9 +302,10 @@ private fun FocusSetupScreen(
                     Text("快捷：", color = cs.onSurfaceSecondary, fontSize = 12.sp)
                     Spacer(Modifier.size(6.dp))
                     listOf(15, 25, 45, 60).forEach { m ->
-                        KewuSecondaryButton(
-                            "$m", { haptic(HapticKind.Tick); onPlannedChange(m.toFloat()) },
-                            Modifier.height(32.dp),
+                        FocusQuickChip(
+                            label = "$m",
+                            selected = minute == m,
+                            onClick = { haptic(HapticKind.Tick); onPlannedChange(m.toFloat()) },
                         )
                         Spacer(Modifier.size(6.dp))
                     }
@@ -332,5 +368,51 @@ private fun FocusSetupScreen(
             }
         }
         Spacer(Modifier.height(24.dp))
+    }
+}
+
+/**
+ * 番茄钟快捷时长胶囊（2026-11-19）：按下弹簧缩放 + 选中态玻璃高亮，比朴素按钮更有质感。
+ */
+@Composable
+private fun FocusQuickChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val cs = COUITheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) 0.88f else 1f,
+        animationSpec = spring(dampingRatio = 0.5f, stiffness = 700f),
+        label = "quickChipScale",
+    )
+    val bg by androidx.compose.animation.animateColorAsState(
+        targetValue = if (selected) KewuGreen else Color(0x1A000000),
+        animationSpec = tween(200),
+        label = "quickChipBg",
+    )
+    Box(
+        Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(bg)
+            .border(
+                0.8.dp,
+                if (selected) KewuGreen else Color.White.copy(alpha = 0.16f),
+                RoundedCornerShape(16.dp),
+            )
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 13.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (selected) Color.White else cs.onSurface,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+        )
     }
 }

@@ -5,6 +5,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
@@ -71,14 +72,20 @@ actual fun VideoPlayerView(
     androidx.compose.runtime.DisposableEffect(player) {
         VideoControls.onToggle = { if (player.isPlaying) player.pause() else { if (player.playbackState == Player.STATE_ENDED) player.seekTo(0); player.play() } }
         VideoControls.onSeek = { player.seekTo(it) }
+        VideoControls.onSpeed = { player.playbackParameters = PlaybackParameters(it) }
+        // 新建播放器时把单例残留的倍速应用上去（退出时已重置为 1f，这里兜底）
+        player.playbackParameters = PlaybackParameters(VideoControls.speed)
         VideoControls.available = true
         onDispose {
             VideoControls.available = false
             VideoControls.onToggle = null
             VideoControls.onSeek = null
+            VideoControls.onSpeed = null
             VideoControls.playing = false
             VideoControls.positionMs = 0
             VideoControls.durationMs = 0
+            VideoControls.speed = 1f
+            VideoControls.showSpeedToast = false
             player.release()
         }
     }

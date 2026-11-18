@@ -46,6 +46,10 @@ fun DanmakuOverlay(
     currentTimeMs: Long,
     modifier: Modifier = Modifier,
     maxOnScreen: Int = MAX_ON_SCREEN,
+    /** 字号倍率：B 站原始 fontsize（18/25/36）在手机竖屏上偏大，默认 0.72 收敛到 13–26sp。 */
+    fontScale: Float = 0.72f,
+    /** 字号上限（sp），防止极端值占满画面。 */
+    maxFontSizeSp: Float = 26f,
 ) {
     val measurer = rememberTextMeasurer(cacheSize = 128)
     // 帧时钟：只在 Canvas 的 draw 块里读，改动只 invalidate draw 阶段
@@ -76,7 +80,8 @@ fun DanmakuOverlay(
         val w = size.width
         val h = size.height
         for (d in active) {
-            val fontSize = d.fontsize.coerceIn(18, 36)
+            // 用户反馈「弹幕太大」：原始 18/25/36 在竖屏 16:9 小窗里占满画面，统一乘倍率后收敛。
+            val fontSize = (d.fontsize * fontScale).coerceIn(12f, maxFontSizeSp)
             val key = "$fontSize|${d.content}"
             val layout = layoutCache.getOrPut(key) {
                 if (layoutCache.size > 256) layoutCache.clear()
@@ -98,9 +103,13 @@ fun DanmakuOverlay(
             val track = (abs(d.progress * 31L + d.content.hashCode()) % tracks).toInt()
             val y = (track * trackH).coerceIn(0f, (h - textH).coerceAtLeast(0f))
 
-            // 颜色是 0xRRGGBB，补上不透明的 alpha；先画 1px 黑描边，视频亮画面上也看得清
+            // 颜色是 0xRRGGBB，补上不透明的 alpha；先画更清晰的 1.6px 黑描边（4 向），亮画面上也读得清
             val argb = 0xFF000000.toInt() or (d.color and 0xFFFFFF)
-            drawText(layout, topLeft = Offset(x + 1f, y + 1f))
+            val o = 1.6f
+            drawText(layout, topLeft = Offset(x - o, y - o))
+            drawText(layout, topLeft = Offset(x + o, y - o))
+            drawText(layout, topLeft = Offset(x - o, y + o))
+            drawText(layout, topLeft = Offset(x + o, y + o))
             drawText(layout, color = Color(argb), topLeft = Offset(x, y))
         }
     }

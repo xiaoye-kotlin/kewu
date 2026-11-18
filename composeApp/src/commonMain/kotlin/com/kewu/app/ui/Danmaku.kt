@@ -178,6 +178,7 @@ fun DanmakuLayer(
     cid: Long,
     enabled: Boolean,
     modifier: Modifier = Modifier,
+    fontScale: Float = 0.72f,
 ) {
     val pool = remember(bvid, cid) { DanmakuPool() }
     val scope = rememberCoroutineScope()
@@ -187,7 +188,7 @@ fun DanmakuLayer(
     if (enabled) {
         val timeMs = VideoControls.positionMs
         LaunchedEffect(timeMs) { loader.onProgress(bvid, cid, timeMs) }
-        DanmakuOverlay(danmakuPool = pool, currentTimeMs = timeMs, modifier = modifier)
+        DanmakuOverlay(danmakuPool = pool, currentTimeMs = timeMs, modifier = modifier, fontScale = fontScale)
     } else {
         LaunchedEffect(Unit) { pool.clear() }
     }
