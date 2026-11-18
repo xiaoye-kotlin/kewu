@@ -34,10 +34,12 @@ jobs:
         run: brew install xcodegen
 
       - name: Generate Xcode project
-        run: xcodegen generate --spec iosApp/project.yml --project iosApp/Kewu.xcodeproj
+        # project.yml 在 iosApp/ 下，XcodeGen 默认在 spec 同目录生成 iosApp/Kewu.xcodeproj
+        run: xcodegen generate --spec iosApp/project.yml
 
-      # ad-hoc 签名：无开发者证书也能产出可分发 IPA（安装需重签或开发者设备）。
-      - name: Archive (ad-hoc, no signing)
+      # 仓库没有任何 Apple 开发者证书 / 描述文件，archive 阶段必须彻底关掉签名。
+      # 这样得到的是未签名 App，可在有证书的 Mac 上重签后安装；见交接文档 §90。
+      - name: Archive (unsigned)
         working-directory: iosApp
         run: |
           xcodebuild -project Kewu.xcodeproj -scheme Kewu \
@@ -46,14 +48,25 @@ jobs:
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             clean archive
 
+      # 优先走 ad-hoc 导出；无证书时 exportArchive 必然失败，此时直接从归档里
+      # 取 .app 按 IPA 目录结构打包，保证一次 runner 运行就能拿到交付物。
       - name: Export IPA
         working-directory: iosApp
         run: |
+          set +e
           xcodebuild -exportArchive \
             -archivePath $PWD/build/Kewu.xcarchive \
             -exportPath $PWD/build/ipa \
             -exportOptionsPlist $PWD/../exportOptions-adhoc.plist \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          EXPORT_RC=$?
+          if [ $EXPORT_RC -ne 0 ] || ! ls $PWD/build/ipa/*.ipa >/dev/null 2>&1; then
+            echo "exportArchive unavailable without signing assets, packaging unsigned IPA instead"
+            mkdir -p $PWD/build/ipa/Payload
+            cp -R $PWD/build/Kewu.xcarchive/Products/Applications/Kewu.app $PWD/build/ipa/Payload/
+            (cd $PWD/build/ipa && zip -qry Kewu-1.0.5.ipa Payload)
+          fi
+          ls -lh $PWD/build/ipa/*.ipa
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
