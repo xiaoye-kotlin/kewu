@@ -74,6 +74,7 @@ import com.kewu.app.shareText
 import com.kewu.app.KewuApi
 import com.kewu.app.KewuBlue
 import com.kewu.app.KewuGreen
+import com.kewu.app.NoticeCenter
 import com.kewu.app.haptic
 import com.kewu.app.kvGet
 import com.kewu.app.kvSet
@@ -1321,12 +1322,13 @@ internal fun TeachingReviewScreen(s: ClassRecordingInfo, courseName: String, foc
             if (info != null) {
                 publishState = 3
                 publishNote = "作业已发布 · ${questions.size} 道题"
-                haptic(HapticKind.Light)
-                snackbar.toast("作业已发布")
+                // §90：发布完成 → 首页铃铛 + 系统通知（与助教发布同口径）
+                NoticeCenter.notifyAssignmentPublished(info.id, info.title, deadlineText)
             } else {
                 publishState = 0
                 publishNote = ""
                 snackbar.toast("发布失败，请重试")
+                NoticeCenter.notifyAssignmentPublished("failed-${kotlin.time.Clock.System.now().toEpochMilliseconds()}", "作业发布失败", "「$title」发布失败，请重试")
             }
         }
     }

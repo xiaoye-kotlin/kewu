@@ -1591,14 +1591,23 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
     LaunchedEffect(Unit) {
         var lastNotified: String? = null
         var tick = 0
+        var consecutiveFail = 0
         while (true) {
             try {
                 val courses = (if (tick % 12 == 0) CourseRepo.refresh(force = true) else null) ?: CourseRepo.courses.value ?: CourseRepo.refresh()
                 val me = KewuApi.username.orEmpty()
-                currentSession = courses.orEmpty().firstNotNullOfOrNull { c ->
-                    KewuApi.getAttendances(c.id)?.firstOrNull { it.state.equals("OPEN", true) }
+                // ★ §90 修复「老师没开签到，部分学生端仍一直显示签到入口」：
+                //   1) 只认**今天**的会话——历史残留的 OPEN（老师忘关 / 关失败）不再让学生首页挂着旧签到卡；
+                //   2) 整段查询成功即按最新结果刷新（没有今天 OPEN 就置 null，卡片消失）。
+                val today = todayCn()
+                val openNow = courses.orEmpty().firstNotNullOfOrNull { c ->
+                    KewuApi.getAttendances(c.id)
+                        ?.filter { it.createdAt.startsWith(today) }
+                        ?.firstOrNull { it.state.equals("OPEN", true) }
                 }?.takeIf { s -> me.isBlank() || KewuApi.getMyAttendance(s.id, me) == null }
-                currentSession?.let { s ->
+                currentSession = openNow
+                consecutiveFail = 0
+                openNow?.let { s ->
                     if (s.id != lastNotified) {
                         lastNotified = s.id
                         haptic(HapticKind.Medium)
@@ -1608,7 +1617,12 @@ private fun CheckInCardIfActive(backdrop: LayerBackdrop, onOpen: (AttendanceSess
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
             } catch (e: Exception) {
-                // 网络异常时卡片维持上一次结果，不阻塞首页
+                // 网络异常：连续失败多次后清空旧卡片，避免老师已关闭签到却因网络异常一直显示过期入口
+                consecutiveFail++
+                if (consecutiveFail >= 3) {
+                    currentSession = null
+                    lastNotified = null
+                }
             }
             tick++
             kotlinx.coroutines.delay(5_000)

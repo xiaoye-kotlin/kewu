@@ -1,5 +1,9 @@
 package com.kewu.app
 
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -24,6 +28,9 @@ import kotlinx.serialization.json.jsonPrimitive
  * 指令集保持同名同构，target 取值见下方常量。
  */
 object AiAgent {
+
+    /** §90：后台发布作业的独立协程作用域（AI 对话立即回复，发布在后台进行）。 */
+    private val publishScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     /**
      * 一条操作指令。
@@ -205,23 +212,41 @@ object AiAgent {
         val publisher = com.kewu.app.KewuApi.currentUser?.user?.nickname
             ?: com.kewu.app.KewuApi.username ?: ""
 
-        val r = com.kewu.app.KewuApi.publishAssignment(
-            courseId = course.id, title = title, description = description,
-            deadline = deadline, totalScore = totalScore,
-            knowledgePoints = points, publisher = publisher,
-        )
-        return if (r != null) {
-            buildString {
-                append("✅ 已帮你在「${course.name}」发布作业「${r.title}」，总分 $totalScore")
-                if (deadline.isNotEmpty()) append("，截止 $deadline")
-                if (points.isNotEmpty()) append("，知识点：${points.joinToString("、")}")
-                append("。到「作业」页就能看到提交情况。")
+        // ★ §90：立即回应，发布放后台。老师发出请求后小悟马上回一句，不干等出题/发布；
+        //   后台生成题目 → 发布 → 首页铃铛 + 系统通知告知结果（不把「已发布」塞进 AI 气泡）。
+        publishScope.launch {
+            runCatching {
+                // ① AI 依据标题 / 说明 / 知识点生成题目（修复「发布出来题目为空」）
+                val spec = buildString {
+                    append("课程《${course.name}》作业「$title」。")
+                    if (description.isNotBlank()) append("作业要求：$description。")
+                    if (points.isNotEmpty()) append("知识点：${points.joinToString("、")}。")
+                    append("生成 5 道覆盖本节重点的练习题（选择/填空/简答混合），总分 $totalScore。")
+                }
+                val questions = runCatching { com.kewu.app.AiClient.generateQuestions(spec) }.getOrNull().orEmpty()
+                // ② 发布（带题目）
+                val r = com.kewu.app.KewuApi.publishAssignment(
+                    courseId = course.id, title = title, description = description,
+                    deadline = deadline, totalScore = totalScore,
+                    knowledgePoints = points, publisher = publisher, questions = questions,
+                )
+                if (r != null) {
+                    // ③ 首页通知（应用内铃铛 + 系统通知栏）
+                    NoticeCenter.notifyAssignmentPublished(r.id, r.title, deadline)
+                } else {
+                    NoticeCenter.notifyAssignmentPublished("failed-${nowMs()}", "作业发布失败", "「$title」发布失败，请重试")
+                }
             }
-        } else {
-            "发布失败（网络异常或服务端拒绝）。" +
-                "我也可以只带你去「作业」页，你手动填一次更稳妥。"
+        }
+        // 立即回给老师的话（AI 气泡马上显示；真正结果走首页通知）
+        return buildString {
+            append("好的，我这就去把「$title」发布到「${course.name}」")
+            if (deadline.isNotEmpty()) append("，截止时间 $deadline")
+            append("。我会出好题目并在后台发布，完成后在首页通知你。")
         }
     }
+
+    private fun nowMs(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
 
     private fun tabIndex(target: String): Int = when (target) {
         TAB_HOME -> 0

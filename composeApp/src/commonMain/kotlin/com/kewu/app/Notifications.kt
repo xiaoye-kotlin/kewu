@@ -329,6 +329,24 @@ object NoticeCenter {
         scope.launch { pollOnce(teacher) }
     }
 
+    /**
+     * §90：教师端「AI 发布作业」完成后主动通知（后台发布，不阻塞 AI 对话）。
+     * 同时进首页铃铛（应用内通知）与系统通知栏 —— [deliver] 对 TYPE_NEW_ASSIGNMENT 前后台都发系统通知。
+     * [assignmentId] 用后端返回的真实 id，保证同一作业不会重复通知。
+     */
+    fun notifyAssignmentPublished(assignmentId: String, title: String, deadline: String) {
+        scope.launch {
+            val draft = Notifications.Draft(
+                id = "assignment-published-$assignmentId",
+                type = Notifications.TYPE_NEW_ASSIGNMENT,
+                title = "作业已发布",
+                body = "《$title》已发布" + (deadline.takeIf { it.isNotBlank() }?.let { " · 截止 $it" } ?: ""),
+                ts = Notifications.nowMs(),
+            )
+            deliver(Notifications.addAll(listOf(draft)))
+        }
+    }
+
     /** ★ H2（2026-11-05）：进学生首页时立即扫一次「新作业」，不用等 60 秒轮询 —— 老师刚发布就能在铃铛看到。 */
     fun checkNewAssignments() {
         scope.launch {
