@@ -1,14 +1,14 @@
 name: Build iOS IPA
 
 # §90：用 GitHub Actions 在 macOS runner 上编译 IPA（Windows 本地无法编 iOS）。
-# 省额度策略：只在手动触发时跑（workflow_dispatch），不监听 push/PR；macos-14 为 ARM，
+# 省额度策略：只在手动触发时跑（workflow_dispatch），不监听 push/PR；macos-latest 为 ARM runner，
 # 与 iosArm64 目标一致、编译最快；Gradle 依赖与构建缓存命中后通常几分钟内完成。
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 40
     steps:
       - name: Checkout
