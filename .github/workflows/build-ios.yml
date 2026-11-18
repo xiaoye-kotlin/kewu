@@ -10,6 +10,10 @@ jobs:
   build:
     runs-on: macos-latest
     timeout-minutes: 40
+    env:
+      # Kotlin/Native 的 linkReleaseFrameworkIosArm64 很吃内存，runner 默认堆会在链接阶段 OOM。
+      GRADLE_OPTS: -Xmx2g -XX:MaxMetaspaceSize=1g
+      KOTLIN_DAEMON_OPTIONS: -Xmx5g -XX:MaxMetaspaceSize=2g
     steps:
       - name: Checkout
         uses: actions/checkout@v4
