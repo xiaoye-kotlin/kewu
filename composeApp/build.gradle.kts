@@ -114,8 +114,8 @@ android {
         applicationId = "com.kewu.app"
         minSdk = 33
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.0.6"
+        versionCode = 9
+        versionName = "1.0.7"
     }
     packaging {
         resources {
