@@ -14,6 +14,29 @@ import kotlinx.coroutines.withTimeoutOrNull
  * 优先用进程级缓存（CourseRepo / AssignmentRepo），缺什么再补拉；整体 6 秒超时，拉不到的部分如实写「暂无」，
  * 绝不让上下文拖住提问。
  */
+/**
+ * 一场签到的完整明细（2026-11-19 用户："给 AI 的数据一定要全面，包括签到名单和未签到名单"）。
+ * [present] 已签到（含状态/签到时间）、[absent] 未签到/缺勤；两者都带联系方式，
+ * 这样老师问「谁没来」「某某的电话/邮箱」时小悟能直接答上来。
+ */
+data class AttendanceRosterInfo(
+    val courseName: String,
+    val className: String,
+    val sessionTitle: String,
+    val createdAt: String,
+    val present: List<RosterStudentInfo>,
+    val absent: List<RosterStudentInfo>,
+)
+
+data class RosterStudentInfo(
+    val name: String,
+    val studentNo: String,
+    val phone: String?,
+    val email: String?,
+    val status: String = "",
+    val checkedInAt: String = "",
+)
+
 object AiContext {
 
     private fun nowCn(): String {
@@ -22,6 +45,75 @@ object AiContext {
         fun p2(v: Long) = if (v < 10) "0$v" else "$v"
         val dow = listOf("周四", "周五", "周六", "周日", "周一", "周二", "周三")[((ms / 86_400_000L) % 7).toInt()]
         return "${todayCn()} ${p2(min / 60)}:${p2(min % 60)}（$dow）"
+    }
+
+    /**
+     * ★ 2026-11-19：某门课「最近一场签到」的完整名单明细。
+     *
+     * 数据源：
+     * - 签到记录 [KewuApi.getAttendanceRecords] → 已签到的学生（姓名/学号/状态/签到时刻）
+     * - 班级通讯录 [KewuApi.getClassContacts] → 全班学生（姓名/学号/电话/邮箱）
+     * 以学号(studentId/studentNo)为键做差集，算出「未签到（缺勤）」名单，并给两方都附上联系方式。
+     *
+     * 兼容：签到记录的 studentId 是登录账号（学号）；通讯录的 studentNo 也是学号。
+     * 若某学生签到过但不在通讯录（如退班），仍进已签到名单；若通讯录有但没签到记录，进缺勤名单。
+     * 单门课最多取 [LIMIT] 人，避免 system prompt 过长。
+     */
+    suspend fun attendanceDetail(courseId: String, courseName: String, classId: String?, className: String): AttendanceRosterInfo? =
+        withTimeoutOrNull(5_000) {
+            val sessions = KewuApi.getAttendances(courseId).orEmpty()
+            val last = sessions.maxByOrNull { it.createdAt } ?: return@withTimeoutOrNull null
+            val records = KewuApi.getAttendanceRecords(last.id).orEmpty()
+            val contacts = if (classId.isNullOrBlank()) emptyList()
+            else KewuApi.getClassContacts(classId).first.orEmpty()
+
+            // 通讯录按学号建索引（补联系方式用）
+            val contactByNo = contacts.associateBy { it.studentNo }
+            val LIMIT = 60
+
+            val present = records.map { r ->
+                val c = contactByNo[r.studentId]
+                RosterStudentInfo(
+                    name = r.studentName.ifBlank { c?.name ?: r.studentId },
+                    studentNo = r.studentId,
+                    phone = c?.phone, email = c?.email,
+                    status = statusCn(r.status),
+                    checkedInAt = r.checkedInAt.takeLast(8),
+                )
+            }.take(LIMIT)
+
+            val checkedNos = records.map { it.studentId }.toSet()
+            // 缺勤 = 通讯录里没出现在签到记录中的学生
+            val absent = contacts.filter { it.studentNo !in checkedNos }.map { c ->
+                RosterStudentInfo(c.name, c.studentNo, c.phone, c.email, "缺勤", "")
+            }.take(LIMIT)
+
+            AttendanceRosterInfo(courseName, className, last.title, last.createdAt, present, absent)
+        }
+
+    /** 把一场签到明细渲染成注入 system prompt 的文本（已签到 / 未签到两行，带联系方式）。 */
+    fun formatAttendanceDetail(d: AttendanceRosterInfo): String = buildString {
+        append("《${d.className.ifBlank { d.courseName }}》${d.sessionTitle}（${d.createdAt.take(16)}）：")
+        append("应到 ${d.present.size + d.absent.size} · 实到 ${d.present.size} · 缺勤 ${d.absent.size}；")
+        if (d.present.isNotEmpty()) {
+            append("【已签到】" + d.present.joinToString("、") { s ->
+                s.name + "（学号 ${s.studentNo}" +
+                    (s.status.takeIf { it.isNotBlank() }?.let { "，$it ${s.checkedInAt}" } ?: "") +
+                    contactSuffix(s) + "）"
+            } + "；")
+        }
+        if (d.absent.isNotEmpty()) {
+            append("【未签到/缺勤】" + d.absent.joinToString("、") { s ->
+                s.name + "（学号 ${s.studentNo}" + contactSuffix(s) + "）"
+            })
+        } else if (d.present.isNotEmpty()) {
+            append("【未签到/缺勤】无（全班都签到了）")
+        }
+    }
+
+    private fun contactSuffix(s: RosterStudentInfo): String = buildString {
+        s.phone?.takeIf { it.isNotBlank() }?.let { append("，电话 $it") }
+        s.email?.takeIf { it.isNotBlank() }?.let { append("，邮箱 $it") }
     }
 
     /** 学生端全景。 */
@@ -110,7 +202,7 @@ object AiContext {
     }
 
     /** 教师端全景。 */
-    suspend fun teacher(): String = withTimeoutOrNull(6_000) { teacherInner() } ?: "（上下文加载超时，仅知道当前时间：${nowCn()}）"
+    suspend fun teacher(): String = withTimeoutOrNull(10_000) { teacherInner() } ?: "（上下文加载超时，仅知道当前时间：${nowCn()}）"
 
     private suspend fun teacherInner(): String = coroutineScope {
         val consoleD = async { KewuApi.getTeacherConsole() }
@@ -127,6 +219,13 @@ object AiContext {
             classes?.classes.orEmpty().map { cls -> async {
                 cls.name to (KewuApi.getClassContacts(cls.id).first.orEmpty())
             } }.awaitAll()
+        }.orEmpty()
+        // ★ 2026-11-19：每个教学班最近一场签到的完整名单（已签到/未签到 + 联系方式）。
+        //   这是「谁没签到」「某某电话多少」能答上来的关键——原来只有 stats 数字，没有姓名。
+        val attendanceDetails = withTimeoutOrNull(7_000) {
+            classes?.classes.orEmpty().map { cls -> async {
+                attendanceDetail(cls.courseId, cls.courseName.ifBlank { cls.name }, cls.id, cls.name)
+            } }.awaitAll().filterNotNull()
         }.orEmpty()
         // 老师的课程：/user/me 绑定课 → 控制台今日课程 → 教学班所属课程（教师账号通常不在 /me 里绑课，
         // 旧版只看 /me，小悟回答「当前暂无课程」）
@@ -180,6 +279,11 @@ object AiContext {
                     appendLine("· ${t.courseName}：${t.className.ifBlank { "未建班" }}，${t.studentCount} 人，" +
                         (if (t.state == "ON") "上课中（${t.startedAt} 开始）" else "未上课"))
                 }
+            }
+            // ★ 2026-11-19：签到名单明细（谁签到 / 谁没签到 + 联系方式）——老师问「缺勤的是谁」「某某电话」直接据此回答。
+            if (attendanceDetails.isNotEmpty()) {
+                appendLine("【最近签到名单明细（含未签到学生及联系方式，务必以此为准回答「谁没签到/谁缺勤/某同学联系方式」）】")
+                attendanceDetails.forEach { d -> appendLine("· " + formatAttendanceDetail(d)) }
             }
             appendLine("【我布置的作业（${assignments.size} 份）】")
             if (stats.isEmpty()) appendLine("暂无作业")

@@ -73,6 +73,7 @@ object AiAgent {
     const val OPEN_NEW_COURSE = "new_course"               // 新建课程
     const val OPEN_CLASS_MANAGE = "class_manage"           // 班级管理
     const val OPEN_PUBLISH_ASSIGNMENT = "publish_assignment" // 打开「作业」页发布表单
+    const val OPEN_ATTENDANCE_RECORDS = "attendance_records" // 签到记录（查看谁签到/缺勤）
 
     // 直达 API 动作（教师）：action = publish_assignment（value=标题，target=课程名/ID 可选）
 
@@ -136,9 +137,14 @@ object AiAgent {
         // 也可只打开「作业」页让用户自己填表。
         "open" -> when (a.target) {
             OPEN_PUBLISH_ASSIGNMENT -> openPublishPage(role)
+            OPEN_ATTENDANCE_RECORDS -> openAttendanceRecords(role)
             else -> openTarget(role, a.target)
         }
         "publish_assignment" -> publishAssignment(role, a)
+        // ★ 2026-11-19（类 MCP）：教师端新增三类可代办操作 + 签到记录直达。
+        "create_attendance" -> startAttendance(role, a)
+        "close_attendance" -> closeAttendance(role, a)
+        "post_note" -> postClassNote(role, a)
         "join_class" -> {
             if (role != "student") "加入班级是学生端功能，教师请在「班级管理」查看邀请码。"
             else {
@@ -162,6 +168,81 @@ object AiAgent {
             }
         }
         else -> null
+    }
+
+    /**
+     * 把用户口语里的课程名 / ID 解析成老师本人名下的课程。
+     * [want] 为空且只有一门课时自动选它；多门课又不指明则返回候选让模型追问（不替老师猜）。
+     */
+    private suspend fun resolveCourse(wantRaw: String): Pair<com.kewu.app.CourseInfo?, String?> {
+        if (com.kewu.app.KewuApi.currentUser?.courses.isNullOrEmpty()) com.kewu.app.KewuApi.me(force = true)
+        val courses = com.kewu.app.KewuApi.currentUser?.courses.orEmpty()
+        if (courses.isEmpty()) return null to "没找到你的课程，先到「我的 → 新建课程」建一门课再让我帮你操作。"
+        val want = wantRaw.trim()
+        val course = when {
+            want.isEmpty() && courses.size == 1 -> courses.first()
+            want.isEmpty() -> return null to "你有 ${courses.size} 门课：${courses.joinToString("、") { it.name }}。" +
+                "告诉我课程名，我再帮你操作。"
+            else -> courses.firstOrNull { it.id.equals(want, ignoreCase = true) || it.name.contains(want) }
+                ?: return null to "没找到课程「$want」。你的课程有：${courses.joinToString("、") { it.name }}。"
+        }
+        return course to null
+    }
+
+    /** 打开教师端「签到记录」：控制台 tab → 由页面按最近一场签到展示明细。 */
+    private fun openAttendanceRecords(role: String): String {
+        if (role != "teacher") return "签到记录明细是教师端功能，学生端请到「课堂」看自己的签到。"
+        AiNav.goTeacherTab(tabIndex(TAB_HOME))
+        return "已帮你切到控制台，点最近一场签到的「查看记录」就能看到谁签到、谁缺勤。"
+    }
+
+    /**
+     * ★ 2026-11-19（类 MCP）直接代办：发起签到。
+     *   value = 签到标题（可空，默认「课堂签到」），target / args["course"] = 课程名或 ID（可空）
+     *   args["duration"] = 时长分钟（默认 10）
+     */
+    private suspend fun startAttendance(role: String, a: Action): String {
+        if (role != "teacher") return "发起签到是教师端功能，学生端没有这个入口。"
+        val title = a.value.trim().ifBlank { a.args["title"]?.trim().orEmpty() }.ifBlank { "课堂签到" }
+        val (course, err) = resolveCourse(a.target.ifBlank { a.args["course"].orEmpty() })
+        if (err != null) return err
+        val duration = (a.args["duration"]?.trim()?.toIntOrNull() ?: 10).coerceIn(1, 180)
+        val publisher = com.kewu.app.KewuApi.currentUser?.user?.nickname
+            ?: com.kewu.app.KewuApi.username.orEmpty()
+        val session = com.kewu.app.KewuApi.createAttendance(
+            courseId = course!!.id, title = title, durationMinutes = duration, publisher = publisher,
+        )
+        return if (session != null) "✅ 已在「${course.name}」发起签到「$title」（${duration} 分钟）。学生现在可以扫码签到了。"
+        else "发起签到没成功，请检查网络后到「控制台 → 发起签到」重试。"
+    }
+
+    /** ★ 2026-11-19（类 MCP）直接代办：结束最近一场进行中的签到。target/args["course"] 指定课程（可空）。 */
+    private suspend fun closeAttendance(role: String, a: Action): String {
+        if (role != "teacher") return "结束签到是教师端功能。"
+        val (course, err) = resolveCourse(a.target.ifBlank { a.args["course"].orEmpty() })
+        if (err != null) return err
+        val sessions = com.kewu.app.KewuApi.getAttendances(course!!.id).orEmpty()
+        val open = sessions.lastOrNull { it.state.equals("OPEN", true) }
+            ?: return "「${course.name}」当前没有进行中的签到，无需结束。"
+        val e = com.kewu.app.KewuApi.closeAttendance(open.id)
+        return if (e == null) "✅ 已结束「${course.name}」的签到，缺勤名单已生成，可以直接问我「谁没签到」。"
+        else "结束签到没成功：$e"
+    }
+
+    /** ★ 2026-11-19（类 MCP）直接代办：发布课堂笔记。value=笔记正文，target/args["course"]=课程（可空）。 */
+    private suspend fun postClassNote(role: String, a: Action): String {
+        if (role != "teacher") return "发布课堂笔记是教师端功能。"
+        val content = a.value.trim().ifBlank { a.args["content"]?.trim().orEmpty() }
+        if (content.isEmpty()) return "请先告诉我笔记内容，例如「帮我发课堂笔记：本节重点是 Vue 响应式原理」。"
+        val (course, err) = resolveCourse(a.target.ifBlank { a.args["course"].orEmpty() })
+        if (err != null) return err
+        // postNote 需要 classId：优先取该课程下老师的第一个教学班
+        val cls = com.kewu.app.KewuApi.getTeacherClasses()?.classes.orEmpty()
+            .firstOrNull { it.courseId == course!!.id }
+            ?: return "没找到「${course!!.name}」对应的教学班，先到「班级管理」建一个班再发笔记。"
+        val e = com.kewu.app.KewuApi.postNote(cls.id, content)
+        return if (e == null) "✅ 已把课堂笔记发布到「${cls.name}」，同学们下一节课就能看到。"
+        else "发布笔记没成功：$e"
     }
 
     /** 只跳到「作业」页让用户自己填发布表单（缺少标题/课程时的兜底）。 */
@@ -304,11 +385,17 @@ object AiAgent {
 · 切换页面 {"action":"go_tab","target":"home|assistant|tasks|mine"}
 · 打开功能页 {"action":"open","target":"功能标识"}
 · 直接代办 {"action":"join_class","value":"6位邀请码"}、{"action":"bind_course","value":"课程ID"}
+· 发布作业 {"action":"publish_assignment","value":"标题",...}
+· 发起签到 {"action":"create_attendance","value":"签到标题（可省，默认课堂签到）","target":"课程名（可省）","duration":"10（分钟，可省）"}
+· 结束签到 {"action":"close_attendance","target":"课程名（可省）"}
+· 发布课堂笔记 {"action":"post_note","value":"笔记正文","target":"课程名（可省）"}
 
 只有当回答确实要触发软件操作时才输出指令，且一次只输出一条；纯问答不要输出任何指令。
 
 ★ 绝对不能做的事（遇到要礼貌拒绝并引导用户自己完成）：
-代写作业、代替签到或回答签到测验、修改/预测成绩、代替考试。你只能「打开页面」和「代办加入班级/绑定课程/发布作业」这类软件操作，学习内容本身必须由用户自己完成。
+代写作业、代替学生签到或回答签到测验题、修改/预测成绩、代替考试。
+注意区分：「老师发起/结束一场课堂签到」是允许的管理操作；「替某个学生个人签到、代答签到问题」绝对禁止。
+你只能「打开页面」和「代办加入班级/绑定课程/发布作业/发起或结束签到/发课堂笔记」这类软件操作，学习内容本身必须由用户自己完成。
 """
 
     fun studentCapability(): String = PROTOCOL + """
@@ -328,7 +415,8 @@ assistant=助教（AI 对话、B 站学习视频、语音通话）、tasks=任�
     fun teacherCapability(): String = PROTOCOL + """
 你所在的环境是教师端课悟 App，可用的 open 目标：
 bind_course 课程绑定；create_attendance 发起签到；post_note 发布课堂笔记；
-new_course 新建课程；class_manage 班级管理（查看邀请码）；notifications 通知设置；about 关于我们；
+new_course 新建课程；class_manage 班级管理（查看邀请码）；attendance_records 签到记录（看谁签到/缺勤）；
+notifications 通知设置；about 关于我们；
 publish_assignment 打开「作业」页的发布表单（只带队，不代填）。
 go_tab 页面：home=控制台（发起/结束签到、课堂录音、融合录音、AI 纪要）、assistant=助教（AI 对话与教学简报）、tasks=作业（批阅/发布）、mine=我的。
 学生相关操作（加入班级、学生录音管理）不在教师端，不要输出对应指令。
@@ -336,6 +424,15 @@ go_tab 页面：home=控制台（发起/结束签到、课堂录音、融合录�
 ★ 你能看到并回答这个软件里的几乎所有信息（都已注入到你的上下文）：
 我的课表、我教的课程与教学班、每个班的学生名单（姓名/学号/电话/邮箱）、今日签到与到课率、
 我布置的作业（提交/批阅/均分）、待批阅队列、各课最近课堂纪要。问「xx 学生联系方式」「xx 课什么时候」直接据上下文回答。
+
+★★ 签到名单明细（重要，2026-11-19 新增）：上下文里有「签到名单明细」，逐条列出【已签到】和【未签到/缺勤】学生的
+姓名、学号、签到状态/时间，以及电话和邮箱（有就列）。老师问「谁没签到」「谁缺勤」「某某的电话/邮箱是多少」
+「把缺勤同学的联系方式发我」时，必须直接引用这些明细逐个回答，绝不能说「数据里没有姓名」或「建议去签到页看明细」——
+数据就在你手里。若确实某场签到明细未加载（上下文无该段），才如实说明并建议用 open attendance_records 打开查看。
+
+★ 你可以主动帮老师做这些管理操作（输出对应指令即可代办，无需老师自己去点）：
+「发起签到」用 create_attendance；「结束签到」用 close_attendance；「发课堂笔记：xxx」用 post_note；
+「布置/发布作业：xxx」用 publish_assignment。课程名省略时你只有一门课会自动选，多门课要先问老师是哪一门。
 
 ★ 教师可以直接让你发布作业（重要）：
 {"action":"publish_assignment","value":"作业标题","target":"课程名或课程ID（可省略，默认第一门课）",

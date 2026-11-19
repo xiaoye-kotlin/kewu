@@ -101,6 +101,8 @@ import io.github.suqi8.coui.kmp.basic.Text
 import io.github.suqi8.coui.kmp.blur.LayerBackdrop
 import io.github.suqi8.coui.kmp.blur.layerBackdrop
 import io.github.suqi8.coui.kmp.theme.COUITheme
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -197,6 +199,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
     var watchList by remember { mutableStateOf<List<WatchStudent>>(emptyList()) }
     var watchFromMock by remember { mutableStateOf(false) }
     var attStats by remember { mutableStateOf<AttendanceStats?>(null) }
+    // ★ 2026-11-19：最近签到名单明细（已签到/未签到 + 联系方式），供 AI 上下文与本地兜底精确回答「谁没签到/联系方式」。
+    var attendanceDetails by remember { mutableStateOf<List<com.kewu.app.AttendanceRosterInfo>>(emptyList()) }
     var hwStats by remember { mutableStateOf<AssignmentStats?>(null) }
     var pendingReview by remember { mutableStateOf<Int?>(null) } // 控制台聚合的待批阅数
 
@@ -354,6 +358,17 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
         // 2026-10-26：不再用「张明 / 李婷 / 王浩」示例名单兜底——旧版示例学生会写进聊天记录、还会作为
         // 学情上下文发给大模型，老师以为是真实学生。没有数据就如实说没有。
         watchList = watch.distinctBy { it.name }.take(5)
+        // ★ 2026-11-19：拉取每个教学班最近一场签到的完整名单（已签到/未签到 + 联系方式）。
+        //   这是「谁没签到」「某某电话」能精确回答的数据源；失败不影响其它简报。
+        attendanceDetails = kotlinx.coroutines.withTimeoutOrNull(7_000) {
+            com.kewu.app.KewuApi.getTeacherClasses()?.classes.orEmpty().map { cls ->
+                async {
+                    com.kewu.app.AiContext.attendanceDetail(
+                        cls.courseId, cls.courseName.ifBlank { cls.name }, cls.id, cls.name
+                    )
+                }
+            }.awaitAll().filterNotNull()
+        }.orEmpty()
         dataReady = true
 
         // ── AI 主动连发教学简报（错峰进场，像一条条发过来，不直接堆卡片） ──
@@ -431,6 +446,11 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
             appendLine("最近一次签到：应到 ${it.expected} · 实到 ${it.checked} · 迟到 ${it.late} · " +
                 "缺勤 ${it.absent} · 签到率 ${(it.checkRate * 100).toInt()}%")
         }
+        // ★ 2026-11-19：签到名单明细（谁签到/谁没签到 + 联系方式）——老师问「缺勤的是谁」「某同学电话」必须据此回答。
+        if (attendanceDetails.isNotEmpty()) {
+            appendLine("【签到名单明细（以此为准回答「谁没签到/缺勤」「某某联系方式」）】")
+            attendanceDetails.forEach { d -> appendLine("· " + com.kewu.app.AiContext.formatAttendanceDetail(d)) }
+        }
         hwStats?.let {
             appendLine("最近一份作业：均分 ${it.avgScore} · 已交 ${it.submittedCount} · " +
                 "待批 ${it.pendingCount} · 高风险 ${it.highRiskCount} 人")
@@ -496,13 +516,26 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 if (hw.highRiskCount > 0) add(TaBlock.Text("高风险提交建议优先批阅，可先看 AI 预批阅建议分。"))
             }
         }
-        q.contains("签到") || q.contains("课堂") || q.contains("缺勤") || q.contains("到课") -> buildList {
+        q.contains("签到") || q.contains("课堂") || q.contains("缺勤") || q.contains("到课") || q.contains("没来") || q.contains("联系方式") || q.contains("电话") -> buildList {
             val st = attStats
-            if (st == null) add(TaBlock.Text("暂无签到数据，发起一次课堂签到后我帮你盯到课率。"))
+            if (st == null && attendanceDetails.isEmpty()) add(TaBlock.Text("暂无签到数据，发起一次课堂签到后我帮你盯到课率。"))
             else {
-                add(TaBlock.Text("最近签到：应到 ${st.expected} · 实到 ${st.checked} · 迟到 ${st.late} · " +
-                    "缺勤 ${st.absent}", emphasis = true))
-                add(TaBlock.Text("签到率 ${(st.checkRate * 100).toInt()}%，平均用时 ${st.avgSeconds.toInt()} 秒。"))
+                if (st != null) {
+                    add(TaBlock.Text("最近签到：应到 ${st.expected} · 实到 ${st.checked} · 迟到 ${st.late} · " +
+                        "缺勤 ${st.absent}，签到率 ${(st.checkRate * 100).toInt()}%。", emphasis = true))
+                }
+                // ★ 2026-11-19：断网兜底也给出缺勤姓名与联系方式，不再只报数字。
+                attendanceDetails.forEach { d ->
+                    if (d.absent.isNotEmpty()) {
+                        add(TaBlock.Text("未签到（${d.absent.size} 人）：" + d.absent.joinToString("、") { s ->
+                            s.name + "（学号 ${s.studentNo}" +
+                                (s.phone?.takeIf { it.isNotBlank() }?.let { "，电话 $it" } ?: "") +
+                                (s.email?.takeIf { it.isNotBlank() }?.let { "，邮箱 $it" } ?: "") + "）"
+                        }))
+                    } else if (d.present.isNotEmpty()) {
+                        add(TaBlock.Text("${d.className}：全部 ${d.present.size} 人已签到，无缺勤。"))
+                    }
+                }
             }
         }
         q.contains("薄弱") || q.contains("知识点") || q.contains("掌握") -> buildList {
