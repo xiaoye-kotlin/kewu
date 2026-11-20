@@ -53,6 +53,33 @@ import kotlin.math.roundToInt
 
 internal enum class SlideStyle { Pager, Push }
 
+/**
+ * ★ 全局统一 Q 弹弹簧规范（2026-11-19 动画专项）。
+ *
+ * 全端交互统一用这套低阻尼过冲弹簧，替代散落各处的 tween / 高阻尼 spring，手感一致：
+ * - [Press]    按压缩放：回弹快而明显（按钮/卡片按下去"弹"回来）
+ * - [Pop]      出现/选中/入场：明显 Q 弹过冲（气泡/弹窗/卡片/Chip 选中）
+ * - [Glide]    位移滑入/退场：轻微过冲、干脆落定（面板上下滑、全屏层）
+ * - [Settle]   进度/数字/尺寸：温和过冲（进度环、数字滚动、条形填充）
+ * - [swift]    需要更快的轻量反馈（Toast、小胶囊）
+ *
+ * 注意玻璃采样约束：含 KewuGlassCard 的子树只能做 placement 位移，勿套 alpha/graphicsLayer 缩放。
+ */
+object KewuSpring {
+    /** 按压回弹：0.42 阻尼 + 480 刚度，按下去迅速弹回且带可见过冲。 */
+    val Press: AnimationSpec<Float> = spring(dampingRatio = 0.42f, stiffness = 480f)
+    /** Q 弹出场/选中：0.55 阻尼 + 420 刚度，明显弹一下再落定。 */
+    val Pop: AnimationSpec<Float> = spring(dampingRatio = 0.55f, stiffness = 420f)
+    /** Q 弹位移（滑入/退场）：0.6 阻尼 + 420 刚度，方向感强、轻微过冲。 */
+    val Glide: AnimationSpec<Float> = spring(dampingRatio = 0.6f, stiffness = 420f)
+    /** 温和回弹（进度/数字/尺寸）：0.62 阻尼 + 300 刚度，过冲柔和不晃眼。 */
+    val Settle: AnimationSpec<Float> = spring(dampingRatio = 0.62f, stiffness = 300f)
+    /** 更快的小反馈：0.5 阻尼 + 600 刚度。 */
+    val Swift: AnimationSpec<Float> = spring(dampingRatio = 0.5f, stiffness = 600f)
+    /** 橡皮筋：0.5 阻尼 + 420 刚度，回弹明显（拖拽越界回位）。 */
+    val Rubber: AnimationSpec<Float> = spring(dampingRatio = 0.5f, stiffness = 420f)
+}
+
 /** tab 切页：轻微过冲（≈1%），落定干脆。 */
 private val PagerSpring: AnimationSpec<Float> = spring(dampingRatio = 0.84f, stiffness = 380f)
 /** 下钻推入 / 返回。 */

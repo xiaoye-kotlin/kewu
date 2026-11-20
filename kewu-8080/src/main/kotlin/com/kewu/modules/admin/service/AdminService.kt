@@ -181,16 +181,14 @@ class AdminService(
     }
 
     /**
-     * 总控端自助改密：校验当前用户旧密码后写入新密码，并把新密码回写服务器 kewu.env，
-     * 保证总控端下次启动自动填入的凭证与数据库一致。返回 false 表示旧密码不对/用户不存在。
+     * 总控端自助改密（2026-11-20）：已登录即视为后台管理人员，凭 Bearer Token 鉴权（路由层强制），
+     * 无需旧密码，直接写入新密码并回写服务器 kewu.env，保证总控端下次启动自动填入的凭证与数据库一致。
+     * 返回 false 表示用户不存在。
      */
-    fun changeOwnPassword(userId: String, oldPassword: String, newPassword: String): Boolean {
+    fun changeOwnPassword(userId: String, newPassword: String): Boolean {
         if (newPassword.length < 6) throw IllegalArgumentException("新密码至少 6 位")
-        if (newPassword == oldPassword) throw IllegalArgumentException("新密码不能与旧密码相同")
         val account = transaction {
             val row = Users.selectAll().where { Users.id eq userId }.firstOrNull() ?: return@transaction null
-            val hash = row[Users.passwordHash]
-            if (!BCrypt.verifyer().verify(oldPassword.toCharArray(), hash).verified) return@transaction null
             Users.update({ Users.id eq userId }) {
                 it[passwordHash] = BCrypt.withDefaults().hashToString(12, newPassword.toCharArray())
             }

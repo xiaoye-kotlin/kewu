@@ -48,8 +48,8 @@ fun rememberEnterProgress(
     }
     val p by animateFloatAsState(
         targetValue = target,
-        // 显式小阈值：默认阈值会截断回弹过冲（学生端踩过的坑）
-        animationSpec = spring(dampingRatio = 0.72f, stiffness = 360f, visibilityThreshold = 0.0005f),
+        // Q 弹回弹：低阻尼 + 显式小阈值（默认阈值会截断过冲，学生端踩过的坑）
+        animationSpec = spring(dampingRatio = 0.56f, stiffness = 340f, visibilityThreshold = 0.0005f),
         label = "adminEnter$index",
     )
     return p
@@ -98,7 +98,7 @@ fun rememberAdminInteraction(): AdminInteraction {
 fun Modifier.pressScale(pressed: Boolean, pressedScale: Float = 0.965f): Modifier {
     val s by animateFloatAsState(
         if (pressed) pressedScale else 1f,
-        spring(dampingRatio = 0.6f, stiffness = 520f),
+        spring(dampingRatio = 0.45f, stiffness = 520f, visibilityThreshold = 0.0005f),
         label = "pressScale",
     )
     return this.scale(s)
@@ -123,7 +123,7 @@ fun <S> AdminPageHost(
         dir = if (order(target) >= order(shown)) 1 else -1
         shown = target
         shift.snapTo(dir.toFloat())
-        shift.animateTo(0f, spring(dampingRatio = 0.8f, stiffness = 300f, visibilityThreshold = 0.0005f))
+        shift.animateTo(0f, spring(dampingRatio = 0.58f, stiffness = 300f, visibilityThreshold = 0.0005f))
     }
     Box(modifier) {
         key(shown) {

@@ -667,7 +667,8 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             // ── 建议提问（原课程/作业列表的新呈现；面板打开时让位） ──
             AnimatedVisibility(
                 visible = !showAttach && !isRecording,
-                enter = fadeIn(tween(160)),
+                // 2026-11-19：纯淡入改「上滑 + 淡入」Q 弹，与附近 Chip 按压手感一致。
+                enter = slideInVertically(KewuSpring.Pop) { it / 2 } + fadeIn(KewuSpring.Swift),
                 exit = fadeOut(tween(120)),
             ) {
                 Row(
@@ -750,11 +751,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     AnimatedVisibility(
                         visible = panel != AssistantPanel.NONE,
                         enter = slideInVertically(
-                            animationSpec = spring(dampingRatio = 0.82f, stiffness = 420f),
+                            animationSpec = KewuSpring.Glide,
                             initialOffsetY = { it },
                         ),
                         exit = slideOutVertically(
-                            animationSpec = tween(150),
+                            animationSpec = KewuSpring.Swift,
                             targetOffsetY = { it },
                         ),
                     ) {

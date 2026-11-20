@@ -219,7 +219,7 @@ private fun AdminNavRail(
             Box(Modifier.fillMaxWidth()) {
                 val indicatorY by animateDpAsState(
                     (NavItemHeight + NavItemGap) * section.ordinal,
-                    spring(dampingRatio = 0.72f, stiffness = 420f),
+                    spring(dampingRatio = 0.55f, stiffness = 420f, visibilityThreshold = 0.1.dp),
                     label = "navIndicator",
                 )
                 Box(

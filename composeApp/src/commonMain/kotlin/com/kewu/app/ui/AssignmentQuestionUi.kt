@@ -383,8 +383,8 @@ private fun ManualQuestionBlock(onAdd: (QuestionType) -> Unit) {
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 380f)) + fadeIn(tween(220)),
-            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+            enter = expandVertically(KewuSpring.Pop) + fadeIn(tween(220)),
+            exit = shrinkVertically(KewuSpring.Glide) + fadeOut(tween(160)),
         ) {
             Column {
                 Spacer(Modifier.height(8.dp))
@@ -701,8 +701,8 @@ private fun AiGenerateBlock(
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = expandVertically(spring(dampingRatio = 0.85f, stiffness = 380f)) + fadeIn(tween(220)),
-            exit = shrinkVertically(tween(220)) + fadeOut(tween(160)),
+            enter = expandVertically(KewuSpring.Pop) + fadeIn(tween(220)),
+            exit = shrinkVertically(KewuSpring.Glide) + fadeOut(tween(160)),
         ) { Column {
             Spacer(Modifier.height(10.dp))
             TextField(topic, { topic = it }, Modifier.fillMaxWidth(), backgroundMode = TextFieldMode.Rectangle,

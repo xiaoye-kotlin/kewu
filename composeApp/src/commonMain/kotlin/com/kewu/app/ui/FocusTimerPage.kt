@@ -170,9 +170,9 @@ fun FocusTimerPage(
                                 haptic(HapticKind.Light)
                                 refreshStatus()
                                 phase = FocusPhase.SESSION
-                                // 中心扩散揭示动画
+                                // 中心扩散揭示动画（2026-11-19 动画专项：tween→Q 弹弹簧，圆形揭示带轻微过冲）
                                 reveal.snapTo(0f)
-                                reveal.animateTo(1f, tween(650, easing = FastOutSlowInEasing))
+                                reveal.animateTo(1f, KewuSpring.Pop)
                             }
                         }
                     },
@@ -271,7 +271,7 @@ private fun FocusSetupScreen(
                     launch {
                         bump.animateTo(1f, spring(dampingRatio = 0.42f, stiffness = 380f))
                     }
-                    minuteFade.animateTo(1f, tween(240, easing = FastOutSlowInEasing))
+                    minuteFade.animateTo(1f, KewuSpring.Glide)
                 }
                 Row(verticalAlignment = Alignment.Bottom) {
                     Text(
@@ -391,14 +391,20 @@ private fun FocusQuickChip(
     val cs = COUITheme.colorScheme
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
+    // 2026-11-19 动画专项：按压 + 选中都用统一 Q 弹弹簧；选中切换时额外弹一下（1→0.9→1）。
+    val selectBump = remember { Animatable(1f) }
+    LaunchedEffect(selected) {
+        selectBump.snapTo(0.9f)
+        selectBump.animateTo(1f, KewuSpring.Press)
+    }
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.88f else 1f,
-        animationSpec = spring(dampingRatio = 0.5f, stiffness = 700f),
+        animationSpec = KewuSpring.Press,
         label = "quickChipScale",
     )
     val bg by androidx.compose.animation.animateColorAsState(
         targetValue = if (selected) KewuGreen else Color(0x1A000000),
-        animationSpec = tween(200),
+        animationSpec = KewuSpring.Swift,
         label = "quickChipBg",
     )
     Box(
@@ -420,7 +426,10 @@ private fun FocusQuickChip(
             color = if (selected) Color.White else cs.onSurface,
             fontSize = 12.sp,
             fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-            modifier = Modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+            modifier = Modifier.graphicsLayer {
+                val s = scale * selectBump.value
+                scaleX = s; scaleY = s
+            },
         )
     }
 }

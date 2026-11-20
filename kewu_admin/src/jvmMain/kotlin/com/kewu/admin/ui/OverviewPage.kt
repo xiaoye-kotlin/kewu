@@ -1,12 +1,14 @@
 package com.kewu.admin.ui
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -36,7 +38,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kewu.admin.AdminApi
@@ -195,15 +200,34 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
         Spacer(Modifier.height(22.dp))
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             Panel(Modifier.weight(1.15f).fillMaxSize()) {
-                Column(Modifier.padding(22.dp)) {
-                    Text("服务健康度", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("由总控端管理接口实时探测", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
-                    Spacer(Modifier.height(18.dp))
-                    ServiceStatusRow("业务后端", "统一 8080 · 课程 / 作业 / 签到", state.str("backend", "down"), Icons.Outlined.Cloud)
-                    ServiceStatusRow("Redis 缓存", "会话 / 雷达 / 课堂状态", state.str("redis", "down"), Icons.Outlined.Memory)
-                    ServiceStatusRow("华为云 OBS", "录音文件与对象存储", state.str("obs", "down"), Icons.Outlined.Storage)
-                    Spacer(Modifier.height(12.dp))
-                    Text("服务器时间：${state.str("time")}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                // 水印层（学生端/教师端首页同款「大半圆 + 绿勾/警示号」）：
+                // 全部服务正常 → 绿勾（就绪）；任一异常 → 琥珀感叹号。描绘动效 400+70+240ms 与学生端逐字一致。
+                val allUp = state?.str("backend", "down").equals("up", true) &&
+                    state?.str("redis", "down").equals("up", true) &&
+                    state?.str("obs", "down").equals("up", true)
+                Box(Modifier.fillMaxSize().clipToBounds()) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .offset { IntOffset(52.dp.roundToPx(), 58.dp.roundToPx()) },
+                        contentAlignment = Alignment.BottomEnd,
+                    ) {
+                        if (allUp) {
+                            ThreeQuarterCheck(size = 170.dp, color = KewuGreenDeep, alpha = 0.55f)
+                        } else {
+                            ExclaimMark(size = 170.dp, color = Color(0xFFFFB300), alpha = 0.45f)
+                        }
+                    }
+                    Column(Modifier.fillMaxSize().padding(22.dp)) {
+                        Text("服务健康度", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                        Text("由总控端管理接口实时探测", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                        Spacer(Modifier.height(18.dp))
+                        ServiceStatusRow("业务后端", "统一 8080 · 课程 / 作业 / 签到", state.str("backend", "down"), Icons.Outlined.Cloud)
+                        ServiceStatusRow("Redis 缓存", "会话 / 雷达 / 课堂状态", state.str("redis", "down"), Icons.Outlined.Memory)
+                        ServiceStatusRow("华为云 OBS", "录音文件与对象存储", state.str("obs", "down"), Icons.Outlined.Storage)
+                        Spacer(Modifier.height(12.dp))
+                        Text("服务器时间：${state.str("time")}", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
             Panel(Modifier.weight(1f).fillMaxSize()) {
@@ -241,7 +265,7 @@ fun OverviewPage(api: AdminApi, onDeploy: () -> Unit) {
 
 @Composable
 private fun ChangePasswordDialog(api: AdminApi, onClose: () -> Unit, onChanged: (String) -> Unit) {
-    var oldPwd by remember { mutableStateOf("") }
+    // 已登录即视为后台管理人员：无需输入旧密码，直接设置新密码 + 确认一遍即可（凭 Bearer Token 鉴权）。
     var newPwd by remember { mutableStateOf("") }
     var confirmPwd by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
@@ -251,14 +275,14 @@ private fun ChangePasswordDialog(api: AdminApi, onClose: () -> Unit, onChanged: 
     fun submit() {
         error = null
         when {
-            oldPwd.isBlank() || newPwd.isBlank() -> { error = "请填写旧密码和新密码"; return }
+            newPwd.isBlank() -> { error = "请填写新密码"; return }
             newPwd.length < 6 -> { error = "新密码至少 6 位"; return }
             newPwd != confirmPwd -> { error = "两次输入的新密码不一致"; return }
         }
         scope.launch {
             working = true
             try {
-                api.changePassword(oldPwd, newPwd)
+                api.changePassword(newPwd)
                 onChanged(newPwd)
             } catch (e: Exception) {
                 error = e.message ?: "修改失败"
@@ -273,10 +297,8 @@ private fun ChangePasswordDialog(api: AdminApi, onClose: () -> Unit, onChanged: 
         title = { Text("修改总控端登录密码", fontWeight = FontWeight.SemiBold) },
         text = {
             Column {
-                Text("修改后服务器 kewu.env 会同步更新，下次登录自动填入新密码。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("已登录即视为后台管理员，无需输入旧密码。修改后服务器 kewu.env 会同步更新，下次登录自动填入新密码。", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(14.dp))
-                OutlinedTextField(oldPwd, { oldPwd = it }, label = "当前密码", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(10.dp))
                 OutlinedTextField(newPwd, { newPwd = it }, label = "新密码（至少 6 位）", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(confirmPwd, { confirmPwd = it }, label = "确认新密码", singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())

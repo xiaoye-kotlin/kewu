@@ -54,9 +54,9 @@ data class AdminUpdateUserRequest(
 @Serializable
 data class AdminResetPasswordRequest(val newPassword: String)
 
-/** 总控端自助修改当前管理员密码（2026-11-17）：需带旧密码校验，避免误改。 */
+/** 总控端自助修改当前管理员密码（2026-11-20）：已登录凭 Bearer Token 鉴权，无需旧密码。 */
 @Serializable
-data class AdminChangePasswordRequest(val oldPassword: String, val newPassword: String)
+data class AdminChangePasswordRequest(val newPassword: String)
 
 /** 课堂纪要（§83）：一节课的 AI 产出 + 生成进度。数据来自 class_recordings + Redis 实时状态。 */
 @Serializable

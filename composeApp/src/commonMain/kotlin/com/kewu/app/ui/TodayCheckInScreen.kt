@@ -220,7 +220,8 @@ private fun RowScope.MiniNum(label: String, value: String, color: Color) {
 private fun RateRing(target: Float, modifier: Modifier, center: @Composable () -> Unit) {
     val cs = COUITheme.colorScheme
     val anim = remember { Animatable(0f) }
-    LaunchedEffect(target) { anim.animateTo(target.coerceIn(0f, 1f), tween(900, easing = FastOutSlowInEasing)) }
+    // 2026-11-19 动画专项：进度环 tween→Q 弹弹簧，轻微冲过目标再回落（draw 里 coerce 防溢出）。
+    LaunchedEffect(target) { anim.animateTo(target.coerceIn(0f, 1f), KewuSpring.Settle) }
     Box(modifier, contentAlignment = Alignment.Center) {
         val track = cs.onSurface.copy(alpha = 0.08f)
         Canvas(Modifier.fillMaxSize()) {
@@ -228,7 +229,7 @@ private fun RateRing(target: Float, modifier: Modifier, center: @Composable () -
             val inset = w / 2
             val sz = Size(size.width - w, size.height - w)
             drawArc(track, -90f, 360f, false, Offset(inset, inset), sz, style = Stroke(w, cap = StrokeCap.Round))
-            val v = anim.value
+            val v = anim.value.coerceIn(0f, 1f)
             val color = if (v >= 0.8f) KewuGreen else if (v >= 0.5f) KewuBlue else Color(0xFFE5484D)
             if (v > 0f) drawArc(color, -90f, 360f * v, false, Offset(inset, inset), sz, style = Stroke(w, cap = StrokeCap.Round))
         }

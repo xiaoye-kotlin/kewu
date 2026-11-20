@@ -411,7 +411,7 @@ internal fun ScoreBar(name: String, score: Int, note: String = "", index: Int = 
     val target = (score.coerceIn(0, 100)) / 100f
     var go by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { delay(120L + index * 90L); go = true }
-    val w by animateFloatAsState(if (go) target else 0f, spring(dampingRatio = 0.8f, stiffness = 120f), label = "bar")
+    val w by animateFloatAsState(if (go) target else 0f, KewuSpring.Settle, label = "bar")
     val color = scoreColor(score)
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -529,15 +529,15 @@ internal fun QuizOption(letter: String, text: String, state: Int, onClick: () ->
     val accent = when (state) { 1 -> KewuGreen; 2 -> cs.error; else -> cs.onSurfaceSecondary }
     val bg by animateColorAsState(
         when (state) { 1 -> KewuGreen.copy(alpha = 0.14f); 2 -> cs.error.copy(alpha = 0.12f); else -> cs.surfaceContainer },
-        tween(220), label = "optBg",
+        KewuSpring.Swift, label = "optBg",
     )
-    val border by animateColorAsState(if (state == 1 || state == 2) accent else cs.dividerLine, tween(220), label = "optBorder")
-    // 作答瞬间：选中项弹一下
+    val border by animateColorAsState(if (state == 1 || state == 2) accent else cs.dividerLine, KewuSpring.Swift, label = "optBorder")
+    // 作答瞬间：选中项 Q 弹一下（2026-11-19 动画专项：起跳并入弹簧，更 Q）
     val bump = remember { Animatable(1f) }
     LaunchedEffect(state) {
         if (state == 1 || state == 2) {
-            bump.animateTo(1.03f, tween(90))
-            bump.animateTo(1f, spring(dampingRatio = 0.4f, stiffness = 500f))
+            bump.snapTo(1.06f)
+            bump.animateTo(1f, KewuSpring.Press)
         }
     }
     Row(
@@ -745,7 +745,7 @@ internal fun ReviewSession(
     val scope = rememberCoroutineScope()
     val red = Color(0xFFE5484D)
     var flipped by remember(turn) { mutableStateOf(false) }
-    val rot by animateFloatAsState(if (flipped) 180f else 0f, spring(dampingRatio = 0.75f, stiffness = 220f), label = "flip")
+    val rot by animateFloatAsState(if (flipped) 180f else 0f, spring(dampingRatio = 0.53f, stiffness = 300f), label = "flip")
     val drag = remember(turn) { Animatable(0f) }
     var answered by remember(turn) { mutableStateOf(false) }
 
@@ -754,7 +754,11 @@ internal fun ReviewSession(
         answered = true
         haptic(if (remembered) HapticKind.Light else HapticKind.Medium)
         scope.launch {
-            drag.animateTo(if (remembered) 1_400f else -1_400f, tween(220))
+            // 2026-11-19：大位移飞出改 Q 弹弹簧（放宽阈值避免长尾），卡片甩出更有惯性。
+            drag.animateTo(
+                if (remembered) 1_400f else -1_400f,
+                spring(dampingRatio = 0.55f, stiffness = 420f, visibilityThreshold = 1f),
+            )
             onAnswer(remembered)
         }
     }
@@ -766,7 +770,7 @@ internal fun ReviewSession(
         }
         Spacer(Modifier.height(10.dp))
         val prog by animateFloatAsState(
-            done.toFloat() / total.coerceAtLeast(1), spring(dampingRatio = 0.8f, stiffness = 200f), label = "cardProg",
+            done.toFloat() / total.coerceAtLeast(1), KewuSpring.Settle, label = "cardProg",
         )
         Box(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(cs.dividerLine)) {
             Box(Modifier.fillMaxWidth(prog.coerceIn(0f, 1f)).height(6.dp).clip(CircleShape).background(KewuBlue))
@@ -780,8 +784,8 @@ internal fun ReviewSession(
     AnimatedContent(
         turn,
         transitionSpec = {
-            slideInHorizontally(spring(dampingRatio = 0.86f, stiffness = 380f)) { it } togetherWith
-                slideOutHorizontally(tween(160)) { -it }
+            slideInHorizontally(KewuSpring.Pop) { it } togetherWith
+                slideOutHorizontally(KewuSpring.Glide) { -it }
         },
         label = "card",
     ) { _ ->

@@ -225,13 +225,12 @@ class AdminApi(
 
     // ───── 密钥与服务配置（全部密钥只存在云端服务器，总控端只能看到打码值） ─────
 
-    /** 修改当前管理员密码（旧密码校验由后端完成）；成功后本地凭证缓存需刷新。 */
-    suspend fun changePassword(oldPassword: String, newPassword: String) {
+    /** 修改当前管理员密码：已登录即凭 Bearer Token 鉴权，无需旧密码；成功后本地凭证缓存需刷新。 */
+    suspend fun changePassword(newPassword: String) {
         request(
             path = "/api/admin/change-password",
             method = HttpMethod.Post,
             body = buildJsonObject {
-                put("oldPassword", oldPassword)
                 put("newPassword", newPassword)
             },
         )

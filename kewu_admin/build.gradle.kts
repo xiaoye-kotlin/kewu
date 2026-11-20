@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.kewu"
-version = "1.0.22"
+version = "1.0.23"
 
 repositories {
     mavenCentral()
@@ -73,7 +73,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Dmg, TargetFormat.Deb)
             packageName = "kewu-admin"
-            packageVersion = "1.0.22"
+            packageVersion = "1.0.23"
             description = "课悟平台总控端"
             vendor = "Kewu"
             // 2026-11-17 §83 关键修复：必须显式声明 JDK 模块。

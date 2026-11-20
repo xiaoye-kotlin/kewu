@@ -923,8 +923,8 @@ fun TeacherAssistantPage(onNavHide: (Boolean) -> Unit = {}) {
                 panelBelow = {
                     AnimatedVisibility(
                         visible = panel != TeacherPanel.NONE,
-                        enter = slideInVertically(spring(dampingRatio = 0.82f, stiffness = 420f)) { it },
-                        exit = slideOutVertically(tween(150)) { it },
+                        enter = slideInVertically(KewuSpring.Glide) { it },
+                        exit = slideOutVertically(KewuSpring.Swift) { it },
                     ) {
                         when (shownPanel) {
                             TeacherPanel.ATTACH -> ChatAttachPanel(

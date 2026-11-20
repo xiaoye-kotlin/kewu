@@ -522,7 +522,7 @@ private fun DirtyBar(
     }
     val y by animateDpAsState(
         if (show) 0.dp else 120.dp,
-        spring(dampingRatio = 0.78f, stiffness = 380f),
+        spring(dampingRatio = 0.58f, stiffness = 380f, visibilityThreshold = 0.1.dp),
         label = "dirtyBar",
     )
     if (!show && y >= 119.dp) return

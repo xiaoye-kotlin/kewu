@@ -83,10 +83,11 @@ fun LiquidGlassActionMenu(
 
     // 进出场进度：1 → 0。外层盒做轻微缩放 + 淡入 + 位移（不再是玻璃凝结）。
     val p = remember { Animatable(1f) }
-    LaunchedEffect(Unit) { p.animateTo(0f, tween(durationMillis = 160)) }
+    // 2026-11-19 动画专项：进出场改统一 Q 弹弹簧，菜单弹出带轻微过冲；退场快而干脆。
+    LaunchedEffect(Unit) { p.animateTo(0f, KewuSpring.Pop) }
     fun dismiss() {
         scope.launch {
-            p.animateTo(1f, tween(durationMillis = 140))
+            p.animateTo(1f, KewuSpring.Swift)
             onDismiss()
         }
     }
@@ -155,7 +156,7 @@ fun LiquidGlassActionMenu(
                     },
                 )
                 .alpha(enterV.coerceIn(0f, 1f))
-                .scale(0.92f + 0.08f * enterV),
+                .scale((0.92f + 0.08f * enterV).coerceIn(0.9f, 1.04f)),
         ) {
             // coui 原生 Card 作为长条容器（仅作外观承载，点击交给内部各项）
             Card(

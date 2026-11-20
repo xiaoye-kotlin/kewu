@@ -996,8 +996,9 @@ internal fun ChatInputDock(
         above = {
             AnimatedVisibility(
                 visible = quote != null,
-                enter = fadeIn(tween(140)) + slideInVertically(tween(180)) { -it / 2 },
-                exit = fadeOut(tween(110)) + slideOutVertically(tween(140)) { -it / 2 },
+                // 2026-11-19 动画专项：与旁边图片条统一 Q 弹手感（原来纯 tween 手感割裂）。
+                enter = fadeIn(KewuSpring.Swift) + slideInVertically(KewuSpring.Pop) { -it / 2 },
+                exit = fadeOut(tween(110)) + slideOutVertically(KewuSpring.Swift) { -it / 2 },
             ) {
                 // 退场动画期间 quote 已置空，仍显示最后一条引用
                 var last by remember { mutableStateOf("") }
@@ -1146,8 +1147,8 @@ internal fun <T : Any> SlideOverlay(value: T?, content: @Composable (T) -> Unit)
     if (value != null) last = value
     AnimatedVisibility(
         visible = value != null,
-        enter = slideInHorizontally(spring(dampingRatio = 0.86f, stiffness = 380f)) { it },
-        exit = slideOutHorizontally(tween(220)) { it },
+        enter = slideInHorizontally(KewuSpring.Pop) { it },
+        exit = slideOutHorizontally(KewuSpring.Glide) { it },
     ) {
         last?.let { content(it) }
     }

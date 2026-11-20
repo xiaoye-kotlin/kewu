@@ -57,10 +57,10 @@ fun Routing.adminRoutes(service: AdminService) {
                     if (req == null || req.newPassword.length < 6) {
                         call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "新密码至少 6 位"))
                     } else {
-                        runCatching { service.changeOwnPassword(userId, req.oldPassword, req.newPassword) }.fold(
+                        runCatching { service.changeOwnPassword(userId, req.newPassword) }.fold(
                             onSuccess = { ok ->
                                 if (ok) call.respond(ApiResponse(0, "密码已修改", null))
-                                else call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "旧密码不正确"))
+                                else call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, "用户不存在，修改失败"))
                             },
                             onFailure = { call.respond(HttpStatusCode.BadRequest, ApiResponse<Unit>(400, it.message ?: "修改失败")) }
                         )

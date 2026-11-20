@@ -150,7 +150,8 @@ fun TeacherMainScreen(
     LaunchedEffect(Unit) { entered = true }
     val enterT by animateFloatAsState(
         targetValue = if (entered) 1f else 0f,
-        animationSpec = tween(durationMillis = 650, easing = FastOutSlowInEasing),
+        // 2026-11-19 动画专项：整页入场 tween→Q 弹弹簧，底栏上滑落定带回弹。
+        animationSpec = KewuSpring.Glide,
         label = "teacherEnter",
     )
     val goToTab: (Int) -> Unit = { idx ->
