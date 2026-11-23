@@ -363,7 +363,7 @@ fun ClassNoteDetailScreen(
         AnimatedVisibility(
             visible = showReview && rec != null,
             enter = slideInVertically(spring(dampingRatio = 0.86f, stiffness = 320f)) { it },
-            exit = slideOutVertically(KewuSpring.Glide) { it },
+            exit = slideOutVertically(KewuSpring.glide<androidx.compose.ui.unit.IntOffset>()) { it },
         ) {
             reviewRec?.let { r -> DailyReviewFlow(r, courseName, onClose = { showReview = false }) }
         }

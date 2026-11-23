@@ -529,9 +529,9 @@ internal fun QuizOption(letter: String, text: String, state: Int, onClick: () ->
     val accent = when (state) { 1 -> KewuGreen; 2 -> cs.error; else -> cs.onSurfaceSecondary }
     val bg by animateColorAsState(
         when (state) { 1 -> KewuGreen.copy(alpha = 0.14f); 2 -> cs.error.copy(alpha = 0.12f); else -> cs.surfaceContainer },
-        KewuSpring.Swift, label = "optBg",
+        KewuSpring.swift<androidx.compose.ui.graphics.Color>(), label = "optBg",
     )
-    val border by animateColorAsState(if (state == 1 || state == 2) accent else cs.dividerLine, KewuSpring.Swift, label = "optBorder")
+    val border by animateColorAsState(if (state == 1 || state == 2) accent else cs.dividerLine, KewuSpring.swift<androidx.compose.ui.graphics.Color>(), label = "optBorder")
     // 作答瞬间：选中项 Q 弹一下（2026-11-19 动画专项：起跳并入弹簧，更 Q）
     val bump = remember { Animatable(1f) }
     LaunchedEffect(state) {
@@ -784,8 +784,8 @@ internal fun ReviewSession(
     AnimatedContent(
         turn,
         transitionSpec = {
-            slideInHorizontally(KewuSpring.Pop) { it } togetherWith
-                slideOutHorizontally(KewuSpring.Glide) { -it }
+            slideInHorizontally(KewuSpring.pop<androidx.compose.ui.unit.IntOffset>()) { it } togetherWith
+                slideOutHorizontally(KewuSpring.glide<androidx.compose.ui.unit.IntOffset>()) { -it }
         },
         label = "card",
     ) { _ ->

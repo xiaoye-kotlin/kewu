@@ -404,7 +404,7 @@ private fun FocusQuickChip(
     )
     val bg by androidx.compose.animation.animateColorAsState(
         targetValue = if (selected) KewuGreen else Color(0x1A000000),
-        animationSpec = KewuSpring.Swift,
+        animationSpec = KewuSpring.swift<androidx.compose.ui.graphics.Color>(),
         label = "quickChipBg",
     )
     Box(

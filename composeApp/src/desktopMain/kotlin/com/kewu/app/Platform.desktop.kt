@@ -11,7 +11,23 @@ import kotlin.system.exitProcess
 
 actual fun platformHttpClient(): HttpClient = HttpClient(OkHttp)
 
-actual fun platformDeviceId(): String = "desktop-${System.getProperty("user.name", "user")}"
+/**
+ * 桌面设备标识（2026-11-24 修复）：Windows 用户名可能含中文/全角字符（如 `Admin（无密码）`），
+ * 而该值会拼进录音分段 segGroup 并作为 OBS user metadata 上传——OBS SDK 只接受 US-ASCII，
+ * 非 ASCII 会抛 `IllegalArgumentException` 导致上传 500、App 端无限「上传中」。
+ * 这里把用户名中的非 ASCII 字节 percent-encode，得到稳定的纯 ASCII 设备名，从源头杜绝。
+ */
+actual fun platformDeviceId(): String {
+    val raw = System.getProperty("user.name", "user")
+    val safe = buildString {
+        for (b in raw.toByteArray(Charsets.UTF_8)) {
+            val c = b.toInt() and 0xFF
+            if (c in 0x21..0x7E && c != 0x7F) append(c.toChar())
+            else append('%').append(c.toString(16).uppercase().padStart(2, '0'))
+        }
+    }
+    return "desktop-$safe"
+}
 
 /** ★ V10：桌面窗口方向由用户控制，无系统级方向锁；通话页布局本身按竖屏比例设计。 */
 actual fun platformLockPortrait(on: Boolean) = Unit

@@ -125,7 +125,7 @@ internal fun BilibiliPlayerHost() {
         visible = current != null,
         // 播放层里有液态玻璃卡（采样者）：只做位移，不做淡入淡出（祖先禁 alpha）
         enter = slideInVertically(spring(dampingRatio = 0.86f, stiffness = 380f)) { it },
-        exit = slideOutVertically(KewuSpring.Glide) { it },
+        exit = slideOutVertically(KewuSpring.glide<androidx.compose.ui.unit.IntOffset>()) { it },
     ) {
         last?.let { v -> BilibiliPlayOverlay(v) { VideoPlayerHub.current = null } }
     }
@@ -716,7 +716,7 @@ private fun VideoTutorPanel(
                             initialOffsetY = { it },
                         ),
                         exit = slideOutVertically(
-                            animationSpec = KewuSpring.Glide,
+                            animationSpec = KewuSpring.glide<androidx.compose.ui.unit.IntOffset>(),
                             targetOffsetY = { it },
                         ),
                     ) {
@@ -999,7 +999,7 @@ private fun VideoControlsLayer(fullscreen: Boolean) {
             AnimatedVisibility(
                 visible = shown || c.durationMs <= 0L,
                 enter = slideInVertically(spring(dampingRatio = 0.85f, stiffness = 500f)) { it },
-                exit = slideOutVertically(KewuSpring.Swift) { it },
+                exit = slideOutVertically(KewuSpring.swift<androidx.compose.ui.unit.IntOffset>()) { it },
                 modifier = Modifier.fillMaxSize(),
             ) {
                 val backdrop = rememberGlassBackdrop()

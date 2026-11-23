@@ -668,7 +668,7 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
             AnimatedVisibility(
                 visible = !showAttach && !isRecording,
                 // 2026-11-19：纯淡入改「上滑 + 淡入」Q 弹，与附近 Chip 按压手感一致。
-                enter = slideInVertically(KewuSpring.Pop) { it / 2 } + fadeIn(KewuSpring.Swift),
+                enter = slideInVertically(KewuSpring.pop<androidx.compose.ui.unit.IntOffset>()) { it / 2 } + fadeIn(KewuSpring.swift<Float>()),
                 exit = fadeOut(tween(120)),
             ) {
                 Row(
@@ -751,11 +751,11 @@ fun TaPage(onNavHide: (Boolean) -> Unit, onGoToTab: (Int) -> Unit) {
                     AnimatedVisibility(
                         visible = panel != AssistantPanel.NONE,
                         enter = slideInVertically(
-                            animationSpec = KewuSpring.Glide,
+                            animationSpec = KewuSpring.glide<androidx.compose.ui.unit.IntOffset>(),
                             initialOffsetY = { it },
                         ),
                         exit = slideOutVertically(
-                            animationSpec = KewuSpring.Swift,
+                            animationSpec = KewuSpring.swift<androidx.compose.ui.unit.IntOffset>(),
                             targetOffsetY = { it },
                         ),
                     ) {

@@ -997,8 +997,8 @@ internal fun ChatInputDock(
             AnimatedVisibility(
                 visible = quote != null,
                 // 2026-11-19 动画专项：与旁边图片条统一 Q 弹手感（原来纯 tween 手感割裂）。
-                enter = fadeIn(KewuSpring.Swift) + slideInVertically(KewuSpring.Pop) { -it / 2 },
-                exit = fadeOut(tween(110)) + slideOutVertically(KewuSpring.Swift) { -it / 2 },
+                enter = fadeIn(KewuSpring.swift<Float>()) + slideInVertically(KewuSpring.pop<androidx.compose.ui.unit.IntOffset>()) { -it / 2 },
+                exit = fadeOut(tween(110)) + slideOutVertically(KewuSpring.swift<androidx.compose.ui.unit.IntOffset>()) { -it / 2 },
             ) {
                 // 退场动画期间 quote 已置空，仍显示最后一条引用
                 var last by remember { mutableStateOf("") }
@@ -1147,8 +1147,8 @@ internal fun <T : Any> SlideOverlay(value: T?, content: @Composable (T) -> Unit)
     if (value != null) last = value
     AnimatedVisibility(
         visible = value != null,
-        enter = slideInHorizontally(KewuSpring.Pop) { it },
-        exit = slideOutHorizontally(KewuSpring.Glide) { it },
+        enter = slideInHorizontally(KewuSpring.pop<androidx.compose.ui.unit.IntOffset>()) { it },
+        exit = slideOutHorizontally(KewuSpring.glide<androidx.compose.ui.unit.IntOffset>()) { it },
     ) {
         last?.let { content(it) }
     }

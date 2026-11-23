@@ -78,6 +78,23 @@ object KewuSpring {
     val Swift: AnimationSpec<Float> = spring(dampingRatio = 0.5f, stiffness = 600f)
     /** 橡皮筋：0.5 阻尼 + 420 刚度，回弹明显（拖拽越界回位）。 */
     val Rubber: AnimationSpec<Float> = spring(dampingRatio = 0.5f, stiffness = 420f)
+
+    // ★ 泛型版本（2026-11-24 修复）：上面的常量是 AnimationSpec<Float>，只能用于 Float 动画；
+    //   但 slide*/expand* 需要 FiniteAnimationSpec<IntOffset/IntSize>、animateColorAsState 需要
+    //   AnimationSpec<Color>、fade* 需要 FiniteAnimationSpec<Float>。用同参数的泛型函数按目标类型推断，
+    //   手感与常量版完全一致，仅类型不同。用法：KewuSpring.pop() / glide() / swift() / settle() / press()。
+    fun <T> press(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
+        spring(dampingRatio = 0.42f, stiffness = 480f)
+    fun <T> pop(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
+        spring(dampingRatio = 0.55f, stiffness = 420f)
+    fun <T> glide(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
+        spring(dampingRatio = 0.6f, stiffness = 420f)
+    fun <T> settle(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
+        spring(dampingRatio = 0.62f, stiffness = 300f)
+    fun <T> swift(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
+        spring(dampingRatio = 0.5f, stiffness = 600f)
+    fun <T> rubber(): androidx.compose.animation.core.FiniteAnimationSpec<T> =
+        spring(dampingRatio = 0.5f, stiffness = 420f)
 }
 
 /** tab 切页：轻微过冲（≈1%），落定干脆。 */
